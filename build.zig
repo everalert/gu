@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) void {
         exe.root_module.linkLibrary(sdl_lib);
     }
 
-    exe.root_module.addAnonymousImport("num_bmp", .{ .root_source_file = b.path("assets/num_bmp.bmp") });
+    exe.root_module.addAnonymousImport("ascii-font", .{ .root_source_file = b.path("assets/ascii.bmp") });
 
     b.installArtifact(exe);
 

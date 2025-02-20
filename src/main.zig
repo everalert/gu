@@ -7,7 +7,7 @@ const SDLTryErrorPrint = @import("c.zig").SDLTryErrorPrint;
 const WINDOW_W = 800;
 const WINDOW_H = 600;
 
-const NUM_IMG = @embedFile("num_bmp");
+const FONT = @embedFile("ascii-font");
 
 pub fn main() !void {
     errdefer |err| SDLTryErrorPrint(@errorName(err));
@@ -35,7 +35,7 @@ pub fn main() !void {
     // IMGUI RELATED SETUP
 
     const num_texture: *c.SDL_Texture = load_num_texture: {
-        const stream: *c.SDL_IOStream = try SDLE(c.SDL_IOFromConstMem(NUM_IMG, NUM_IMG.len));
+        const stream: *c.SDL_IOStream = try SDLE(c.SDL_IOFromConstMem(FONT, FONT.len));
         const surface: *c.SDL_Surface = try SDLE(c.SDL_LoadBMP_IO(stream, true));
         defer c.SDL_DestroySurface(surface);
         const texture: *c.SDL_Texture = try SDLE(c.SDL_CreateTextureFromSurface(renderer, surface));
@@ -83,21 +83,8 @@ pub fn main() !void {
         try SDLE(c.SDL_SetRenderDrawColor(renderer, 0x22, 0x22, 0xAA, 0xFF));
         try SDLE(c.SDL_RenderRect(renderer, &rect2));
 
-        try SDLE(c.SDL_SetTextureColorMod(num_texture, 0xC0, 0x00, 0x00));
-        try DrawNum(renderer, num_texture, 10, 10, '0');
-        try DrawNum(renderer, num_texture, 20, 10, '1');
-        try SDLE(c.SDL_SetTextureColorMod(num_texture, 0x00, 0xC0, 0x00));
-        try DrawNum(renderer, num_texture, 30, 10, '2');
-        try DrawNum(renderer, num_texture, 40, 10, '3');
-        try SDLE(c.SDL_SetTextureColorMod(num_texture, 0x00, 0x00, 0xC0));
-        try DrawNum(renderer, num_texture, 50, 10, '4');
-        try DrawNum(renderer, num_texture, 60, 10, '5');
-        try SDLE(c.SDL_SetTextureColorMod(num_texture, 0x00, 0x00, 0x00));
-        try DrawNum(renderer, num_texture, 70, 10, '6');
-        try DrawNum(renderer, num_texture, 80, 10, '7');
-        try SDLE(c.SDL_SetTextureColorMod(num_texture, 0xFF, 0xFF, 0xFF));
-        try DrawNum(renderer, num_texture, 90, 10, '8');
-        try DrawNum(renderer, num_texture, 100, 10, '9');
+        //try SDLE(c.SDL_SetTextureColorMod(num_texture, 0xC0, 0x00, 0x00));
+        try DrawString(renderer, num_texture, 10, 10, "testing... !!@$(#!QOIEANSHT)");
 
         const rect_mouse = c.SDL_FRect{ .x = mouse_x - 4, .y = mouse_y - 4, .w = 8, .h = 8 };
         try SDLE(c.SDL_SetRenderDrawColor(renderer, 0x00, 0xFF, 0x00, 0xFF));
@@ -107,16 +94,28 @@ pub fn main() !void {
     }
 }
 
-fn DrawNum(renderer: ?*c.SDL_Renderer, texture: *c.SDL_Texture, x: f32, y: f32, char: u8) !void {
-    std.debug.assert(char >= '0');
-    std.debug.assert(char <= '9');
+fn DrawString(renderer: ?*c.SDL_Renderer, texture: *c.SDL_Texture, x: f32, y: f32, str: []const u8) !void {
+    std.debug.assert(std.mem.min(u8, str) >= ' ');
+    std.debug.assert(std.mem.max(u8, str) < 127);
+    var rolling_x = x;
+    var rolling_y = y;
+    for (str) |char|
+        try DrawChar(renderer, texture, &rolling_x, &rolling_y, char);
+}
+
+fn DrawChar(renderer: ?*c.SDL_Renderer, texture: *c.SDL_Texture, x: *f32, y: *f32, char: u8) !void {
+    std.debug.assert(char >= ' ');
+    std.debug.assert(char < 127);
     const num_w: f32 = 10;
-    const num_h: f32 = 20;
-    const i: f32 = @floatFromInt(char - '0');
-    return SDLE(c.SDL_RenderTexture(
+    const num_h: f32 = 21;
+    const n = char - ' ';
+    const i: f32 = @as(f32, @floatFromInt(n % 16)) * num_w;
+    const j: f32 = @as(f32, @floatFromInt(n / 16)) * num_h;
+    try SDLE(c.SDL_RenderTexture(
         renderer,
         texture,
-        &.{ .x = i * num_w, .w = num_w, .h = num_h },
-        &.{ .x = x, .y = y, .w = num_w, .h = num_h },
+        &.{ .x = i, .y = j, .w = num_w, .h = num_h },
+        &.{ .x = x.*, .y = y.*, .w = num_w, .h = num_h },
     ));
+    x.* += num_w;
 }
