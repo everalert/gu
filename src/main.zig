@@ -43,11 +43,9 @@ pub fn main() !void {
         break :load_num_texture texture;
     };
     defer c.SDL_DestroyTexture(num_texture);
-    //const num_w: f32 = 10;
-    //const num_h: f32 = 20;
 
-    var mouse_x: f32 = -100;
-    var mouse_y: f32 = -100;
+    var mouse = Mouse{};
+    var button1 = GUButton{ .rect = .{ .x = 10, .y = 30, .w = 64, .h = 32 } };
 
     // MAIN LOOP
 
@@ -61,12 +59,19 @@ pub fn main() !void {
                     break :quit;
                 },
                 c.SDL_EVENT_MOUSE_MOTION => {
-                    mouse_x = event.motion.x;
-                    mouse_y = event.motion.y;
+                    mouse.pt.x = event.motion.x;
+                    mouse.pt.y = event.motion.y;
+                },
+                c.SDL_EVENT_MOUSE_BUTTON_UP, c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
+                    if (event.button.button != 1) continue;
+                    const down = event.type == c.SDL_EVENT_MOUSE_BUTTON_DOWN;
+                    mouse.AccumulateButton(down);
                 },
                 else => {},
             }
         }
+
+        mouse.UpdateButton();
 
         try SDLE(c.SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0x22, 0xFF));
         try SDLE(c.SDL_RenderClear(renderer));
@@ -86,13 +91,81 @@ pub fn main() !void {
         //try SDLE(c.SDL_SetTextureColorMod(num_texture, 0xC0, 0x00, 0x00));
         try DrawString(renderer, num_texture, 10, 10, "testing... !!@$(#!QOIEANSHT)");
 
-        const rect_mouse = c.SDL_FRect{ .x = mouse_x - 4, .y = mouse_y - 4, .w = 8, .h = 8 };
-        try SDLE(c.SDL_SetRenderDrawColor(renderer, 0x00, 0xFF, 0x00, 0xFF));
-        try SDLE(c.SDL_RenderFillRect(renderer, &rect_mouse));
+        if (try button1.Draw(renderer, &mouse)) {
+            std.log.debug("button1 activated!!", .{});
+        }
 
         try SDLE(c.SDL_RenderPresent(renderer));
     }
 }
+
+const Mouse = struct {
+    pt: c.SDL_FPoint = .{ .x = -100, .y = -100 },
+    btn: bool = false,
+    btn_just_up: bool = false,
+    btn_just_down: bool = false,
+    btn_acc_down: bool = false,
+    btn_acc_changes: u32 = 0,
+
+    fn AccumulateButton(self: *Mouse, down: bool) void {
+        if (self.btn_acc_down != down) {
+            self.btn_acc_down = down;
+            self.btn_acc_changes += 1;
+        }
+    }
+
+    fn UpdateButton(self: *Mouse) void {
+        self.btn_just_down = (self.btn_acc_down and self.btn_acc_down != self.btn) or (self.btn_acc_changes > 1);
+        self.btn_just_up = (!self.btn_acc_down and self.btn_acc_down != self.btn) or (self.btn_acc_changes > 1);
+        self.btn = self.btn_acc_down;
+        self.btn_acc_changes = 0;
+    }
+};
+
+// NOTE: temporary abstraction that will later be translated to ui system
+const GUButton = struct {
+    mode: enum(u32) { Press, Release } = .Press,
+    state: enum(u32) { Idle, Hover, Down } = .Idle,
+    rect: c.SDL_FRect,
+
+    /// returns whether button was 'activated' (pressed)
+    fn Draw(self: *GUButton, renderer: ?*c.SDL_Renderer, mouse: *Mouse) !bool {
+        var output = false;
+        const is_mouseover = c.SDL_PointInRectFloat(&mouse.pt, &self.rect);
+        if (is_mouseover) {
+            if (self.state == .Idle)
+                self.state = .Hover;
+
+            if (self.state == .Hover and mouse.btn_just_down) {
+                self.state = .Down;
+                if (self.mode == .Press) {
+                    std.log.debug("button pressed!", .{});
+                    output = true;
+                }
+            }
+
+            if (self.state == .Down and mouse.btn_just_up) {
+                self.state = .Hover;
+                if (self.mode == .Release) {
+                    std.log.debug("button released!", .{});
+                    output = true;
+                }
+            }
+        } else {
+            self.state = .Idle;
+        }
+
+        // TODO: move to dedicated render pass
+        switch (self.state) {
+            .Idle => try SDLE(c.SDL_SetRenderDrawColor(renderer, 0x00, 0x80, 0x00, 0xFF)),
+            .Hover => try SDLE(c.SDL_SetRenderDrawColor(renderer, 0x00, 0xC0, 0x00, 0xFF)),
+            .Down => try SDLE(c.SDL_SetRenderDrawColor(renderer, 0x00, 0x40, 0x00, 0xFF)),
+        }
+        try SDLE(c.SDL_RenderFillRect(renderer, &self.rect));
+
+        return output;
+    }
+};
 
 fn DrawString(renderer: ?*c.SDL_Renderer, texture: *c.SDL_Texture, x: f32, y: f32, str: []const u8) !void {
     std.debug.assert(std.mem.min(u8, str) >= ' ');
