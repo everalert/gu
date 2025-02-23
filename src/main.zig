@@ -45,7 +45,7 @@ pub fn main() !void {
     defer c.SDL_DestroyTexture(num_texture);
 
     var mouse = Mouse{};
-    var button1 = GUButton{ .rect = .{ .x = 10, .y = 30, .w = 64, .h = 32 } };
+    var b1 = GUButton{ .rect = .{ .x = 10, .y = 30, .w = 64, .h = 32 } };
 
     // MAIN LOOP
 
@@ -76,22 +76,13 @@ pub fn main() !void {
         try SDLE(c.SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0x22, 0xFF));
         try SDLE(c.SDL_RenderClear(renderer));
 
-        const rect1 = c.SDL_FRect{ .x = 0, .y = 0, .w = 400, .h = 600 };
-        try SDLE(c.SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0x55, 0xFF));
-        try SDLE(c.SDL_RenderFillRect(renderer, &rect1));
-        try SDLE(c.SDL_SetRenderDrawColor(renderer, 0x22, 0x22, 0xFF, 0xFF));
-        try SDLE(c.SDL_RenderRect(renderer, &rect1));
-
-        const rect2 = c.SDL_FRect{ .x = 400, .y = 0, .w = 400, .h = 600 };
-        try SDLE(c.SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0x55, 0xFF));
-        try SDLE(c.SDL_RenderFillRect(renderer, &rect2));
-        try SDLE(c.SDL_SetRenderDrawColor(renderer, 0x22, 0x22, 0xAA, 0xFF));
-        try SDLE(c.SDL_RenderRect(renderer, &rect2));
+        try DrawRect(renderer, &.{ .x = 0, .y = 0, .w = 400, .h = 600 }, 0x000055FF, 0x2222AAFF);
+        try DrawRect(renderer, &.{ .x = 400, .y = 0, .w = 400, .h = 600 }, 0x000055FF, null);
 
         //try SDLE(c.SDL_SetTextureColorMod(num_texture, 0xC0, 0x00, 0x00));
         try DrawString(renderer, num_texture, 10, 10, "testing... !!@$(#!QOIEANSHT)");
 
-        if (try button1.Draw(renderer, &mouse)) {
+        if (try b1.DrawButton(renderer, &mouse)) {
             std.log.debug("button1 activated!!", .{});
         }
 
@@ -129,7 +120,7 @@ const GUButton = struct {
     rect: c.SDL_FRect,
 
     /// returns whether button was 'activated' (pressed)
-    fn Draw(self: *GUButton, renderer: ?*c.SDL_Renderer, mouse: *Mouse) !bool {
+    fn DrawButton(self: *GUButton, renderer: ?*c.SDL_Renderer, mouse: *Mouse) !bool {
         var output = false;
         const is_mouseover = c.SDL_PointInRectFloat(&mouse.pt, &self.rect);
         if (is_mouseover) {
@@ -191,4 +182,25 @@ fn DrawChar(renderer: ?*c.SDL_Renderer, texture: *c.SDL_Texture, x: *f32, y: *f3
         &.{ .x = x.*, .y = y.*, .w = num_w, .h = num_h },
     ));
     x.* += num_w;
+}
+
+fn DrawRect(renderer: ?*c.SDL_Renderer, rect: *const c.SDL_FRect, color: u32, outline_color: ?u32) !void {
+    try SDLE(c.SDL_SetRenderDrawColor(
+        renderer,
+        @truncate(color >> 24),
+        @truncate(color >> 16),
+        @truncate(color >> 8),
+        @truncate(color),
+    ));
+    try SDLE(c.SDL_RenderFillRect(renderer, rect));
+    if (outline_color) |col| {
+        try SDLE(c.SDL_SetRenderDrawColor(
+            renderer,
+            @truncate(col >> 24),
+            @truncate(col >> 16),
+            @truncate(col >> 8),
+            @truncate(col),
+        ));
+        try SDLE(c.SDL_RenderRect(renderer, rect));
+    }
 }
