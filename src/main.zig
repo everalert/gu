@@ -34,15 +34,15 @@ pub fn main() !void {
 
     // IMGUI RELATED SETUP
 
-    const num_texture: *c.SDL_Texture = load_num_texture: {
+    const ascii_font: *c.SDL_Texture = load_ascii_font: {
         const stream: *c.SDL_IOStream = try SDLE(c.SDL_IOFromConstMem(FONT, FONT.len));
         const surface: *c.SDL_Surface = try SDLE(c.SDL_LoadBMP_IO(stream, true));
         defer c.SDL_DestroySurface(surface);
         const texture: *c.SDL_Texture = try SDLE(c.SDL_CreateTextureFromSurface(renderer, surface));
         errdefer comptime unreachable;
-        break :load_num_texture texture;
+        break :load_ascii_font texture;
     };
-    defer c.SDL_DestroyTexture(num_texture);
+    defer c.SDL_DestroyTexture(ascii_font);
 
     var mouse = Mouse{};
     var b1 = GUButton{ .rect = .{ .x = 10, .y = 30, .w = 64, .h = 32 } };
@@ -79,12 +79,14 @@ pub fn main() !void {
         try DrawRect(renderer, &.{ .x = 0, .y = 0, .w = 400, .h = 600 }, 0x000055FF, 0x2222AAFF);
         try DrawRect(renderer, &.{ .x = 400, .y = 0, .w = 400, .h = 600 }, 0x000055FF, null);
 
-        //try SDLE(c.SDL_SetTextureColorMod(num_texture, 0xC0, 0x00, 0x00));
-        try DrawString(renderer, num_texture, 10, 10, "testing... !!@$(#!QOIEANSHT)");
+        try DrawString(renderer, ascii_font, 10, 10, "testing... !!@$(#!QOIEANSHT)", 0xC00000);
 
         if (try b1.DrawButton(renderer, &mouse)) {
             std.log.debug("button1 activated!!", .{});
         }
+
+        try DrawImage(renderer, ascii_font, 10, 72, 0x00C000);
+        try DrawImage(renderer, ascii_font, 256, 72, null);
 
         try SDLE(c.SDL_RenderPresent(renderer));
     }
@@ -158,9 +160,16 @@ const GUButton = struct {
     }
 };
 
-fn DrawString(renderer: ?*c.SDL_Renderer, texture: *c.SDL_Texture, x: f32, y: f32, str: []const u8) !void {
+fn DrawString(renderer: ?*c.SDL_Renderer, texture: *c.SDL_Texture, x: f32, y: f32, str: []const u8, color: ?u24) !void {
     std.debug.assert(std.mem.min(u8, str) >= ' ');
     std.debug.assert(std.mem.max(u8, str) < 127);
+    // TODO: convert color setting to push/pop in actual system
+    var r: u8, var g: u8, var b: u8 = .{ undefined, undefined, undefined };
+    if (color) |col| {
+        try SDLE(c.SDL_GetTextureColorMod(texture, &r, &g, &b));
+        try SDLE(c.SDL_SetTextureColorMod(texture, @truncate(col >> 16), @truncate(col >> 8), @truncate(col)));
+    }
+    defer _ = if (color) |_| c.SDL_SetTextureColorMod(texture, r, g, b);
     var rolling_x = x;
     var rolling_y = y;
     for (str) |char|
@@ -182,6 +191,22 @@ fn DrawChar(renderer: ?*c.SDL_Renderer, texture: *c.SDL_Texture, x: *f32, y: *f3
         &.{ .x = x.*, .y = y.*, .w = num_w, .h = num_h },
     ));
     x.* += num_w;
+}
+
+fn DrawImage(renderer: ?*c.SDL_Renderer, texture: *c.SDL_Texture, x: f32, y: f32, color: ?u24) !void {
+    // TODO: convert color setting to push/pop in actual system
+    var r: u8, var g: u8, var b: u8 = .{ undefined, undefined, undefined };
+    if (color) |col| {
+        try SDLE(c.SDL_GetTextureColorMod(texture, &r, &g, &b));
+        try SDLE(c.SDL_SetTextureColorMod(texture, @truncate(col >> 16), @truncate(col >> 8), @truncate(col)));
+    }
+    defer _ = if (color) |_| c.SDL_SetTextureColorMod(texture, r, g, b);
+    try SDLE(c.SDL_RenderTexture(renderer, texture, null, &.{
+        .x = x,
+        .y = y,
+        .w = @floatFromInt(texture.w),
+        .h = @floatFromInt(texture.h),
+    }));
 }
 
 fn DrawRect(renderer: ?*c.SDL_Renderer, rect: *const c.SDL_FRect, color: u32, outline_color: ?u32) !void {
