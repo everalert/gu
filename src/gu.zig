@@ -27,7 +27,40 @@ pub const GUSize = struct {
     h: f32,
 };
 
-const GURenderCommand = union(enum) {
+pub const GUColor = extern struct {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+
+    // WARN: assumes big-endian
+    pub fn FromInt(color: u32) GUColor {
+        return @bitCast(@byteSwap(color));
+    }
+};
+
+pub const GUBackend = struct {
+    const TexType = anyopaque;
+
+    ptr: *anyopaque,
+    fnDrawRect: *const fn (*anyopaque, *const GURect, u32) void,
+    fnDrawString: *const fn (*anyopaque, *TexType, *const GUPos, []const u8, u32) void,
+    fnDrawImage: *const fn (*anyopaque, *TexType, *const GUPos, u32) void,
+
+    pub fn DrawRect(self: *GUBackend, rect: *const GURect, color: u32) void {
+        self.fnDrawRect(self.ptr, rect, color);
+    }
+
+    pub fn DrawString(self: *GUBackend, tex: *anyopaque, pos: *const GUPos, str: []const u8, color: u32) void {
+        self.fnDrawString(self.ptr, tex, pos, str, color);
+    }
+
+    pub fn DrawImage(self: *GUBackend, tex: *anyopaque, pos: *const GUPos, color: u32) void {
+        self.fnDrawImage(self.ptr, tex, pos, color);
+    }
+};
+
+pub const GURenderCommand = union(enum) {
     Rect: struct {
         rect: GURect,
         color: u32,
@@ -72,6 +105,8 @@ pub const GUButtonState = struct {
 
 allocator: Allocator,
 
+backend: *GUBackend,
+
 fonts: ArrayList(*anyopaque), // TODO: impl with handles + interface-based payload
 images: ArrayList(*anyopaque), // TODO: impl with handles + interface-based payload
 render_commands: ArrayList(GURenderCommand),
@@ -79,9 +114,10 @@ render_commands: ArrayList(GURenderCommand),
 mouse_pt: GUPos = .{ .x = -1, .y = -1 },
 mouse_left: GUButtonState = .{}, // LMB
 
-pub fn Init(alloc: Allocator) GU {
+pub fn Init(alloc: Allocator, backend: *GUBackend) GU {
     return .{
         .allocator = alloc,
+        .backend = backend,
         .fonts = ArrayList(*anyopaque).init(alloc),
         .images = ArrayList(*anyopaque).init(alloc),
         .render_commands = ArrayList(GURenderCommand).init(alloc),
@@ -99,9 +135,15 @@ pub fn BeginFrame(self: *GU) void {
     self.mouse_left.Update();
 }
 
-//pub fn EndFrame(self: *GU) void {
-//    _ = self;
-//}
+pub fn EndFrame(self: *GU) void {
+    for (self.render_commands.items) |command| {
+        switch (command) {
+            .Rect => |rect| self.backend.DrawRect(&rect.rect, rect.color),
+            .Text => |text| self.backend.DrawString(text.font, &text.pos, text.str, text.color),
+            .Image => |img| self.backend.DrawImage(img.image, &img.pos, img.color),
+        }
+    }
+}
 
 pub fn DoLabel(self: *GU, x: f32, y: f32, font: ?usize, color: ?u32, str: []const u8) !void {
     std.debug.assert(self.fonts.items.len >= (font orelse 1));

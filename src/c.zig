@@ -7,14 +7,12 @@ pub const c = @cImport({
     @cInclude("SDL3/sdl_main.h");
 });
 
+pub const SDLError = error{SDL_ERROR};
+
 // errify SDL return values
-pub inline fn SDLE(value: anytype) error{SDL_ERROR}!switch (@typeInfo(@TypeOf(value))) {
+pub inline fn SDLE(value: anytype) SDLError!switch (@typeInfo(@TypeOf(value))) {
     .Bool => void,
-    .Pointer, .Optional => @TypeOf(value.?),
-    .Int => |info| switch (info.signedness) {
-        .signed => @TypeOf(@max(0, value)),
-        .unsigned => @TypeOf(value),
-    },
+    .Pointer, .Optional, .Int => @TypeOf(value.?),
     else => @compileError("Unerrifiable SDL type: " ++ @typeName(@TypeOf(value))),
 } {
     return switch (@typeInfo(@TypeOf(value))) {
@@ -28,7 +26,19 @@ pub inline fn SDLE(value: anytype) error{SDL_ERROR}!switch (@typeInfo(@TypeOf(va
     };
 }
 
+// SDLE Panic
+pub inline fn SDLEP(value: anytype) switch (@typeInfo(@TypeOf(value))) {
+    .Bool => void,
+    .Pointer, .Optional, .Int => @TypeOf(value.?),
+    else => @compileError("Unerrifiable SDL type: " ++ @typeName(@TypeOf(value))),
+} {
+    return SDLE(value) catch |err| {
+        SDLTryErrorPrint(@errorName(err));
+        unreachable;
+    };
+}
+
 pub inline fn SDLTryErrorPrint(err: [:0]const u8) void {
     if (std.mem.eql(u8, err, @errorName(error.SDL_ERROR)))
-        std.log.err("SDL error: {s}", .{c.SDL_GetError()});
+        std.log.err("SDL Error: {s}", .{c.SDL_GetError()});
 }
