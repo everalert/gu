@@ -9,11 +9,22 @@ pub const GURect = struct {
     y: f32,
     w: f32,
     h: f32,
+
+    pub fn PointInRect(self: *const GURect, pt: *const GUPos) bool {
+        return pt.x >= self.x and pt.x < self.x + self.w and
+            pt.y >= self.y and pt.y < self.y + self.h;
+    }
 };
 
+// TODO: rename to GUPoint?
 pub const GUPos = struct {
     x: f32,
     y: f32,
+};
+
+pub const GUSize = struct {
+    w: f32,
+    h: f32,
 };
 
 const GURenderCommand = union(enum) {

@@ -7,6 +7,7 @@ const SDLTryErrorPrint = @import("c.zig").SDLTryErrorPrint;
 const GU = @import("gu.zig");
 const GURect = GU.GURect;
 const GUPos = GU.GUPos;
+const GUSize = GU.GUSize;
 
 const WINDOW_W = 800;
 const WINDOW_H = 600;
@@ -57,7 +58,7 @@ pub fn main() !void {
     const img_id = try gu.AddImage(ascii_font);
 
     var mouse = Mouse{};
-    var b1 = GUButton{ .rect = .{ .x = 10, .y = 30, .w = 64, .h = 32 } };
+    var b1 = GUButton{};
 
     // MAIN LOOP
 
@@ -96,9 +97,8 @@ pub fn main() !void {
         try gu.DoLabel(10, 10, font_id, 0xC00000FF, "testing... !!@$(#!QOIEANSHT)");
         try gu.DoLabel(256, 10, null, 0x00C000FF, "testing... !!@$(#!QOIEANSHT)");
 
-        // WARN: currently drawn over during render command parsing stage
-        if (try b1.DrawButton(renderer, &mouse)) {
-            std.log.debug("button1 activated!!", .{});
+        if (try b1.DoButton(10, 32, &gu, &mouse, "Button")) {
+            std.log.debug("b1 activation result!!", .{});
         }
 
         try gu.DoImage(10, 72, img_id, 0x00C000FF);
@@ -119,7 +119,7 @@ pub fn main() !void {
 }
 
 const Mouse = struct {
-    pt: c.SDL_FPoint = .{ .x = -100, .y = -100 },
+    pt: GUPos = .{ .x = -1, .y = -1 },
     btn: bool = false,
     btn_just_up: bool = false,
     btn_just_down: bool = false,
@@ -143,14 +143,25 @@ const Mouse = struct {
 
 // NOTE: temporary abstraction that will later be translated to ui system
 const GUButton = struct {
+    const PADDING_VERTICAL: f32 = 2;
+    const PADDING_HORIZONTAL: f32 = 8;
+
     mode: enum(u32) { Press, Release } = .Press,
     state: enum(u32) { Idle, Hover, Down } = .Idle,
-    rect: c.SDL_FRect,
 
+    // WARN: currently prevented from migrating to GU by StringSize (needs texture atlas interface)
     /// returns whether button was 'activated' (pressed)
-    fn DrawButton(self: *GUButton, renderer: ?*c.SDL_Renderer, mouse: *Mouse) !bool {
+    fn DoButton(self: *GUButton, x: f32, y: f32, gu: *GU, mouse: *Mouse, str: []const u8) !bool {
+        const str_size = StringSize(str);
+        const rect = GURect{
+            .x = x,
+            .y = y,
+            .w = PADDING_HORIZONTAL * 2 + str_size.w,
+            .h = PADDING_VERTICAL * 2 + str_size.h,
+        };
+
         var output = false;
-        const is_mouseover = c.SDL_PointInRectFloat(&mouse.pt, &self.rect);
+        const is_mouseover = rect.PointInRect(&mouse.pt);
         if (is_mouseover) {
             if (self.state == .Idle)
                 self.state = .Hover;
@@ -158,7 +169,7 @@ const GUButton = struct {
             if (self.state == .Hover and mouse.btn_just_down) {
                 self.state = .Down;
                 if (self.mode == .Press) {
-                    std.log.debug("button pressed!", .{});
+                    std.log.debug("button activated! (press)", .{});
                     output = true;
                 }
             }
@@ -166,7 +177,7 @@ const GUButton = struct {
             if (self.state == .Down and mouse.btn_just_up) {
                 self.state = .Hover;
                 if (self.mode == .Release) {
-                    std.log.debug("button released!", .{});
+                    std.log.debug("button activated! (release)", .{});
                     output = true;
                 }
             }
@@ -174,17 +185,24 @@ const GUButton = struct {
             self.state = .Idle;
         }
 
-        // TODO: move to dedicated render pass
         switch (self.state) {
-            .Idle => try SDLE(c.SDL_SetRenderDrawColor(renderer, 0x00, 0x80, 0x00, 0xFF)),
-            .Hover => try SDLE(c.SDL_SetRenderDrawColor(renderer, 0x00, 0xC0, 0x00, 0xFF)),
-            .Down => try SDLE(c.SDL_SetRenderDrawColor(renderer, 0x00, 0x40, 0x00, 0xFF)),
+            .Idle => try gu.DoRect(rect.x, rect.y, rect.w, rect.h, 0x008000FF),
+            .Hover => try gu.DoRect(rect.x, rect.y, rect.w, rect.h, 0x00C000FF),
+            .Down => try gu.DoRect(rect.x, rect.y, rect.w, rect.h, 0x004000FF),
         }
-        try SDLE(c.SDL_RenderFillRect(renderer, &self.rect));
+        try gu.DoLabel(rect.x + PADDING_HORIZONTAL, rect.y + PADDING_VERTICAL, null, null, str);
 
         return output;
     }
 };
+
+// TODO: use texture atlas struct and query actual per-character dimensions
+fn StringSize(str: []const u8) GUSize {
+    std.debug.assert(std.mem.min(u8, str) >= ' ');
+    std.debug.assert(std.mem.max(u8, str) < 127);
+    //_ = @as(*c.SDL_Texture, @alignCast(@ptrCast(texture))); // texture = *anyopaque
+    return .{ .w = 10 * @as(f32, @floatFromInt(str.len)), .h = 21 };
+}
 
 // TODO: use alpha from input color
 fn DrawString(renderer: ?*c.SDL_Renderer, texture: *anyopaque, pos: *const GUPos, str: []const u8, color: ?u32) !void {
