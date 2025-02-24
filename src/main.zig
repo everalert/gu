@@ -57,7 +57,6 @@ pub fn main() !void {
     const font_id = try gu.AddFont(ascii_font);
     const img_id = try gu.AddImage(ascii_font);
 
-    var mouse = Mouse{};
     var b1 = GUButton{};
 
     // MAIN LOOP
@@ -72,19 +71,17 @@ pub fn main() !void {
                     break :quit;
                 },
                 c.SDL_EVENT_MOUSE_MOTION => {
-                    mouse.pt.x = event.motion.x;
-                    mouse.pt.y = event.motion.y;
+                    gu.mouse_pt.x = event.motion.x;
+                    gu.mouse_pt.y = event.motion.y;
                 },
                 c.SDL_EVENT_MOUSE_BUTTON_UP, c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
-                    if (event.button.button != 1) continue;
+                    if (event.button.button != c.SDL_BUTTON_LEFT) continue;
                     const down = event.type == c.SDL_EVENT_MOUSE_BUTTON_DOWN;
-                    mouse.AccumulateButton(down);
+                    gu.mouse_left.Accumulate(down);
                 },
                 else => {},
             }
         }
-
-        mouse.UpdateButton();
 
         try SDLE(c.SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0x22, 0xFF));
         try SDLE(c.SDL_RenderClear(renderer));
@@ -97,7 +94,7 @@ pub fn main() !void {
         try gu.DoLabel(10, 10, font_id, 0xC00000FF, "testing... !!@$(#!QOIEANSHT)");
         try gu.DoLabel(256, 10, null, 0x00C000FF, "testing... !!@$(#!QOIEANSHT)");
 
-        if (try b1.DoButton(10, 32, &gu, &mouse, "Button")) {
+        if (try b1.DoButton(10, 32, &gu, "Button")) {
             std.log.debug("b1 activation result!!", .{});
         }
 
@@ -118,29 +115,6 @@ pub fn main() !void {
     }
 }
 
-const Mouse = struct {
-    pt: GUPos = .{ .x = -1, .y = -1 },
-    btn: bool = false,
-    btn_just_up: bool = false,
-    btn_just_down: bool = false,
-    btn_acc_down: bool = false,
-    btn_acc_changes: u32 = 0,
-
-    fn AccumulateButton(self: *Mouse, down: bool) void {
-        if (self.btn_acc_down != down) {
-            self.btn_acc_down = down;
-            self.btn_acc_changes += 1;
-        }
-    }
-
-    fn UpdateButton(self: *Mouse) void {
-        self.btn_just_down = (self.btn_acc_down and self.btn_acc_down != self.btn) or (self.btn_acc_changes > 1);
-        self.btn_just_up = (!self.btn_acc_down and self.btn_acc_down != self.btn) or (self.btn_acc_changes > 1);
-        self.btn = self.btn_acc_down;
-        self.btn_acc_changes = 0;
-    }
-};
-
 // NOTE: temporary abstraction that will later be translated to ui system
 const GUButton = struct {
     const PADDING_VERTICAL: f32 = 2;
@@ -151,7 +125,7 @@ const GUButton = struct {
 
     // WARN: currently prevented from migrating to GU by StringSize (needs texture atlas interface)
     /// returns whether button was 'activated' (pressed)
-    fn DoButton(self: *GUButton, x: f32, y: f32, gu: *GU, mouse: *Mouse, str: []const u8) !bool {
+    fn DoButton(self: *GUButton, x: f32, y: f32, gu: *GU, str: []const u8) !bool {
         const str_size = StringSize(str);
         const rect = GURect{
             .x = x,
@@ -161,12 +135,12 @@ const GUButton = struct {
         };
 
         var output = false;
-        const is_mouseover = rect.PointInRect(&mouse.pt);
+        const is_mouseover = rect.PointInRect(&gu.mouse_pt);
         if (is_mouseover) {
             if (self.state == .Idle)
                 self.state = .Hover;
 
-            if (self.state == .Hover and mouse.btn_just_down) {
+            if (self.state == .Hover and gu.mouse_left.just_down) {
                 self.state = .Down;
                 if (self.mode == .Press) {
                     std.log.debug("button activated! (press)", .{});
@@ -174,7 +148,7 @@ const GUButton = struct {
                 }
             }
 
-            if (self.state == .Down and mouse.btn_just_up) {
+            if (self.state == .Down and gu.mouse_left.just_up) {
                 self.state = .Hover;
                 if (self.mode == .Release) {
                     std.log.debug("button activated! (release)", .{});

@@ -46,10 +46,38 @@ const GURenderCommand = union(enum) {
     },
 };
 
+pub const GUButtonState = struct {
+    down: bool = false,
+    just_up: bool = false,
+    just_down: bool = false,
+    accumulator_down: bool = false,
+    accumulator_changes: u32 = 0,
+
+    pub fn Accumulate(self: *GUButtonState, down: bool) void {
+        if (self.accumulator_down != down) {
+            self.accumulator_down = down;
+            self.accumulator_changes += 1;
+        }
+    }
+
+    pub fn Update(self: *GUButtonState) void {
+        self.just_down = (self.accumulator_down and self.accumulator_down != self.down) or
+            self.accumulator_changes > 1;
+        self.just_up = (!self.accumulator_down and self.accumulator_down != self.down) or
+            self.accumulator_changes > 1;
+        self.down = self.accumulator_down;
+        self.accumulator_changes = 0;
+    }
+};
+
 allocator: Allocator,
+
 fonts: ArrayList(*anyopaque), // TODO: impl with handles + interface-based payload
 images: ArrayList(*anyopaque), // TODO: impl with handles + interface-based payload
 render_commands: ArrayList(GURenderCommand),
+
+mouse_pt: GUPos = .{ .x = -1, .y = -1 },
+mouse_left: GUButtonState = .{}, // LMB
 
 pub fn Init(alloc: Allocator) GU {
     return .{
@@ -68,6 +96,7 @@ pub fn Deinit(self: *GU) void {
 
 pub fn BeginFrame(self: *GU) void {
     self.render_commands.clearRetainingCapacity();
+    self.mouse_left.Update();
 }
 
 //pub fn EndFrame(self: *GU) void {
