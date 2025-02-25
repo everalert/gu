@@ -41,7 +41,7 @@ const AsciiFont = struct {
     }
 
     // TODO: use alpha from input color
-    pub fn SetColor(ptr: *anyopaque, color: u32) void {
+    fn SetColor(ptr: *anyopaque, color: u32) void {
         const self: *AsciiFont = @alignCast(@ptrCast(ptr));
         const rgba = GUColor.FromInt(color);
         SDLEP(c.SDL_SetTextureColorMod(self.texture, rgba.r, rgba.g, rgba.b));
@@ -50,7 +50,7 @@ const AsciiFont = struct {
     // FONT RELATED
 
     // TODO: use CharSize
-    pub fn StringSize(_: *anyopaque, str: []const u8) GUSize {
+    fn StringSize(_: *anyopaque, str: []const u8) GUSize {
         //const self: *AsciiFont = @alignCast(@ptrCast(ptr));
         std.debug.assert(std.mem.min(u8, str) >= ' ');
         std.debug.assert(std.mem.max(u8, str) < 127);
@@ -58,12 +58,12 @@ const AsciiFont = struct {
     }
 
     // TODO: use data table/mapping for individual char data
-    pub fn CharSize(_: *anyopaque, _: u8) GUSize {
+    fn CharSize(_: *anyopaque, _: u8) GUSize {
         //const self: *AsciiFont = @alignCast(@ptrCast(ptr));
         return GUSize{ .w = 10, .h = 21 };
     }
 
-    pub fn DrawString(ptr: *anyopaque, str: []const u8, pos: *const GUPos) void {
+    fn DrawString(ptr: *anyopaque, str: []const u8, pos: *const GUPos) void {
         const self: *AsciiFont = @alignCast(@ptrCast(ptr));
         std.debug.assert(std.mem.min(u8, str) >= ' ');
         std.debug.assert(std.mem.max(u8, str) < 127);
@@ -74,7 +74,7 @@ const AsciiFont = struct {
         }
     }
 
-    pub fn DrawChar(ptr: *anyopaque, char: u8, pos: *const GUPos) void {
+    fn DrawChar(ptr: *anyopaque, char: u8, pos: *const GUPos) void {
         const self: *AsciiFont = @alignCast(@ptrCast(ptr));
         std.debug.assert(char >= ' ');
         std.debug.assert(char < 127);
@@ -114,17 +114,17 @@ const AsciiFont = struct {
         ));
     }
 
-    pub fn DrawTile(ptr: *anyopaque, id: u32, pos: *const GUPos) void {
+    fn DrawTile(ptr: *anyopaque, id: u32, pos: *const GUPos) void {
         //const self: *AsciiFont = @alignCast(@ptrCast(ptr));
         DrawChar(ptr, @truncate(id), pos);
     }
 
-    pub fn Size(ptr: *anyopaque) GUSize {
+    fn Size(ptr: *anyopaque) GUSize {
         const self: *AsciiFont = @alignCast(@ptrCast(ptr));
         return GUSize{ .w = @floatFromInt(self.texture.w), .h = @floatFromInt(self.texture.h) };
     }
 
-    pub fn TileSize(ptr: *anyopaque, id: u32) GUSize {
+    fn TileSize(ptr: *anyopaque, id: u32) GUSize {
         //const self: *AsciiFont = @alignCast(@ptrCast(ptr));
         return CharSize(ptr, @truncate(id));
     }
