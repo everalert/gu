@@ -137,6 +137,47 @@ pub const GUTextureAtlas = struct {
     }
 };
 
+pub const GUButton = struct {
+    const PADDING_VERTICAL: f32 = 2;
+    const PADDING_HORIZONTAL: f32 = 8;
+
+    mode: enum(u32) { Press, Release } = .Press,
+    state: enum(u32) { Idle, Hover, Down } = .Idle,
+
+    pub fn Update(
+        self: *GUButton,
+        rect: *const GURect,
+        pt: *const GUPos,
+        btn_just_down: bool,
+        btn_just_up: bool,
+    ) bool {
+        if (rect.PointInRect(pt)) {
+            if (self.state == .Idle)
+                self.state = .Hover;
+
+            if (self.state == .Hover and btn_just_down) {
+                self.state = .Down;
+                if (self.mode == .Press) {
+                    std.log.debug("button activated! (press)", .{});
+                    return true;
+                }
+            }
+
+            if (self.state == .Down and btn_just_up) {
+                self.state = .Hover;
+                if (self.mode == .Release) {
+                    std.log.debug("button activated! (release)", .{});
+                    return true;
+                }
+            }
+        } else {
+            self.state = .Idle;
+        }
+        return false;
+    }
+};
+
+// TODO: rename to GUKeyState?
 pub const GUButtonState = struct {
     down: bool = false,
     just_up: bool = false,
@@ -234,6 +275,35 @@ pub fn DoImage(self: *GU, x: f32, y: f32, image: ?usize, color: ?u32) !void {
             .tile = null,
         },
     });
+}
+
+/// returns whether button was 'activated' (pressed)
+pub fn DoButton(self: *GU, btn: *GUButton, x: f32, y: f32, font: ?usize, str: []const u8) !bool {
+    const f = &self.fonts.items[font orelse 0];
+    const str_size = f.StringSize(str);
+    const rect = GURect{
+        .x = x,
+        .y = y,
+        .w = GUButton.PADDING_HORIZONTAL * 2 + str_size.w,
+        .h = GUButton.PADDING_VERTICAL * 2 + str_size.h,
+    };
+
+    const output = btn.Update(&rect, &self.mouse_pt, self.mouse_left.just_down, self.mouse_left.just_up);
+
+    switch (btn.state) {
+        .Idle => try self.DoRect(rect.x, rect.y, rect.w, rect.h, 0x008000FF),
+        .Hover => try self.DoRect(rect.x, rect.y, rect.w, rect.h, 0x00C000FF),
+        .Down => try self.DoRect(rect.x, rect.y, rect.w, rect.h, 0x004000FF),
+    }
+    try self.DoLabel(
+        rect.x + GUButton.PADDING_HORIZONTAL,
+        rect.y + GUButton.PADDING_VERTICAL,
+        null,
+        null,
+        str,
+    );
+
+    return output;
 }
 
 // TODO: impl handle-based system

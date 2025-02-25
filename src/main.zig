@@ -13,6 +13,7 @@ const GUSize = GU.GUSize;
 const GUColor = GU.GUColor;
 const GUTextureAtlas = GU.GUTextureAtlas;
 const GUFontAtlas = GU.GUFontAtlas;
+const GUButton = GU.GUButton;
 
 const WINDOW_W = 800;
 const WINDOW_H = 600;
@@ -263,7 +264,7 @@ pub fn main() !void {
         try gu.DoLabel(10, 10, font_id, 0xC00000FF, "testing... !!@$(#!QOIEANSHT)");
         try gu.DoLabel(256, 10, null, 0x00C000FF, "testing... !!@$(#!QOIEANSHT)");
 
-        if (try b1.DoButton(10, 32, &gu, "Button")) {
+        if (try gu.DoButton(&b1, 10, 32, font_id, "Button")) {
             std.log.debug("b1 activation result!!", .{});
         }
 
@@ -275,58 +276,3 @@ pub fn main() !void {
         try SDLE(c.SDL_RenderPresent(rd.renderer));
     }
 }
-
-// NOTE: temporary abstraction that will later be translated to ui system
-const GUButton = struct {
-    const PADDING_VERTICAL: f32 = 2;
-    const PADDING_HORIZONTAL: f32 = 8;
-
-    mode: enum(u32) { Press, Release } = .Press,
-    state: enum(u32) { Idle, Hover, Down } = .Idle,
-
-    // WARN: currently prevented from migrating to GU by StringSize (needs texture atlas interface)
-    /// returns whether button was 'activated' (pressed)
-    fn DoButton(self: *GUButton, x: f32, y: f32, gu: *GU, str: []const u8) !bool {
-        const str_size = RenderData.StringSize(str);
-        const rect = GURect{
-            .x = x,
-            .y = y,
-            .w = PADDING_HORIZONTAL * 2 + str_size.w,
-            .h = PADDING_VERTICAL * 2 + str_size.h,
-        };
-
-        var output = false;
-        const is_mouseover = rect.PointInRect(&gu.mouse_pt);
-        if (is_mouseover) {
-            if (self.state == .Idle)
-                self.state = .Hover;
-
-            if (self.state == .Hover and gu.mouse_left.just_down) {
-                self.state = .Down;
-                if (self.mode == .Press) {
-                    std.log.debug("button activated! (press)", .{});
-                    output = true;
-                }
-            }
-
-            if (self.state == .Down and gu.mouse_left.just_up) {
-                self.state = .Hover;
-                if (self.mode == .Release) {
-                    std.log.debug("button activated! (release)", .{});
-                    output = true;
-                }
-            }
-        } else {
-            self.state = .Idle;
-        }
-
-        switch (self.state) {
-            .Idle => try gu.DoRect(rect.x, rect.y, rect.w, rect.h, 0x008000FF),
-            .Hover => try gu.DoRect(rect.x, rect.y, rect.w, rect.h, 0x00C000FF),
-            .Down => try gu.DoRect(rect.x, rect.y, rect.w, rect.h, 0x004000FF),
-        }
-        try gu.DoLabel(rect.x + PADDING_HORIZONTAL, rect.y + PADDING_VERTICAL, null, null, str);
-
-        return output;
-    }
-};
