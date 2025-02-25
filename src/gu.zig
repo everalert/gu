@@ -40,22 +40,21 @@ pub const GUColor = extern struct {
 };
 
 pub const GUBackend = struct {
-    const TexType = anyopaque;
-
     ptr: *anyopaque,
     fnDrawRect: *const fn (*anyopaque, *const GURect, u32) void,
-    fnDrawString: *const fn (*anyopaque, *TexType, *const GUPos, []const u8, u32) void,
-    fnDrawImage: *const fn (*anyopaque, *TexType, *const GUPos, u32) void,
+    fnDrawString: *const fn (*anyopaque, *GUFontAtlas, *const GUPos, []const u8, u32) void,
+    fnDrawImage: *const fn (*anyopaque, *GUTextureAtlas, *const GUPos, u32) void,
 
     pub fn DrawRect(self: *GUBackend, rect: *const GURect, color: u32) void {
         self.fnDrawRect(self.ptr, rect, color);
     }
 
-    pub fn DrawString(self: *GUBackend, tex: *anyopaque, pos: *const GUPos, str: []const u8, color: u32) void {
+    pub fn DrawString(self: *GUBackend, tex: *GUFontAtlas, pos: *const GUPos, str: []const u8, color: u32) void {
         self.fnDrawString(self.ptr, tex, pos, str, color);
     }
 
-    pub fn DrawImage(self: *GUBackend, tex: *anyopaque, pos: *const GUPos, color: u32) void {
+    // TODO: impl tile drawing, see GURenderCommand->Image
+    pub fn DrawImage(self: *GUBackend, tex: *GUTextureAtlas, pos: *const GUPos, color: u32) void {
         self.fnDrawImage(self.ptr, tex, pos, color);
     }
 };
@@ -67,16 +66,75 @@ pub const GURenderCommand = union(enum) {
     },
     Text: struct {
         str: []const u8,
-        font: *anyopaque, // backend impl-dependent ref to resource
+        font: *GUFontAtlas,
         pos: GUPos,
         color: u32,
     },
     Image: struct {
-        image: *anyopaque, // backend impl-dependent ref to resource
+        image: *GUTextureAtlas,
         tile: ?u32, // for texture atlases
         pos: GUPos,
         color: u32,
     },
+};
+
+// TODO: add CanDrawString to check against supported character range in font impl
+pub const GUFontAtlas = struct {
+    ptr: *anyopaque,
+    fnDrawString: *const fn (*anyopaque, []const u8, *const GUPos) void,
+    fnDrawChar: *const fn (*anyopaque, u8, *const GUPos) void,
+    fnStringSize: *const fn (*anyopaque, []const u8) GUSize,
+    fnCharSize: *const fn (*anyopaque, u8) GUSize,
+    fnSetColor: *const fn (*anyopaque, u32) void,
+
+    pub fn DrawString(self: *GUFontAtlas, str: []const u8, pos: *const GUPos) void {
+        self.fnDrawString(self.ptr, str, pos);
+    }
+
+    pub fn DrawChar(self: *GUFontAtlas, char: u8, pos: *const GUPos) void {
+        self.fnDrawChar(self.ptr, char, pos);
+    }
+
+    pub fn StringSize(self: *GUFontAtlas, str: []const u8) GUSize {
+        return self.fnStringSize(self.ptr, str);
+    }
+
+    pub fn CharSize(self: *GUFontAtlas, char: u8) GUSize {
+        return self.fnCharSize(self.ptr, char);
+    }
+
+    pub fn SetColor(self: *GUFontAtlas, color: u32) void {
+        return self.fnSetColor(self.ptr, color);
+    }
+};
+
+pub const GUTextureAtlas = struct {
+    ptr: *anyopaque,
+    fnDraw: *const fn (*anyopaque, *const GUPos) void,
+    fnDrawTile: *const fn (*anyopaque, u32, *const GUPos) void,
+    fnSize: *const fn (*anyopaque) GUSize,
+    fnTileSize: *const fn (*anyopaque, u32) GUSize,
+    fnSetColor: *const fn (*anyopaque, u32) void,
+
+    pub fn Draw(self: *GUTextureAtlas, pos: *const GUPos) void {
+        self.fnDraw(self.ptr, pos);
+    }
+
+    pub fn DrawTile(self: *GUTextureAtlas, id: u32, pos: *const GUPos) void {
+        self.fnDrawTile(self.ptr, id, pos);
+    }
+
+    pub fn Size(self: *GUTextureAtlas) GUSize {
+        return self.fnSize(self.ptr);
+    }
+
+    pub fn TileSize(self: *GUTextureAtlas, id: u32) GUSize {
+        return self.fnTileSize(self.ptr, id);
+    }
+
+    pub fn SetColor(self: *GUTextureAtlas, color: u32) void {
+        return self.fnSetColor(self.ptr, color);
+    }
 };
 
 pub const GUButtonState = struct {
@@ -107,8 +165,8 @@ allocator: Allocator,
 
 backend: *GUBackend,
 
-fonts: ArrayList(*anyopaque), // TODO: impl with handles + interface-based payload
-images: ArrayList(*anyopaque), // TODO: impl with handles + interface-based payload
+fonts: ArrayList(GUFontAtlas), // TODO: impl with handles
+images: ArrayList(GUTextureAtlas), // TODO: impl with handles
 render_commands: ArrayList(GURenderCommand),
 
 mouse_pt: GUPos = .{ .x = -1, .y = -1 },
@@ -118,8 +176,8 @@ pub fn Init(alloc: Allocator, backend: *GUBackend) GU {
     return .{
         .allocator = alloc,
         .backend = backend,
-        .fonts = ArrayList(*anyopaque).init(alloc),
-        .images = ArrayList(*anyopaque).init(alloc),
+        .fonts = ArrayList(GUFontAtlas).init(alloc),
+        .images = ArrayList(GUTextureAtlas).init(alloc),
         .render_commands = ArrayList(GURenderCommand).init(alloc),
     };
 }
@@ -150,7 +208,7 @@ pub fn DoLabel(self: *GU, x: f32, y: f32, font: ?usize, color: ?u32, str: []cons
     try self.render_commands.append(.{
         .Text = .{
             .pos = .{ .x = x, .y = y },
-            .font = self.fonts.items[font orelse 0],
+            .font = &self.fonts.items[font orelse 0],
             .color = color orelse 0xFFFFFFFF,
             .str = str,
         },
@@ -171,7 +229,7 @@ pub fn DoImage(self: *GU, x: f32, y: f32, image: ?usize, color: ?u32) !void {
     try self.render_commands.append(.{
         .Image = .{
             .pos = .{ .x = x, .y = y },
-            .image = self.images.items[image orelse 0],
+            .image = &self.images.items[image orelse 0],
             .color = color orelse 0xFFFFFFFF,
             .tile = null,
         },
@@ -179,13 +237,13 @@ pub fn DoImage(self: *GU, x: f32, y: f32, image: ?usize, color: ?u32) !void {
 }
 
 // TODO: impl handle-based system
-pub fn AddFont(self: *GU, font: *anyopaque) !usize {
+pub fn AddFont(self: *GU, font: GUFontAtlas) !usize {
     try self.fonts.append(font);
     return self.fonts.items.len - 1;
 }
 
 // TODO: impl handle-based system
-pub fn AddImage(self: *GU, image: *anyopaque) !usize {
+pub fn AddImage(self: *GU, image: GUTextureAtlas) !usize {
     try self.images.append(image);
     return self.images.items.len - 1;
 }

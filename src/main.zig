@@ -11,11 +11,134 @@ const GURect = GU.GURect;
 const GUPos = GU.GUPos;
 const GUSize = GU.GUSize;
 const GUColor = GU.GUColor;
+const GUTextureAtlas = GU.GUTextureAtlas;
+const GUFontAtlas = GU.GUFontAtlas;
 
 const WINDOW_W = 800;
 const WINDOW_H = 600;
 
 const FONT = @embedFile("ascii-font");
+
+// FIXME: assumes tile size/coordinates for now (implemented as a pure port of test code as stopgap)
+const AsciiFont = struct {
+    texture: *c.SDL_Texture,
+    renderer: ?*c.SDL_Renderer,
+
+    // NOTE: BMP can be transparent; convert from PNG using online converter if
+    // your photo app can't export BMP
+    pub fn Init(renderer: ?*c.SDL_Renderer, bmp: []const u8) !AsciiFont {
+        const stream: *c.SDL_IOStream = try SDLE(c.SDL_IOFromConstMem(bmp.ptr, bmp.len));
+        const surface: *c.SDL_Surface = try SDLE(c.SDL_LoadBMP_IO(stream, true));
+        defer c.SDL_DestroySurface(surface);
+        const texture: *c.SDL_Texture = try SDLE(c.SDL_CreateTextureFromSurface(renderer, surface));
+        errdefer comptime unreachable;
+        return AsciiFont{ .texture = texture, .renderer = renderer };
+    }
+
+    pub fn Deinit(self: *AsciiFont) void {
+        c.SDL_DestroyTexture(self.texture);
+    }
+
+    // TODO: use alpha from input color
+    pub fn SetColor(ptr: *anyopaque, color: u32) void {
+        const self: *AsciiFont = @alignCast(@ptrCast(ptr));
+        const rgba = GUColor.FromInt(color);
+        SDLEP(c.SDL_SetTextureColorMod(self.texture, rgba.r, rgba.g, rgba.b));
+    }
+
+    // FONT RELATED
+
+    // TODO: use CharSize
+    pub fn StringSize(_: *anyopaque, str: []const u8) GUSize {
+        //const self: *AsciiFont = @alignCast(@ptrCast(ptr));
+        std.debug.assert(std.mem.min(u8, str) >= ' ');
+        std.debug.assert(std.mem.max(u8, str) < 127);
+        return .{ .w = 10 * @as(f32, @floatFromInt(str.len)), .h = 21 };
+    }
+
+    // TODO: use data table/mapping for individual char data
+    pub fn CharSize(_: *anyopaque, _: u8) GUSize {
+        //const self: *AsciiFont = @alignCast(@ptrCast(ptr));
+        return GUSize{ .w = 10, .h = 21 };
+    }
+
+    pub fn DrawString(ptr: *anyopaque, str: []const u8, pos: *const GUPos) void {
+        const self: *AsciiFont = @alignCast(@ptrCast(ptr));
+        std.debug.assert(std.mem.min(u8, str) >= ' ');
+        std.debug.assert(std.mem.max(u8, str) < 127);
+        var rolling_pos = pos.*;
+        for (str) |char| {
+            DrawChar(ptr, char, &rolling_pos);
+            rolling_pos.x += CharSize(self, char).w;
+        }
+    }
+
+    pub fn DrawChar(ptr: *anyopaque, char: u8, pos: *const GUPos) void {
+        const self: *AsciiFont = @alignCast(@ptrCast(ptr));
+        std.debug.assert(char >= ' ');
+        std.debug.assert(char < 127);
+        const size = CharSize(ptr, char);
+        const n = char - ' ';
+        const i: f32 = @as(f32, @floatFromInt(n % 16)) * size.w;
+        const j: f32 = @as(f32, @floatFromInt(n / 16)) * size.h;
+        SDLEP(c.SDL_RenderTexture(
+            self.renderer,
+            self.texture,
+            &.{ .x = i, .y = j, .w = size.w, .h = size.h },
+            &.{ .x = pos.x, .y = pos.y, .w = size.w, .h = size.h },
+        ));
+    }
+
+    pub fn GetFontAtlas(self: *AsciiFont) GUFontAtlas {
+        return GUFontAtlas{
+            .ptr = self,
+            .fnDrawString = DrawString,
+            .fnDrawChar = DrawChar,
+            .fnStringSize = StringSize,
+            .fnCharSize = CharSize,
+            .fnSetColor = SetColor,
+        };
+    }
+
+    // TEXTURE RELATED
+
+    fn Draw(ptr: *anyopaque, pos: *const GUPos) void {
+        const self: *AsciiFont = @alignCast(@ptrCast(ptr));
+        const size = Size(ptr);
+        SDLEP(c.SDL_RenderTexture(
+            self.renderer,
+            self.texture,
+            null,
+            &.{ .x = pos.x, .y = pos.y, .w = size.w, .h = size.h },
+        ));
+    }
+
+    pub fn DrawTile(ptr: *anyopaque, id: u32, pos: *const GUPos) void {
+        //const self: *AsciiFont = @alignCast(@ptrCast(ptr));
+        DrawChar(ptr, @truncate(id), pos);
+    }
+
+    pub fn Size(ptr: *anyopaque) GUSize {
+        const self: *AsciiFont = @alignCast(@ptrCast(ptr));
+        return GUSize{ .w = @floatFromInt(self.texture.w), .h = @floatFromInt(self.texture.h) };
+    }
+
+    pub fn TileSize(ptr: *anyopaque, id: u32) GUSize {
+        //const self: *AsciiFont = @alignCast(@ptrCast(ptr));
+        return CharSize(ptr, @truncate(id));
+    }
+
+    pub fn GetTextureAtlas(self: *AsciiFont) GUTextureAtlas {
+        return GUTextureAtlas{
+            .ptr = self,
+            .fnDraw = Draw,
+            .fnDrawTile = DrawTile,
+            .fnSize = Size,
+            .fnTileSize = TileSize,
+            .fnSetColor = SetColor,
+        };
+    }
+};
 
 const RenderData = struct {
     window: ?*c.SDL_Window,
@@ -35,7 +158,7 @@ const RenderData = struct {
         c.SDL_DestroyRenderer(self.renderer);
     }
 
-    // TODO: use texture atlas struct and query actual per-character dimensions
+    // FIXME: remove in favor of GUFontAtlas->StringSize
     pub fn StringSize(str: []const u8) GUSize {
         std.debug.assert(std.mem.min(u8, str) >= ' ');
         std.debug.assert(std.mem.max(u8, str) < 127);
@@ -43,49 +166,16 @@ const RenderData = struct {
         return .{ .w = 10 * @as(f32, @floatFromInt(str.len)), .h = 21 };
     }
 
-    // TODO: use alpha from input color
-    pub fn DrawString(ptr: *anyopaque, texture: *anyopaque, pos: *const GUPos, str: []const u8, color: u32) void {
-        const self: *RenderData = @alignCast(@ptrCast(ptr));
-        std.debug.assert(std.mem.min(u8, str) >= ' ');
-        std.debug.assert(std.mem.max(u8, str) < 127);
-        const tex: *c.SDL_Texture = @alignCast(@ptrCast(texture));
-        const rgba = GUColor.FromInt(color);
-        SDLEP(c.SDL_SetTextureColorMod(tex, rgba.r, rgba.g, rgba.b));
-        var rolling_x = pos.x;
-        var rolling_y = pos.y;
-        for (str) |char|
-            self.DrawChar(tex, &rolling_x, &rolling_y, char);
+    pub fn DrawString(_: *anyopaque, font: *GUFontAtlas, pos: *const GUPos, str: []const u8, color: u32) void {
+        //const self: *RenderData = @alignCast(@ptrCast(ptr));
+        font.SetColor(color);
+        font.DrawString(str, pos);
     }
 
-    pub fn DrawChar(self: *RenderData, texture: *c.SDL_Texture, x: *f32, y: *f32, char: u8) void {
-        std.debug.assert(char >= ' ');
-        std.debug.assert(char < 127);
-        const num_w: f32 = 10;
-        const num_h: f32 = 21;
-        const n = char - ' ';
-        const i: f32 = @as(f32, @floatFromInt(n % 16)) * num_w;
-        const j: f32 = @as(f32, @floatFromInt(n / 16)) * num_h;
-        SDLEP(c.SDL_RenderTexture(
-            self.renderer,
-            texture,
-            &.{ .x = i, .y = j, .w = num_w, .h = num_h },
-            &.{ .x = x.*, .y = y.*, .w = num_w, .h = num_h },
-        ));
-        x.* += num_w;
-    }
-
-    // TODO: use alpha from input color
-    pub fn DrawImage(ptr: *anyopaque, texture: *anyopaque, pos: *const GUPos, color: u32) void {
-        const self: *RenderData = @alignCast(@ptrCast(ptr));
-        const tex: *c.SDL_Texture = @alignCast(@ptrCast(texture));
-        const rgba = GUColor.FromInt(color);
-        SDLEP(c.SDL_SetTextureColorMod(tex, rgba.r, rgba.g, rgba.b));
-        SDLEP(c.SDL_RenderTexture(self.renderer, tex, null, &.{
-            .x = pos.x,
-            .y = pos.y,
-            .w = @floatFromInt(tex.w),
-            .h = @floatFromInt(tex.h),
-        }));
+    pub fn DrawImage(_: *anyopaque, image: *GUTextureAtlas, pos: *const GUPos, color: u32) void {
+        //const self: *RenderData = @alignCast(@ptrCast(ptr));
+        image.SetColor(color);
+        image.Draw(pos);
     }
 
     pub fn DrawRect(ptr: *anyopaque, rect: *const GURect, color: u32) void {
@@ -118,14 +208,6 @@ pub fn main() !void {
 
     var rd = try RenderData.Init();
     defer rd.Deinit();
-    //const window: ?*c.SDL_Window, const renderer: ?*c.SDL_Renderer = create_window_and_renderer: {
-    //    var w: ?*c.SDL_Window = undefined;
-    //    var r: ?*c.SDL_Renderer = undefined;
-    //    SDLE(c.SDL_SetHint(c.SDL_HINT_RENDER_VSYNC, "1")) catch {};
-    //    try SDLE(c.SDL_CreateWindowAndRenderer("GU", WINDOW_W, WINDOW_H, 0, &w, &r));
-    //    errdefer comptime unreachable;
-    //    break :create_window_and_renderer .{ w, r };
-    //};
 
     // UI-RELATED SETUP
 
@@ -139,17 +221,10 @@ pub fn main() !void {
     var gu = GU.Init(alloc, &backend);
     defer gu.Deinit();
 
-    const ascii_font: *c.SDL_Texture = load_ascii_font: {
-        const stream: *c.SDL_IOStream = try SDLE(c.SDL_IOFromConstMem(FONT, FONT.len));
-        const surface: *c.SDL_Surface = try SDLE(c.SDL_LoadBMP_IO(stream, true));
-        defer c.SDL_DestroySurface(surface);
-        const texture: *c.SDL_Texture = try SDLE(c.SDL_CreateTextureFromSurface(rd.renderer, surface));
-        errdefer comptime unreachable;
-        break :load_ascii_font texture;
-    };
-    defer c.SDL_DestroyTexture(ascii_font);
-    const font_id = try gu.AddFont(ascii_font);
-    const img_id = try gu.AddImage(ascii_font);
+    var font = try AsciiFont.Init(rd.renderer, FONT);
+    defer font.Deinit();
+    const font_id = try gu.AddFont(font.GetFontAtlas());
+    const img_id = try gu.AddImage(font.GetTextureAtlas());
 
     var b1 = GUButton{};
 
