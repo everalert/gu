@@ -204,7 +204,7 @@ pub const GUButtonState = struct {
 
 allocator: Allocator,
 
-backend: *GUBackend,
+backend: GUBackend,
 
 fonts: ArrayList(GUFontAtlas), // TODO: impl with handles
 images: ArrayList(GUTextureAtlas), // TODO: impl with handles
@@ -213,7 +213,7 @@ render_commands: ArrayList(GURenderCommand),
 mouse_pt: GUPos = .{ .x = -1, .y = -1 },
 mouse_left: GUButtonState = .{}, // LMB
 
-pub fn Init(alloc: Allocator, backend: *GUBackend) GU {
+pub fn Init(alloc: Allocator, backend: GUBackend) GU {
     return .{
         .allocator = alloc,
         .backend = backend,

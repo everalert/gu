@@ -159,27 +159,21 @@ const RenderData = struct {
         c.SDL_DestroyRenderer(self.renderer);
     }
 
-    // FIXME: remove in favor of GUFontAtlas->StringSize
-    pub fn StringSize(str: []const u8) GUSize {
-        std.debug.assert(std.mem.min(u8, str) >= ' ');
-        std.debug.assert(std.mem.max(u8, str) < 127);
-        //_ = @as(*c.SDL_Texture, @alignCast(@ptrCast(texture))); // texture = *anyopaque
-        return .{ .w = 10 * @as(f32, @floatFromInt(str.len)), .h = 21 };
-    }
+    // BACKEND
 
-    pub fn DrawString(_: *anyopaque, font: *GUFontAtlas, pos: *const GUPos, str: []const u8, color: u32) void {
+    fn DrawString(_: *anyopaque, font: *GUFontAtlas, pos: *const GUPos, str: []const u8, color: u32) void {
         //const self: *RenderData = @alignCast(@ptrCast(ptr));
         font.SetColor(color);
         font.DrawString(str, pos);
     }
 
-    pub fn DrawImage(_: *anyopaque, image: *GUTextureAtlas, pos: *const GUPos, color: u32) void {
+    fn DrawImage(_: *anyopaque, image: *GUTextureAtlas, pos: *const GUPos, color: u32) void {
         //const self: *RenderData = @alignCast(@ptrCast(ptr));
         image.SetColor(color);
         image.Draw(pos);
     }
 
-    pub fn DrawRect(ptr: *anyopaque, rect: *const GURect, color: u32) void {
+    fn DrawRect(ptr: *anyopaque, rect: *const GURect, color: u32) void {
         const self: *RenderData = @alignCast(@ptrCast(ptr));
         const c1 = GUColor.FromInt(color);
         SDLEP(c.SDL_SetRenderDrawColor(self.renderer, c1.r, c1.g, c1.b, c1.a));
@@ -189,6 +183,15 @@ const RenderData = struct {
         //    SDLEP(c.SDL_SetRenderDrawColor(self.renderer, c2.r, c2.g, c2.b, c2.a));
         //    SDLEP(c.SDL_RenderRect(self.renderer, &.{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h }));
         //}
+    }
+
+    pub fn GetBackend(self: *RenderData) GUBackend {
+        return GUBackend{
+            .ptr = self,
+            .fnDrawRect = DrawRect,
+            .fnDrawImage = DrawImage,
+            .fnDrawString = DrawString,
+        };
     }
 };
 
@@ -212,14 +215,7 @@ pub fn main() !void {
 
     // UI-RELATED SETUP
 
-    var backend = GUBackend{
-        .ptr = &rd,
-        .fnDrawRect = RenderData.DrawRect,
-        .fnDrawImage = RenderData.DrawImage,
-        .fnDrawString = RenderData.DrawString,
-    };
-
-    var gu = GU.Init(alloc, &backend);
+    var gu = GU.Init(alloc, rd.GetBackend());
     defer gu.Deinit();
 
     var font = try AsciiFont.Init(rd.renderer, FONT);
