@@ -224,6 +224,7 @@ pub fn main() !void {
     const img_id = try gu.AddImage(font.GetTextureAtlas());
 
     var b1 = GUButton{};
+    var img_x_off: f32 = 0;
 
     // MAIN LOOP
 
@@ -254,18 +255,21 @@ pub fn main() !void {
 
         gu.BeginFrame();
 
-        try gu.DoRect(0, 0, 400, 600, 0x000055FF);
-        try gu.DoRect(400, 0, 400, 600, 0x2222AAFF); // outline color
+        try gu.DoRect(400, 600, 0x000055FF);
+        try gu.DoRect(400, 600, 0x2222AAFF); // outline color
 
-        try gu.DoLabel(10, 10, font_id, 0xC00000FF, "testing... !!@$(#!QOIEANSHT)");
-        try gu.DoLabel(256, 10, null, 0x00C000FF, "testing... !!@$(#!QOIEANSHT)");
+        gu.NextElementOverridePosition(.{ .x = 10, .y = 10 });
+        try gu.DoLabel(font_id, 0xC00000FF, "testing... !!@$(#!QOIEANSHT)");
+        try gu.DoLabel(null, 0x00C000FF, "testing... !!@$(#!QOIEANSHT)");
 
-        if (try gu.DoButton(&b1, 10, 32, font_id, "Button")) {
+        if (try gu.DoButton(&b1, font_id, "Button")) {
             std.log.debug("b1 activation result!!", .{});
+            img_x_off += 10;
         }
 
-        try gu.DoImage(10, 72, img_id, 0x00C000FF);
-        try gu.DoImage(256, 72, img_id, null);
+        try gu.DoImage(img_id, 0x00C000FF);
+        gu.DoNewLine();
+        try gu.DoImage(img_id, null);
 
         gu.EndFrame();
 

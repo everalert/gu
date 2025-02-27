@@ -202,25 +202,38 @@ pub const GUButtonState = struct {
     }
 };
 
+const GUPositionOverride = union(enum) {
+    Skip: void,
+    NewLine: void,
+    Position: GUPos,
+    Offset: GUSize,
+};
+
 allocator: Allocator,
 
 backend: GUBackend,
 
 fonts: ArrayList(GUFontAtlas), // TODO: impl with handles
 images: ArrayList(GUTextureAtlas), // TODO: impl with handles
-render_commands: ArrayList(GURenderCommand),
 
-mouse_pt: GUPos = .{ .x = -1, .y = -1 },
-mouse_left: GUButtonState = .{}, // LMB
+render_commands: ArrayList(GURenderCommand),
+render_pos: GUPos,
+render_element_size: GUSize,
+render_queue_new_line: bool,
+render_override: ?GUPositionOverride,
+
+mouse_pt: GUPos,
+mouse_left: GUButtonState, // LMB
 
 pub fn Init(alloc: Allocator, backend: GUBackend) GU {
-    return .{
+    return std.mem.zeroInit(GU, .{
         .allocator = alloc,
         .backend = backend,
         .fonts = ArrayList(GUFontAtlas).init(alloc),
         .images = ArrayList(GUTextureAtlas).init(alloc),
         .render_commands = ArrayList(GURenderCommand).init(alloc),
-    };
+        .mouse_pt = .{ .x = -1, .y = -1 },
+    });
 }
 
 pub fn Deinit(self: *GU) void {
@@ -232,6 +245,11 @@ pub fn Deinit(self: *GU) void {
 pub fn BeginFrame(self: *GU) void {
     self.render_commands.clearRetainingCapacity();
     self.mouse_left.Update();
+
+    self.render_pos = .{ .x = 0, .y = 0 };
+    self.render_queue_new_line = false;
+    self.render_element_size = .{ .w = 0, .h = 0 };
+    self.render_override = null;
 }
 
 pub fn EndFrame(self: *GU) void {
@@ -244,67 +262,153 @@ pub fn EndFrame(self: *GU) void {
     }
 }
 
-pub fn DoLabel(self: *GU, x: f32, y: f32, font: ?usize, color: ?u32, str: []const u8) !void {
+// ELEMENT POSITIONING
+
+// FIXME: add logic
+/// inform system of current element dimensions, so that GetNextElementPosition
+/// has something to work with
+fn SetElementSize(self: *GU, size: GUSize) void {
+    if (self.render_override) |_| return;
+
+    self.render_element_size = size;
+}
+
+// TODO: track row height (max of element heights on current row) for newline increment
+/// resolves a new position for drawing an element, with respect to usage state
+/// and layout constraints
+fn GetNextElementPosition(self: *GU) GUPos {
+    if (self.render_override) |override| {
+        return switch (override) {
+            .Skip => self.render_pos,
+            .NewLine => newline: {
+                // TODO: pos x: derive from layout state/stack
+                // TODO: pos y: use row items max height
+                self.render_pos.x = 0;
+                self.render_pos.y += self.render_element_size.h;
+                self.NextElementOverrideClear();
+                break :newline self.render_pos;
+            },
+            .Position => |pos| pos: {
+                // TODO: generalize as a 'free positioning system' and decouple
+                // from tracked position, so that you can return to the old
+                // positioning state after you're done drawing wherever
+                self.render_pos = pos;
+                self.NextElementOverrideClear();
+                break :pos pos;
+            },
+            .Offset => |offset| offset: {
+                const pos = GUPos{ .x = self.render_pos.x + offset.w, .y = self.render_pos.y + offset.h };
+                self.NextElementOverrideClear();
+                break :offset pos;
+            },
+        };
+    }
+
+    self.render_pos.x += self.render_element_size.w;
+    return self.render_pos;
+}
+
+pub fn NextElementOverrideClear(self: *GU) void {
+    std.debug.assert(self.render_override != null);
+    self.render_override = null;
+}
+
+inline fn NextElementOverrideSet(self: *GU, override: GUPositionOverride) void {
+    std.debug.assert(self.render_override == null);
+    self.render_override = override;
+}
+
+fn NextElementOverrideSkip(self: *GU) void {
+    self.NextElementOverrideSet(.{ .Skip = {} });
+}
+
+fn NextElementOverrideNewLine(self: *GU) void {
+    self.NextElementOverrideSet(.{ .NewLine = {} });
+}
+
+pub fn NextElementOverridePosition(self: *GU, pos: GUPos) void {
+    self.NextElementOverrideSet(.{ .Position = pos });
+}
+
+pub fn NextElementOverrideOffset(self: *GU, offset: GUSize) void {
+    self.NextElementOverrideSet(.{ .Offset = offset });
+}
+
+// ELEMENTS
+
+pub const DoNewLine = NextElementOverrideNewLine;
+
+pub fn DoLabel(self: *GU, font: ?usize, color: ?u32, str: []const u8) !void {
     std.debug.assert(self.fonts.items.len >= (font orelse 1));
+    const font_ref = &self.fonts.items[font orelse 0];
     try self.render_commands.append(.{
         .Text = .{
-            .pos = .{ .x = x, .y = y },
-            .font = &self.fonts.items[font orelse 0],
+            .pos = self.GetNextElementPosition(),
+            .font = font_ref,
             .color = color orelse 0xFFFFFFFF,
             .str = str,
         },
     });
+    self.SetElementSize(font_ref.StringSize(str));
 }
 
-pub fn DoRect(self: *GU, x: f32, y: f32, w: f32, h: f32, color: ?u32) !void {
+pub fn DoRect(self: *GU, w: f32, h: f32, color: ?u32) !void {
+    const pos = self.GetNextElementPosition();
     try self.render_commands.append(.{
         .Rect = .{
-            .rect = .{ .x = x, .y = y, .w = w, .h = h },
+            .rect = .{ .x = pos.x, .y = pos.y, .w = w, .h = h },
             .color = color orelse 0xFFFFFFFF,
         },
     });
+    self.SetElementSize(.{ .w = w, .h = h });
 }
 
-pub fn DoImage(self: *GU, x: f32, y: f32, image: ?usize, color: ?u32) !void {
+pub fn DoImage(self: *GU, image: ?usize, color: ?u32) !void {
     std.debug.assert(self.images.items.len >= (image orelse 1));
+    const image_ref = &self.images.items[image orelse 0];
     try self.render_commands.append(.{
         .Image = .{
-            .pos = .{ .x = x, .y = y },
+            .pos = self.GetNextElementPosition(),
             .image = &self.images.items[image orelse 0],
             .color = color orelse 0xFFFFFFFF,
             .tile = null,
         },
     });
+    self.SetElementSize(image_ref.Size());
 }
 
 /// returns whether button was 'activated' (pressed)
-pub fn DoButton(self: *GU, btn: *GUButton, x: f32, y: f32, font: ?usize, str: []const u8) !bool {
+pub fn DoButton(self: *GU, btn: *GUButton, font: ?usize, str: []const u8) !bool {
+    const pos = self.GetNextElementPosition();
+
     const f = &self.fonts.items[font orelse 0];
     const str_size = f.StringSize(str);
     const rect = GURect{
-        .x = x,
-        .y = y,
+        .x = pos.x,
+        .y = pos.y,
         .w = GUButton.PADDING_HORIZONTAL * 2 + str_size.w,
         .h = GUButton.PADDING_VERTICAL * 2 + str_size.h,
     };
 
     const output = btn.Update(&rect, &self.mouse_pt, self.mouse_left.just_down, self.mouse_left.just_up);
 
-    switch (btn.state) {
-        .Idle => try self.DoRect(rect.x, rect.y, rect.w, rect.h, 0x008000FF),
-        .Hover => try self.DoRect(rect.x, rect.y, rect.w, rect.h, 0x00C000FF),
-        .Down => try self.DoRect(rect.x, rect.y, rect.w, rect.h, 0x004000FF),
+    {
+        self.NextElementOverrideSkip();
+        defer self.NextElementOverrideClear();
+        switch (btn.state) {
+            .Idle => try self.DoRect(rect.w, rect.h, 0x008000FF),
+            .Hover => try self.DoRect(rect.w, rect.h, 0x00C000FF),
+            .Down => try self.DoRect(rect.w, rect.h, 0x004000FF),
+        }
     }
-    try self.DoLabel(
-        rect.x + GUButton.PADDING_HORIZONTAL,
-        rect.y + GUButton.PADDING_VERTICAL,
-        null,
-        null,
-        str,
-    );
+    self.NextElementOverrideOffset(.{ .w = GUButton.PADDING_HORIZONTAL, .h = GUButton.PADDING_VERTICAL });
+    try self.DoLabel(null, null, str);
 
+    self.SetElementSize(.{ .w = rect.w, .h = rect.h });
     return output;
 }
+
+// RESOURCES
 
 // TODO: impl handle-based system
 pub fn AddFont(self: *GU, font: GUFontAtlas) !usize {
