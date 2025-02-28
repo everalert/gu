@@ -151,6 +151,7 @@ const RenderData = struct {
         SDLE(c.SDL_SetHint(c.SDL_HINT_RENDER_VSYNC, "1")) catch {};
         try SDLE(c.SDL_CreateWindowAndRenderer("GU", WINDOW_W, WINDOW_H, 0, &w, &r));
         errdefer comptime unreachable;
+        SDLE(c.SDL_SetWindowResizable(w, true)) catch {};
         return RenderData{ .window = w, .renderer = r };
     }
 
