@@ -14,6 +14,7 @@ const GUColor = GU.GUColor;
 const GUTextureAtlas = GU.GUTextureAtlas;
 const GUFontAtlas = GU.GUFontAtlas;
 const GUButton = GU.GUButton;
+const GULayout = GU.GULayout;
 
 const WINDOW_W = 800;
 const WINDOW_H = 600;
@@ -162,6 +163,14 @@ const RenderData = struct {
 
     // BACKEND
 
+    fn GetSurfaceDimensions(ptr: *anyopaque) GUSize {
+        const self: *RenderData = @alignCast(@ptrCast(ptr));
+        var screen_w: c_int = undefined;
+        var screen_h: c_int = undefined;
+        SDLEP(c.SDL_GetRenderOutputSize(self.renderer, &screen_w, &screen_h));
+        return GUSize{ .w = @floatFromInt(screen_w), .h = @floatFromInt(screen_h) };
+    }
+
     fn DrawString(_: *anyopaque, font: *GUFontAtlas, pos: *const GUPos, str: []const u8, color: u32) void {
         //const self: *RenderData = @alignCast(@ptrCast(ptr));
         font.SetColor(color);
@@ -189,6 +198,7 @@ const RenderData = struct {
     pub fn GetBackend(self: *RenderData) GUBackend {
         return GUBackend{
             .ptr = self,
+            .fnGetSurfaceDimensions = GetSurfaceDimensions,
             .fnDrawRect = DrawRect,
             .fnDrawImage = DrawImage,
             .fnDrawString = DrawString,
@@ -216,7 +226,9 @@ pub fn main() !void {
 
     // UI-RELATED SETUP
 
-    var gu = GU.Init(alloc, rd.GetBackend());
+    const base_layout = GULayout{ .widths = &[_]f32{ 400, 400 } };
+
+    var gu = GU.Init(alloc, rd.GetBackend(), base_layout);
     defer gu.Deinit();
 
     var font = try AsciiFont.Init(rd.renderer, FONT);
@@ -254,23 +266,36 @@ pub fn main() !void {
         try SDLE(c.SDL_SetRenderDrawColor(rd.renderer, 0x00, 0x00, 0x22, 0xFF));
         try SDLE(c.SDL_RenderClear(rd.renderer));
 
-        gu.BeginFrame();
+        try gu.BeginFrame();
 
-        try gu.DoRect(400, 600, 0x000055FF);
-        try gu.DoRect(400, 600, 0x2222AAFF); // outline color
+        if (gu.PushLayoutBlock(null)) {
+            defer gu.PopLayoutBlock();
 
-        gu.NextElementOverridePosition(.{ .x = 10, .y = 10 });
-        try gu.DoLabel(font_id, 0xC00000FF, "testing... !!@$(#!QOIEANSHT)");
-        try gu.DoLabel(null, 0x00C000FF, "testing... !!@$(#!QOIEANSHT)");
+            try gu.DoRect(64, 64, 0x000055FF);
+            gu.DoNewLine();
+            try gu.DoRect(64, 64, 0x2222AAFF); // old outline color
 
-        if (try gu.DoButton(&b1, font_id, "Button")) {
-            std.log.debug("b1 activation result!!", .{});
-            img_x_off += 10;
+            gu.DoNewLine();
+            //gu.NextElementOverridePosition(.{ .x = 10, .y = 10 });
+            try gu.DoLabel(font_id, 0xC00000FF, "testing... !!@$(#!QOIEANSHT)");
         }
 
-        try gu.DoImage(img_id, 0x00C000FF);
-        gu.DoNewLine();
-        try gu.DoImage(img_id, null);
+        if (gu.PushLayoutBlock(null)) {
+            defer gu.PopLayoutBlock();
+
+            try gu.DoLabel(null, 0x00C000FF, "testing... !!@$(#!QOIEANSHT)");
+
+            gu.DoNewLine();
+            if (try gu.DoButton(&b1, font_id, "Button")) {
+                std.log.debug("b1 activation result!!", .{});
+                img_x_off += 10;
+            }
+
+            gu.DoNewLine();
+            try gu.DoImage(img_id, 0x00C000FF);
+            gu.DoNewLine();
+            try gu.DoImage(img_id, null);
+        }
 
         gu.EndFrame();
 

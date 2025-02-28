@@ -41,9 +41,14 @@ pub const GUColor = extern struct {
 
 pub const GUBackend = struct {
     ptr: *anyopaque,
+    fnGetSurfaceDimensions: *const fn (*anyopaque) GUSize,
     fnDrawRect: *const fn (*anyopaque, *const GURect, u32) void,
     fnDrawString: *const fn (*anyopaque, *GUFontAtlas, *const GUPos, []const u8, u32) void,
     fnDrawImage: *const fn (*anyopaque, *GUTextureAtlas, *const GUPos, u32) void,
+
+    pub fn GetSurfaceDimensions(self: *GUBackend) GUSize {
+        return self.fnGetSurfaceDimensions(self.ptr);
+    }
 
     pub fn DrawRect(self: *GUBackend, rect: *const GURect, color: u32) void {
         self.fnDrawRect(self.ptr, rect, color);
@@ -202,6 +207,20 @@ pub const GUButtonState = struct {
     }
 };
 
+pub const GULayout = struct {
+    //bg: ?u32 = null,
+    widths: ?[]const f32 = null,
+    //heights: ?[]const f32,
+    //padding: ?GUSize,
+    //gaps: ?GUSize,
+    //scroll: ?
+};
+
+pub const GULayoutBlock = struct {
+    area: GURect,
+    layout: GULayout,
+};
+
 const GUPositionOverride = union(enum) {
     Skip: void,
     NewLine: void,
@@ -216,6 +235,9 @@ backend: GUBackend,
 fonts: ArrayList(GUFontAtlas), // TODO: impl with handles
 images: ArrayList(GUTextureAtlas), // TODO: impl with handles
 
+layout_blocks: ArrayList(GULayoutBlock),
+base_layout: GULayout,
+
 render_commands: ArrayList(GURenderCommand),
 render_pos: GUPos,
 render_element_size: GUSize,
@@ -225,24 +247,62 @@ render_override: ?GUPositionOverride,
 mouse_pt: GUPos,
 mouse_left: GUButtonState, // LMB
 
-pub fn Init(alloc: Allocator, backend: GUBackend) GU {
+pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
     return std.mem.zeroInit(GU, .{
         .allocator = alloc,
         .backend = backend,
         .fonts = ArrayList(GUFontAtlas).init(alloc),
         .images = ArrayList(GUTextureAtlas).init(alloc),
         .render_commands = ArrayList(GURenderCommand).init(alloc),
+        .layout_blocks = ArrayList(GULayoutBlock).init(alloc),
+        .base_layout = base_layout orelse GULayout{},
         .mouse_pt = .{ .x = -1, .y = -1 },
     });
 }
 
 pub fn Deinit(self: *GU) void {
+    self.layout_blocks.deinit();
     self.render_commands.deinit();
     self.images.deinit();
     self.fonts.deinit();
 }
 
-pub fn BeginFrame(self: *GU) void {
+pub fn PushLayoutBlock(self: *GU, layout: ?*GULayout) bool {
+    const prev = self.layout_blocks.getLast();
+    const next_pos = self.GetNextElementPosition(); // TODO: apply padding to render_pos after
+    const next_size = GUSize{
+        // TODO: current width iteration in parent
+        // TODO: derive height from parent if defined in layout
+        .w = if (prev.layout.widths) |widths| widths[0] else prev.area.w,
+        .h = 0,
+    };
+    self.SetElementSize(.{ .w = 0, .h = 0 });
+
+    self.layout_blocks.append(.{
+        .area = .{ .x = next_pos.x, .y = next_pos.y, .w = next_size.w, .h = next_size.h },
+        .layout = if (layout) |lo| lo.* else self.base_layout,
+    }) catch return false;
+
+    return true;
+}
+
+pub fn PopLayoutBlock(self: *GU) void {
+    var this = self.layout_blocks.pop(); // this
+
+    if (this.area.h == 0) { // if already set, height was predetermined
+        self.NextElementOverrideNewLine();
+        const end_pos = self.GetNextElementPosition();
+        this.area.h = end_pos.y - this.area.y; // TODO: account for end padding
+    }
+
+    self.render_pos = .{ .x = this.area.x, .y = this.area.y };
+    self.SetElementSize(.{ .w = this.area.w, .h = this.area.h });
+}
+
+pub fn BeginFrame(self: *GU) !void {
+    std.debug.assert(self.layout_blocks.items.len == 0);
+    const surface_size = self.backend.GetSurfaceDimensions();
+
     self.render_commands.clearRetainingCapacity();
     self.mouse_left.Update();
 
@@ -250,9 +310,17 @@ pub fn BeginFrame(self: *GU) void {
     self.render_queue_new_line = false;
     self.render_element_size = .{ .w = 0, .h = 0 };
     self.render_override = null;
+
+    try self.layout_blocks.append(.{
+        .area = .{ .x = 0, .y = 0, .w = surface_size.w, .h = surface_size.h },
+        .layout = self.base_layout,
+    });
 }
 
 pub fn EndFrame(self: *GU) void {
+    std.debug.assert(self.layout_blocks.items.len == 1);
+    _ = self.layout_blocks.pop();
+
     for (self.render_commands.items) |command| {
         switch (command) {
             .Rect => |rect| self.backend.DrawRect(&rect.rect, rect.color),
@@ -283,7 +351,8 @@ fn GetNextElementPosition(self: *GU) GUPos {
             .NewLine => newline: {
                 // TODO: pos x: derive from layout state/stack
                 // TODO: pos y: use row items max height
-                self.render_pos.x = 0;
+                const this_block = &self.layout_blocks.items[self.layout_blocks.items.len - 1];
+                self.render_pos.x = this_block.area.x; // TODO: apply padding
                 self.render_pos.y += self.render_element_size.h;
                 self.NextElementOverrideClear();
                 break :newline self.render_pos;
