@@ -219,6 +219,7 @@ pub const GULayout = struct {
 pub const GULayoutBlock = struct {
     area: GURect,
     layout: GULayout,
+    elements_this_row: u32,
 };
 
 const GUPositionOverride = union(enum) {
@@ -236,6 +237,7 @@ fonts: ArrayList(GUFontAtlas), // TODO: impl with handles
 images: ArrayList(GUTextureAtlas), // TODO: impl with handles
 
 layout_blocks: ArrayList(GULayoutBlock),
+this_layout_block: *GULayoutBlock,
 base_layout: GULayout,
 
 render_commands: ArrayList(GURenderCommand),
@@ -255,6 +257,7 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
         .images = ArrayList(GUTextureAtlas).init(alloc),
         .render_commands = ArrayList(GURenderCommand).init(alloc),
         .layout_blocks = ArrayList(GULayoutBlock).init(alloc),
+        .this_layout_block = undefined,
         .base_layout = base_layout orelse GULayout{},
         .mouse_pt = .{ .x = -1, .y = -1 },
     });
@@ -268,26 +271,31 @@ pub fn Deinit(self: *GU) void {
 }
 
 pub fn PushLayoutBlock(self: *GU, layout: ?*GULayout) bool {
-    const prev = self.layout_blocks.getLast();
-    const next_pos = self.GetNextElementPosition(); // TODO: apply padding to render_pos after
+    defer self.this_layout_block = &self.layout_blocks.items[self.layout_blocks.items.len - 1];
+    const prev = self.this_layout_block;
+
     const next_size = GUSize{
         // TODO: current width iteration in parent
         // TODO: derive height from parent if defined in layout
-        .w = if (prev.layout.widths) |widths| widths[0] else prev.area.w,
+        .w = if (prev.layout.widths) |widths| widths[prev.elements_this_row % widths.len] else prev.area.w,
         .h = 0,
     };
+
+    const next_pos = self.GetNextElementPosition(); // TODO: apply padding to render_pos after
     self.SetElementSize(.{ .w = 0, .h = 0 });
 
     self.layout_blocks.append(.{
         .area = .{ .x = next_pos.x, .y = next_pos.y, .w = next_size.w, .h = next_size.h },
         .layout = if (layout) |lo| lo.* else self.base_layout,
+        .elements_this_row = 0,
     }) catch return false;
 
     return true;
 }
 
 pub fn PopLayoutBlock(self: *GU) void {
-    var this = self.layout_blocks.pop(); // this
+    defer self.this_layout_block = &self.layout_blocks.items[self.layout_blocks.items.len - 1];
+    var this = self.layout_blocks.pop();
 
     if (this.area.h == 0) { // if already set, height was predetermined
         self.NextElementOverrideNewLine();
@@ -301,6 +309,8 @@ pub fn PopLayoutBlock(self: *GU) void {
 
 pub fn BeginFrame(self: *GU) !void {
     std.debug.assert(self.layout_blocks.items.len == 0);
+    defer self.this_layout_block = &self.layout_blocks.items[0];
+
     const surface_size = self.backend.GetSurfaceDimensions();
 
     self.render_commands.clearRetainingCapacity();
@@ -314,6 +324,7 @@ pub fn BeginFrame(self: *GU) !void {
     try self.layout_blocks.append(.{
         .area = .{ .x = 0, .y = 0, .w = surface_size.w, .h = surface_size.h },
         .layout = self.base_layout,
+        .elements_this_row = 0,
     });
 }
 
@@ -341,19 +352,25 @@ fn SetElementSize(self: *GU, size: GUSize) void {
     self.render_element_size = size;
 }
 
+fn DoNextElementNewLinePosition(self: *GU) void {
+    // TODO: pos x: derive from layout state/stack
+    // TODO: pos y: use row items max height
+    self.this_layout_block.elements_this_row = 0;
+    self.render_pos.x = self.this_layout_block.area.x; // TODO: apply padding
+    self.render_pos.y += self.render_element_size.h;
+}
+
 // TODO: track row height (max of element heights on current row) for newline increment
 /// resolves a new position for drawing an element, with respect to usage state
 /// and layout constraints
 fn GetNextElementPosition(self: *GU) GUPos {
+    defer self.this_layout_block.elements_this_row += 1;
+
     if (self.render_override) |override| {
         return switch (override) {
             .Skip => self.render_pos,
             .NewLine => newline: {
-                // TODO: pos x: derive from layout state/stack
-                // TODO: pos y: use row items max height
-                const this_block = &self.layout_blocks.items[self.layout_blocks.items.len - 1];
-                self.render_pos.x = this_block.area.x; // TODO: apply padding
-                self.render_pos.y += self.render_element_size.h;
+                self.DoNextElementNewLinePosition();
                 self.NextElementOverrideClear();
                 break :newline self.render_pos;
             },
@@ -373,7 +390,13 @@ fn GetNextElementPosition(self: *GU) GUPos {
         };
     }
 
-    self.render_pos.x += self.render_element_size.w;
+    if (self.this_layout_block.layout.widths != null and
+        self.this_layout_block.elements_this_row % self.this_layout_block.layout.widths.?.len == 0)
+    {
+        self.DoNextElementNewLinePosition();
+    } else {
+        self.render_pos.x += self.render_element_size.w;
+    }
     return self.render_pos;
 }
 

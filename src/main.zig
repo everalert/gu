@@ -226,7 +226,7 @@ pub fn main() !void {
 
     // UI-RELATED SETUP
 
-    const base_layout = GULayout{ .widths = &[_]f32{ 400, 400 } };
+    const base_layout = GULayout{ .widths = &[_]f32{ 200, 400, 200 } };
 
     var gu = GU.Init(alloc, rd.GetBackend(), base_layout);
     defer gu.Deinit();
@@ -295,6 +295,12 @@ pub fn main() !void {
             try gu.DoImage(img_id, 0x00C000FF);
             gu.DoNewLine();
             try gu.DoImage(img_id, null);
+        }
+
+        if (gu.PushLayoutBlock(null)) {
+            defer gu.PopLayoutBlock();
+
+            try gu.DoLabel(null, 0x0000C0FF, "testing... !!@$(#!QOIEANSHT)");
         }
 
         gu.EndFrame();
