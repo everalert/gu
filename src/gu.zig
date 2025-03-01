@@ -207,6 +207,14 @@ pub const GUButtonState = struct {
     }
 };
 
+pub const GUElementType = enum(u32) { None, LayoutBlock, Rect, Image, Label, Button };
+
+// intended to pass forward some info to help make layout decisions
+pub const GUElementData = struct {
+    element: GUElementType,
+    size: GUSize,
+};
+
 pub const GULayout = struct {
     //bg: ?u32 = null,
     widths: ?[]const f32 = null,
@@ -237,13 +245,12 @@ fonts: ArrayList(GUFontAtlas), // TODO: impl with handles
 images: ArrayList(GUTextureAtlas), // TODO: impl with handles
 
 layout_blocks: ArrayList(GULayoutBlock),
-this_layout_block: *GULayoutBlock,
 base_layout: GULayout,
 
 render_commands: ArrayList(GURenderCommand),
 render_pos: GUPos,
-render_element_size: GUSize,
-render_queue_new_line: bool,
+render_block: *GULayoutBlock,
+render_element: GUElementData,
 render_override: ?GUPositionOverride,
 
 mouse_pt: GUPos,
@@ -257,7 +264,7 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
         .images = ArrayList(GUTextureAtlas).init(alloc),
         .render_commands = ArrayList(GURenderCommand).init(alloc),
         .layout_blocks = ArrayList(GULayoutBlock).init(alloc),
-        .this_layout_block = undefined,
+        .render_block = undefined,
         .base_layout = base_layout orelse GULayout{},
         .mouse_pt = .{ .x = -1, .y = -1 },
     });
@@ -270,46 +277,9 @@ pub fn Deinit(self: *GU) void {
     self.fonts.deinit();
 }
 
-pub fn PushLayoutBlock(self: *GU, layout: ?*GULayout) bool {
-    defer self.this_layout_block = &self.layout_blocks.items[self.layout_blocks.items.len - 1];
-    const prev = self.this_layout_block;
-
-    const next_size = GUSize{
-        // TODO: current width iteration in parent
-        // TODO: derive height from parent if defined in layout
-        .w = if (prev.layout.widths) |widths| widths[prev.elements_this_row % widths.len] else prev.area.w,
-        .h = 0,
-    };
-
-    const next_pos = self.GetNextElementPosition(); // TODO: apply padding to render_pos after
-    self.SetElementSize(.{ .w = 0, .h = 0 });
-
-    self.layout_blocks.append(.{
-        .area = .{ .x = next_pos.x, .y = next_pos.y, .w = next_size.w, .h = next_size.h },
-        .layout = if (layout) |lo| lo.* else self.base_layout,
-        .elements_this_row = 0,
-    }) catch return false;
-
-    return true;
-}
-
-pub fn PopLayoutBlock(self: *GU) void {
-    defer self.this_layout_block = &self.layout_blocks.items[self.layout_blocks.items.len - 1];
-    var this = self.layout_blocks.pop();
-
-    if (this.area.h == 0) { // if already set, height was predetermined
-        self.NextElementOverrideNewLine();
-        const end_pos = self.GetNextElementPosition();
-        this.area.h = end_pos.y - this.area.y; // TODO: account for end padding
-    }
-
-    self.render_pos = .{ .x = this.area.x, .y = this.area.y };
-    self.SetElementSize(.{ .w = this.area.w, .h = this.area.h });
-}
-
 pub fn BeginFrame(self: *GU) !void {
     std.debug.assert(self.layout_blocks.items.len == 0);
-    defer self.this_layout_block = &self.layout_blocks.items[0];
+    defer self.render_block = &self.layout_blocks.items[0];
 
     const surface_size = self.backend.GetSurfaceDimensions();
 
@@ -317,8 +287,7 @@ pub fn BeginFrame(self: *GU) !void {
     self.mouse_left.Update();
 
     self.render_pos = .{ .x = 0, .y = 0 };
-    self.render_queue_new_line = false;
-    self.render_element_size = .{ .w = 0, .h = 0 };
+    self.render_element = .{ .element = .None, .size = .{ .w = 0, .h = 0 } };
     self.render_override = null;
 
     try self.layout_blocks.append(.{
@@ -343,34 +312,56 @@ pub fn EndFrame(self: *GU) void {
 
 // ELEMENT POSITIONING
 
-// FIXME: add logic
-/// inform system of current element dimensions, so that GetNextElementPosition
-/// has something to work with
-fn SetElementSize(self: *GU, size: GUSize) void {
-    if (self.render_override) |_| return;
+// TODO: account for padding, gaps
+/// inform system of current element, so that GetNextElementPosition has something
+/// to work with
+/// calculates how things should be relative to the layout context, and therefore
+/// can be used to tell how much space the element will take up in advance
+fn SetElementData(self: *GU, element: GUElementType, size: ?GUSize) void {
+    if (element == .None) {
+        std.debug.assert(size == null);
+        self.render_element = GUElementData{ .element = .None, .size = .{ .w = 0, .h = 0 } };
+        return;
+    }
 
-    self.render_element_size = size;
+    const width: f32 = if (self.render_block.layout.widths) |widths| width: {
+        const width_def = widths[self.render_block.elements_this_row % widths.len];
+
+        if (width_def > 0)
+            break :width width_def;
+
+        break :width self.render_block.area.w + width_def;
+    } else if (element == .LayoutBlock) self.render_block.area.w else size.?.w;
+
+    // TODO: derive height from parent if defined in layout
+    const height: f32 = switch (element) {
+        .LayoutBlock, .Rect, .Image, .Label, .Button => size.?.h,
+        .None => unreachable,
+    };
+
+    self.render_element = .{
+        .element = element,
+        .size = .{ .w = width, .h = height },
+    };
 }
 
-fn DoNextElementNewLinePosition(self: *GU) void {
+fn DoNextElementNewLineSetup(self: *GU) void {
     // TODO: pos x: derive from layout state/stack
     // TODO: pos y: use row items max height
-    self.this_layout_block.elements_this_row = 0;
-    self.render_pos.x = self.this_layout_block.area.x; // TODO: apply padding
-    self.render_pos.y += self.render_element_size.h;
+    self.render_pos.x = self.render_block.area.x; // TODO: apply padding
+    self.render_pos.y += self.render_element.size.h;
 }
 
 // TODO: track row height (max of element heights on current row) for newline increment
 /// resolves a new position for drawing an element, with respect to usage state
 /// and layout constraints
 fn GetNextElementPosition(self: *GU) GUPos {
-    defer self.this_layout_block.elements_this_row += 1;
-
     if (self.render_override) |override| {
         return switch (override) {
             .Skip => self.render_pos,
             .NewLine => newline: {
-                self.DoNextElementNewLinePosition();
+                self.render_block.elements_this_row = 0;
+                self.DoNextElementNewLineSetup();
                 self.NextElementOverrideClear();
                 break :newline self.render_pos;
             },
@@ -390,13 +381,20 @@ fn GetNextElementPosition(self: *GU) GUPos {
         };
     }
 
-    if (self.this_layout_block.layout.widths != null and
-        self.this_layout_block.elements_this_row % self.this_layout_block.layout.widths.?.len == 0)
-    {
-        self.DoNextElementNewLinePosition();
-    } else {
-        self.render_pos.x += self.render_element_size.w;
+    switch (self.render_element.element) {
+        .None => {},
+        else => {
+            if (self.render_block.layout.widths != null and
+                (self.render_block.elements_this_row + 1) % self.render_block.layout.widths.?.len == 0)
+            {
+                self.DoNextElementNewLineSetup();
+            } else {
+                self.render_pos.x += self.render_element.size.w;
+            }
+            self.render_block.elements_this_row += 1;
+        },
     }
+
     return self.render_pos;
 }
 
@@ -428,6 +426,40 @@ pub fn NextElementOverrideOffset(self: *GU, offset: GUSize) void {
 
 // ELEMENTS
 
+pub fn StartLayoutBlock(self: *GU, layout: ?*GULayout) bool {
+    const next_pos = self.GetNextElementPosition(); // TODO: apply padding to render_pos after
+    const next_size = &self.render_element.size;
+    self.SetElementData(.LayoutBlock, .{ .w = 0, .h = 0 });
+
+    self.layout_blocks.append(.{
+        .area = .{ .x = next_pos.x, .y = next_pos.y, .w = next_size.w, .h = next_size.h },
+        .layout = if (layout) |lo| lo.* else self.base_layout,
+        .elements_this_row = 0,
+    }) catch return false;
+
+    self.render_block = &self.layout_blocks.items[self.layout_blocks.items.len - 1];
+
+    self.SetElementData(.None, null);
+
+    return true;
+}
+
+pub fn EndLayoutBlock(self: *GU) void {
+    const block = self.render_block;
+    //if (block.area.h == 0) { // if already set, height was predetermined
+    { // TODO: add above condition when implementing preset row heights
+        self.NextElementOverrideNewLine();
+        const end_pos = self.GetNextElementPosition();
+        block.area.h = end_pos.y - block.area.y; // TODO: account for end padding
+    }
+    self.render_pos = .{ .x = block.area.x, .y = block.area.y };
+
+    _ = self.layout_blocks.pop();
+    self.render_block = &self.layout_blocks.items[self.layout_blocks.items.len - 1];
+
+    self.SetElementData(.LayoutBlock, .{ .w = block.area.w, .h = block.area.h });
+}
+
 pub const DoNewLine = NextElementOverrideNewLine;
 
 pub fn DoLabel(self: *GU, font: ?usize, color: ?u32, str: []const u8) !void {
@@ -441,7 +473,7 @@ pub fn DoLabel(self: *GU, font: ?usize, color: ?u32, str: []const u8) !void {
             .str = str,
         },
     });
-    self.SetElementSize(font_ref.StringSize(str));
+    self.SetElementData(.Label, font_ref.StringSize(str));
 }
 
 pub fn DoRect(self: *GU, w: f32, h: f32, color: ?u32) !void {
@@ -452,7 +484,7 @@ pub fn DoRect(self: *GU, w: f32, h: f32, color: ?u32) !void {
             .color = color orelse 0xFFFFFFFF,
         },
     });
-    self.SetElementSize(.{ .w = w, .h = h });
+    self.SetElementData(.Rect, .{ .w = w, .h = h });
 }
 
 pub fn DoImage(self: *GU, image: ?usize, color: ?u32) !void {
@@ -466,7 +498,7 @@ pub fn DoImage(self: *GU, image: ?usize, color: ?u32) !void {
             .tile = null,
         },
     });
-    self.SetElementSize(image_ref.Size());
+    self.SetElementData(.Image, image_ref.Size());
 }
 
 /// returns whether button was 'activated' (pressed)
@@ -496,7 +528,7 @@ pub fn DoButton(self: *GU, btn: *GUButton, font: ?usize, str: []const u8) !bool 
     self.NextElementOverrideOffset(.{ .w = GUButton.PADDING_HORIZONTAL, .h = GUButton.PADDING_VERTICAL });
     try self.DoLabel(null, null, str);
 
-    self.SetElementSize(.{ .w = rect.w, .h = rect.h });
+    self.SetElementData(.Button, .{ .w = rect.w, .h = rect.h });
     return output;
 }
 
