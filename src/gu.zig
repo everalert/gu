@@ -227,7 +227,13 @@ pub const GULayout = struct {
 pub const GULayoutBlock = struct {
     area: GURect,
     layout: GULayout,
-    elements_this_row: u32,
+    row_elements: u32,
+    row_max_height: f32,
+
+    pub inline fn RowMaxHeightIncrement(self: *GULayoutBlock, height: f32) void {
+        std.debug.assert(height > 0);
+        self.row_max_height = @max(self.row_max_height, height);
+    }
 };
 
 const GUPositionOverride = union(enum) {
@@ -293,7 +299,8 @@ pub fn BeginFrame(self: *GU) !void {
     try self.layout_blocks.append(.{
         .area = .{ .x = 0, .y = 0, .w = surface_size.w, .h = surface_size.h },
         .layout = self.base_layout,
-        .elements_this_row = 0,
+        .row_elements = 0,
+        .row_max_height = 0,
     });
 }
 
@@ -325,7 +332,7 @@ fn SetElementData(self: *GU, element: GUElementType, size: ?GUSize) void {
     }
 
     const width: f32 = if (self.render_block.layout.widths) |widths| width: {
-        const width_def = widths[self.render_block.elements_this_row % widths.len];
+        const width_def = widths[self.render_block.row_elements % widths.len];
 
         if (width_def > 0)
             break :width width_def;
@@ -348,19 +355,23 @@ fn SetElementData(self: *GU, element: GUElementType, size: ?GUSize) void {
 fn DoNextElementNewLineSetup(self: *GU) void {
     // TODO: pos x: derive from layout state/stack
     // TODO: pos y: use row items max height
+    self.render_block.RowMaxHeightIncrement(self.render_element.size.h);
     self.render_pos.x = self.render_block.area.x; // TODO: apply padding
-    self.render_pos.y += self.render_element.size.h;
+    self.render_pos.y += self.render_block.row_max_height;
+    self.render_block.row_max_height = 0;
 }
 
 // TODO: track row height (max of element heights on current row) for newline increment
 /// resolves a new position for drawing an element, with respect to usage state
-/// and layout constraints
+/// and layout constraints. state set by functions such as NextElementOverrideX,
+/// SetElementData, etc. is 'committed' at this stage and codified into the
+/// current (now previous) active element.
 fn GetNextElementPosition(self: *GU) GUPos {
     if (self.render_override) |override| {
         return switch (override) {
             .Skip => self.render_pos,
             .NewLine => newline: {
-                self.render_block.elements_this_row = 0;
+                self.render_block.row_elements = 0;
                 self.DoNextElementNewLineSetup();
                 self.NextElementOverrideClear();
                 break :newline self.render_pos;
@@ -385,13 +396,14 @@ fn GetNextElementPosition(self: *GU) GUPos {
         .None => {},
         else => {
             if (self.render_block.layout.widths != null and
-                (self.render_block.elements_this_row + 1) % self.render_block.layout.widths.?.len == 0)
+                (self.render_block.row_elements + 1) % self.render_block.layout.widths.?.len == 0)
             {
                 self.DoNextElementNewLineSetup();
             } else {
+                self.render_block.RowMaxHeightIncrement(self.render_element.size.h);
                 self.render_pos.x += self.render_element.size.w;
             }
-            self.render_block.elements_this_row += 1;
+            self.render_block.row_elements += 1;
         },
     }
 
@@ -434,7 +446,8 @@ pub fn StartLayoutBlock(self: *GU, layout: ?*GULayout) bool {
     self.layout_blocks.append(.{
         .area = .{ .x = next_pos.x, .y = next_pos.y, .w = next_size.w, .h = next_size.h },
         .layout = if (layout) |lo| lo.* else self.base_layout,
-        .elements_this_row = 0,
+        .row_elements = 0,
+        .row_max_height = 0,
     }) catch return false;
 
     self.render_block = &self.layout_blocks.items[self.layout_blocks.items.len - 1];

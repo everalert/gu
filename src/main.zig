@@ -281,18 +281,6 @@ pub fn main() !void {
         if (gu.StartLayoutBlock(null)) {
             defer gu.EndLayoutBlock();
 
-            //gu.NextElementOverridePosition(.{ .x = 10, .y = 10 });
-            try gu.DoLabel(font_id, 0xC00000FF, "testing... !!@$(#!QOIEANSHT)");
-
-            gu.DoNewLine();
-            try gu.DoRect(64, 64, 0x000055FF);
-            gu.DoNewLine();
-            try gu.DoRect(64, 64, 0x2222AAFF); // old outline color
-        }
-
-        if (gu.StartLayoutBlock(null)) {
-            defer gu.EndLayoutBlock();
-
             try gu.DoLabel(null, 0x00C000FF, "testing... !!@$(#!QOIEANSHT)");
 
             gu.DoNewLine();
@@ -322,6 +310,18 @@ pub fn main() !void {
             try gu.DoImage(img_id, 0x00C000FF);
             gu.DoNewLine();
             try gu.DoImage(img_id, null);
+        }
+
+        if (gu.StartLayoutBlock(null)) {
+            defer gu.EndLayoutBlock();
+
+            //gu.NextElementOverridePosition(.{ .x = 10, .y = 10 });
+            try gu.DoLabel(font_id, 0xC00000FF, "testing... !!@$(#!QOIEANSHT)");
+
+            gu.DoNewLine();
+            try gu.DoRect(64, 64, 0x000055FF);
+            gu.DoNewLine();
+            try gu.DoRect(64, 64, 0x2222AAFF); // old outline color
         }
 
         try gu.DoLabel(null, 0x0000C0FF, "testing... !!@$(#!QOIEANSHT)");
