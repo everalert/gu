@@ -237,6 +237,7 @@ pub fn main() !void {
     const img_id = try gu.AddImage(font.GetTextureAtlas());
 
     var b1 = GUButton{};
+    var b2 = GUButton{};
     var img_x_off: f32 = 0;
     var step: bool = true;
 
@@ -312,8 +313,8 @@ pub fn main() !void {
             try gu.DoLabel(null, 0xC000C0FF, "testing... !!@$(#!QOIEANSHT)");
 
             gu.DoNewLine();
-            if (try gu.DoButton(&b1, font_id, "Button")) {
-                std.log.debug("b1 activation result!!", .{});
+            if (try gu.DoButton(&b2, font_id, "Button")) {
+                std.log.debug("b2 activation result!!", .{});
                 img_x_off += 10;
             }
 
