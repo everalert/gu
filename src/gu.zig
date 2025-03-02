@@ -217,8 +217,8 @@ pub const GUElementData = struct {
 
 pub const GULayout = struct {
     //bg: ?u32 = null,
-    widths: ?[]const f32 = null,
-    //heights: ?[]const f32,
+    widths: ?[]const f32,
+    heights: ?[]const f32,
     //padding: ?GUSize,
     //gaps: ?GUSize,
     //scroll: ?
@@ -242,6 +242,9 @@ const GUPositionOverride = union(enum) {
     Position: GUPos,
     Offset: GUSize,
 };
+
+const DEFAULT_LAYOUT = GULayout{ .widths = null, .heights = null };
+const BLANK_LAYOUT = GULayout{ .widths = null, .heights = null };
 
 allocator: Allocator,
 
@@ -271,7 +274,7 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
         .render_commands = ArrayList(GURenderCommand).init(alloc),
         .layout_blocks = ArrayList(GULayoutBlock).init(alloc),
         .render_block = undefined,
-        .base_layout = base_layout orelse GULayout{},
+        .base_layout = base_layout orelse DEFAULT_LAYOUT,
         .mouse_pt = .{ .x = -1, .y = -1 },
     });
 }
@@ -438,14 +441,14 @@ pub fn NextElementOverrideOffset(self: *GU, offset: GUSize) void {
 
 // ELEMENTS
 
-pub fn StartLayoutBlock(self: *GU, layout: ?*GULayout) bool {
+pub fn StartLayoutBlock(self: *GU, layout: ?*const GULayout) bool {
     const next_pos = self.GetNextElementPosition(); // TODO: apply padding to render_pos after
     const next_size = &self.render_element.size;
     self.SetElementData(.LayoutBlock, .{ .w = 0, .h = 0 });
 
     self.layout_blocks.append(.{
         .area = .{ .x = next_pos.x, .y = next_pos.y, .w = next_size.w, .h = next_size.h },
-        .layout = if (layout) |lo| lo.* else self.base_layout,
+        .layout = if (layout) |lo| lo.* else BLANK_LAYOUT,
         .row_elements = 0,
         .row_max_height = 0,
     }) catch return false;

@@ -226,7 +226,7 @@ pub fn main() !void {
 
     // UI-RELATED SETUP
 
-    const base_layout = GULayout{ .widths = &[_]f32{ 200, -400, 200 } };
+    const base_layout = GULayout{ .widths = &[_]f32{ 200, -400, 200 }, .heights = null };
 
     var gu = GU.Init(alloc, rd.GetBackend(), base_layout);
     defer gu.Deinit();
@@ -238,7 +238,6 @@ pub fn main() !void {
 
     var b1 = GUButton{};
     var b2 = GUButton{};
-    var img_x_off: f32 = 0;
     var step: bool = true;
 
     // MAIN LOOP
@@ -278,15 +277,16 @@ pub fn main() !void {
 
         try gu.BeginFrame();
 
-        if (gu.StartLayoutBlock(null)) {
+        // NOTE: using base layout to reproduce child block row resolution bug;
+        // remove DoNewLine to check elements wrap as expected
+        if (gu.StartLayoutBlock(&base_layout)) {
             defer gu.EndLayoutBlock();
 
-            try gu.DoLabel(null, 0x00C000FF, "testing... !!@$(#!QOIEANSHT)");
+            try gu.DoLabel(null, 0x00C000FF, "testblock1");
 
             gu.DoNewLine();
             if (try gu.DoButton(&b1, font_id, "Button")) {
                 std.log.debug("b1 activation result!!", .{});
-                img_x_off += 10;
             }
 
             gu.DoNewLine();
@@ -298,16 +298,15 @@ pub fn main() !void {
         if (gu.StartLayoutBlock(null)) {
             defer gu.EndLayoutBlock();
 
-            try gu.DoLabel(null, 0xC000C0FF, "testing... !!@$(#!QOIEANSHT)");
+            try gu.DoLabel(null, 0xC000C0FF, "testblock2");
 
             gu.DoNewLine();
             if (try gu.DoButton(&b2, font_id, "Button")) {
                 std.log.debug("b2 activation result!!", .{});
-                img_x_off += 10;
             }
 
             gu.DoNewLine();
-            try gu.DoImage(img_id, 0x00C000FF);
+            try gu.DoImage(img_id, 0xC000C0FF);
             gu.DoNewLine();
             try gu.DoImage(img_id, null);
         }
@@ -316,7 +315,7 @@ pub fn main() !void {
             defer gu.EndLayoutBlock();
 
             //gu.NextElementOverridePosition(.{ .x = 10, .y = 10 });
-            try gu.DoLabel(font_id, 0xC00000FF, "testing... !!@$(#!QOIEANSHT)");
+            try gu.DoLabel(font_id, 0xC00000FF, "testblock3");
 
             gu.DoNewLine();
             try gu.DoRect(64, 64, 0x000055FF);
