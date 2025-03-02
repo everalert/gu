@@ -227,6 +227,7 @@ pub const GULayout = struct {
 pub const GULayoutBlock = struct {
     area: GURect,
     layout: GULayout,
+    row_number: u32,
     row_elements: u32,
     row_max_height: f32,
 
@@ -302,6 +303,7 @@ pub fn BeginFrame(self: *GU) !void {
     try self.layout_blocks.append(.{
         .area = .{ .x = 0, .y = 0, .w = surface_size.w, .h = surface_size.h },
         .layout = self.base_layout,
+        .row_number = 0,
         .row_elements = 0,
         .row_max_height = 0,
     });
@@ -322,11 +324,20 @@ pub fn EndFrame(self: *GU) void {
 
 // ELEMENT POSITIONING
 
+// TODO: minimum length for dynamic case
+inline fn ResolveElementDimension(values: ?[]const f32, index: u32, parent_size: f32, default: f32) f32 {
+    if (values == null) return default;
+
+    const def = values.?[index % values.?.len];
+    if (def > 0) return def;
+    return parent_size + def; // in dynamic case, size is negated from scope size
+}
+
 // TODO: account for padding, gaps
 /// inform system of current element, so that GetNextElementPosition has something
-/// to work with
-/// calculates how things should be relative to the layout context, and therefore
-/// can be used to tell how much space the element will take up in advance
+/// to work with. calculates how things should be relative to the layout context,
+/// and therefore can be used to tell how much space the element will take up in
+/// advance for trivial element sizing cases
 fn SetElementData(self: *GU, element: GUElementType, size: ?GUSize) void {
     if (element == .None) {
         std.debug.assert(size == null);
@@ -334,20 +345,29 @@ fn SetElementData(self: *GU, element: GUElementType, size: ?GUSize) void {
         return;
     }
 
-    const width: f32 = if (self.render_block.layout.widths) |widths| width: {
-        const width_def = widths[self.render_block.row_elements % widths.len];
+    // TODO: change LayoutBlock width to equal max row size, just like height; will
+    // need to solve same problem height has with resolving child dimension in the
+    // interim before the final dimension can be known
+    const width = ResolveElementDimension(
+        self.render_block.layout.widths,
+        self.render_block.row_elements,
+        self.render_block.area.w,
+        if (element == .LayoutBlock) self.render_block.area.w else size.?.w,
+    );
 
-        if (width_def > 0)
-            break :width width_def;
-
-        break :width self.render_block.area.w + width_def;
-    } else if (element == .LayoutBlock) self.render_block.area.w else size.?.w;
-
-    // TODO: derive height from parent if defined in layout
-    const height: f32 = switch (element) {
-        .LayoutBlock, .Rect, .Image, .Label, .Button => size.?.h,
-        .None => unreachable,
-    };
+    // FIXME: because dynamically sized layout blocks are sized at 0 in the interim
+    // as a way of signaling a later resize, dynamic defined row sizes (negative
+    // number) resolve to a negative height, fucking all of it up. one idea to
+    // resolve this may be to implement a deferred sizing queue that keeps track
+    // of what needs to be resized and what depends on it, then clear that at
+    // the end of each layout scope to make sure there is no bleed or excessive
+    // dependency chain
+    const height = ResolveElementDimension(
+        self.render_block.layout.heights,
+        self.render_block.row_number,
+        self.render_block.area.h,
+        size.?.h,
+    );
 
     self.render_element = .{
         .element = element,
@@ -362,6 +382,7 @@ fn DoNextElementNewLineSetup(self: *GU) void {
     self.render_pos.x = self.render_block.area.x; // TODO: apply padding
     self.render_pos.y += self.render_block.row_max_height;
     self.render_block.row_max_height = 0;
+    self.render_block.row_number += 1;
 }
 
 // TODO: track row height (max of element heights on current row) for newline increment
@@ -444,11 +465,12 @@ pub fn NextElementOverrideOffset(self: *GU, offset: GUSize) void {
 pub fn StartLayoutBlock(self: *GU, layout: ?*const GULayout) bool {
     const next_pos = self.GetNextElementPosition(); // TODO: apply padding to render_pos after
     const next_size = &self.render_element.size;
-    self.SetElementData(.LayoutBlock, .{ .w = 0, .h = 0 });
+    self.SetElementData(.LayoutBlock, .{ .w = 0, .h = 0 }); // filled in by SetElementData if able
 
     self.layout_blocks.append(.{
         .area = .{ .x = next_pos.x, .y = next_pos.y, .w = next_size.w, .h = next_size.h },
         .layout = if (layout) |lo| lo.* else BLANK_LAYOUT,
+        .row_number = 0,
         .row_elements = 0,
         .row_max_height = 0,
     }) catch return false;
@@ -462,8 +484,7 @@ pub fn StartLayoutBlock(self: *GU, layout: ?*const GULayout) bool {
 
 pub fn EndLayoutBlock(self: *GU) void {
     const block = self.render_block;
-    //if (block.area.h == 0) { // if already set, height was predetermined
-    { // TODO: add above condition when implementing preset row heights
+    if (block.area.h == 0) { // if already set, height was predetermined
         self.NextElementOverrideNewLine();
         const end_pos = self.GetNextElementPosition();
         block.area.h = end_pos.y - block.area.y; // TODO: account for end padding

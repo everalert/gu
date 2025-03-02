@@ -226,7 +226,10 @@ pub fn main() !void {
 
     // UI-RELATED SETUP
 
-    const base_layout = GULayout{ .widths = &[_]f32{ 200, -400, 200 }, .heights = null };
+    const base_layout = GULayout{
+        .widths = &[_]f32{ 200, -400, 200 },
+        .heights = &[_]f32{ 100, 200 },
+    };
 
     var gu = GU.Init(alloc, rd.GetBackend(), base_layout);
     defer gu.Deinit();
