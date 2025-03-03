@@ -229,6 +229,7 @@ pub fn main() !void {
     const base_layout = GULayout{
         .widths = &[_]f32{ 200, -400, 200 },
         .heights = &[_]f32{ 100, 200 },
+        .padding = GUSize{ .w = 4, .h = 2 },
     };
 
     var gu = GU.Init(alloc, rd.GetBackend(), base_layout);
@@ -317,11 +318,12 @@ pub fn main() !void {
         if (gu.StartLayoutBlock(null)) {
             defer gu.EndLayoutBlock();
 
+            try gu.DoRect(64, 64, 0x000055FF);
+
+            gu.DoNewLine();
             //gu.NextElementOverridePosition(.{ .x = 10, .y = 10 });
             try gu.DoLabel(font_id, 0xC00000FF, "testblock3");
 
-            gu.DoNewLine();
-            try gu.DoRect(64, 64, 0x000055FF);
             gu.DoNewLine();
             try gu.DoRect(64, 64, 0x2222AAFF); // old outline color
         }

@@ -219,7 +219,7 @@ pub const GULayout = struct {
     //bg: ?u32 = null,
     widths: ?[]const f32,
     heights: ?[]const f32,
-    //padding: ?GUSize,
+    padding: ?GUSize,
     //gaps: ?GUSize,
     //scroll: ?
 };
@@ -244,8 +244,8 @@ const GUPositionOverride = union(enum) {
     Offset: GUSize,
 };
 
-const DEFAULT_LAYOUT = GULayout{ .widths = null, .heights = null };
-const BLANK_LAYOUT = GULayout{ .widths = null, .heights = null };
+const DEFAULT_LAYOUT = GULayout{ .widths = null, .heights = null, .padding = GUSize{ .w = 0, .h = 0 } };
+const BLANK_LAYOUT = GULayout{ .widths = null, .heights = null, .padding = GUSize{ .w = 0, .h = 0 } };
 
 allocator: Allocator,
 
@@ -307,6 +307,11 @@ pub fn BeginFrame(self: *GU) !void {
         .row_elements = 0,
         .row_max_height = 0,
     });
+    self.render_block = &self.layout_blocks.items[self.layout_blocks.items.len - 1];
+
+    const padding = self.render_block.layout.padding orelse GUSize{ .w = 0, .h = 0 };
+    self.render_pos.x += padding.w;
+    self.render_pos.y += padding.h;
 }
 
 pub fn EndFrame(self: *GU) void {
@@ -345,13 +350,15 @@ fn SetElementData(self: *GU, element: GUElementType, size: ?GUSize) void {
         return;
     }
 
+    const padding: GUSize = self.render_block.layout.padding orelse .{ .w = 0, .h = 0 };
+
     // TODO: change LayoutBlock width to equal max row size, just like height; will
     // need to solve same problem height has with resolving child dimension in the
     // interim before the final dimension can be known
     const width = ResolveElementDimension(
         self.render_block.layout.widths,
         self.render_block.row_elements,
-        self.render_block.area.w,
+        self.render_block.area.w - padding.w * 2,
         if (element == .LayoutBlock) self.render_block.area.w else size.?.w,
     );
 
@@ -365,7 +372,7 @@ fn SetElementData(self: *GU, element: GUElementType, size: ?GUSize) void {
     const height = ResolveElementDimension(
         self.render_block.layout.heights,
         self.render_block.row_number,
-        self.render_block.area.h,
+        self.render_block.area.h - padding.h * 2,
         size.?.h,
     );
 
@@ -378,8 +385,9 @@ fn SetElementData(self: *GU, element: GUElementType, size: ?GUSize) void {
 fn DoNextElementNewLineSetup(self: *GU) void {
     // TODO: pos x: derive from layout state/stack
     // TODO: pos y: use row items max height
+    const padding = self.render_block.layout.padding orelse GUSize{ .w = 0, .h = 0 };
     self.render_block.RowMaxHeightIncrement(self.render_element.size.h);
-    self.render_pos.x = self.render_block.area.x; // TODO: apply padding
+    self.render_pos.x = self.render_block.area.x + padding.w; // TODO: apply padding
     self.render_pos.y += self.render_block.row_max_height;
     self.render_block.row_max_height = 0;
     self.render_block.row_number += 1;
@@ -476,6 +484,9 @@ pub fn StartLayoutBlock(self: *GU, layout: ?*const GULayout) bool {
     }) catch return false;
 
     self.render_block = &self.layout_blocks.items[self.layout_blocks.items.len - 1];
+    const padding = self.render_block.layout.padding orelse GUSize{ .w = 0, .h = 0 };
+    self.render_pos.x += padding.w;
+    self.render_pos.y += padding.h;
 
     self.SetElementData(.None, null);
 
@@ -485,9 +496,10 @@ pub fn StartLayoutBlock(self: *GU, layout: ?*const GULayout) bool {
 pub fn EndLayoutBlock(self: *GU) void {
     const block = self.render_block;
     if (block.area.h == 0) { // if already set, height was predetermined
+        const padding = self.render_block.layout.padding orelse GUSize{ .w = 0, .h = 0 };
         self.NextElementOverrideNewLine();
         const end_pos = self.GetNextElementPosition();
-        block.area.h = end_pos.y - block.area.y; // TODO: account for end padding
+        block.area.h = end_pos.y - block.area.y - padding.h * 2; // TODO: account for end padding
     }
     self.render_pos = .{ .x = block.area.x, .y = block.area.y };
 
