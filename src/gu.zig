@@ -207,6 +207,17 @@ pub const GUButtonState = struct {
     }
 };
 
+const GUElement = struct {
+    layout: GULayout,
+    area: GURect,
+
+    id: usize,
+    parent: ?usize,
+    children: usize,
+    first_child: ?usize,
+    next_sibling: ?usize,
+};
+
 pub const GUElementType = enum(u32) { None, LayoutBlock, Rect, Image, Label, Button };
 
 // intended to pass forward some info to help make layout decisions
@@ -215,12 +226,71 @@ pub const GUElementData = struct {
     size: GUSize,
 };
 
+const GUElementIterator = struct {
+    source: []GUElement,
+    this: ?usize,
+    prev: ?usize,
+
+    pub fn Init(source: []GUElement) GUElementIterator {
+        return GUElementIterator{
+            .source = source,
+            .this = null,
+            .prev = null,
+        };
+    }
+
+    pub fn Next(self: *GUElementIterator) ?struct {
+        element: *GUElement,
+        relation: enum { None, Child, Sibling, Parent },
+    } {
+        if (self.this == null) {
+            if (self.source.len == 0) return null;
+            self.this = 0;
+            self.prev = null;
+            return .{ .element = &self.source[0], .relation = .None };
+        }
+
+        const p = self.prev;
+        const t = self.this.?;
+        const element = self.source[self.this.?];
+
+        self.prev = self.this;
+
+        // only go to child if last movement not child-to-parent
+        if ((p == null or p.? < t) and element.first_child != null) {
+            self.this = element.first_child.?;
+            return .{
+                .element = &self.source[element.first_child.?],
+                .relation = .Child,
+            };
+        }
+
+        if (element.next_sibling) |sibling| {
+            self.this = sibling;
+            return .{
+                .element = &self.source[sibling],
+                .relation = .Sibling,
+            };
+        }
+
+        if (element.parent) |parent| {
+            self.this = parent;
+            return .{
+                .element = &self.source[parent],
+                .relation = .Parent,
+            };
+        }
+
+        return null;
+    }
+};
+
 pub const GULayout = struct {
     //bg: ?u32 = null,
     widths: ?[]const f32,
     heights: ?[]const f32,
-    padding: ?GUSize,
-    //gaps: ?GUSize,
+    padding: GUSize,
+    gaps: GUSize,
     //scroll: ?
 };
 
@@ -244,8 +314,8 @@ const GUPositionOverride = union(enum) {
     Offset: GUSize,
 };
 
-const DEFAULT_LAYOUT = GULayout{ .widths = null, .heights = null, .padding = GUSize{ .w = 0, .h = 0 } };
-const BLANK_LAYOUT = GULayout{ .widths = null, .heights = null, .padding = GUSize{ .w = 0, .h = 0 } };
+const DEFAULT_LAYOUT = GULayout{ .widths = null, .heights = null, .padding = GUSize{ .w = 0, .h = 0 }, .gaps = .{ .w = 0, .h = 0 } };
+const BLANK_LAYOUT = GULayout{ .widths = null, .heights = null, .padding = GUSize{ .w = 0, .h = 0 }, .gaps = .{ .w = 0, .h = 0 } };
 
 allocator: Allocator,
 
@@ -254,14 +324,19 @@ backend: GUBackend,
 fonts: ArrayList(GUFontAtlas), // TODO: impl with handles
 images: ArrayList(GUTextureAtlas), // TODO: impl with handles
 
-layout_blocks: ArrayList(GULayoutBlock),
+element_tree: ArrayList(GUElement),
+element_stack: ArrayList(usize),
+element_sibling: ?usize, // most recent sibling
+
+layout_blocks: ArrayList(GULayoutBlock), // FIXME: deprecated
 base_layout: GULayout,
 
+render_commands_new: ArrayList(GURenderCommand), // FIXME: for refactor, delete and rename/remove refs when finalizing
 render_commands: ArrayList(GURenderCommand),
-render_pos: GUPos,
-render_block: *GULayoutBlock,
-render_element: GUElementData,
-render_override: ?GUPositionOverride,
+render_pos: GUPos, // FIXME: deprecated
+render_block: *GULayoutBlock, // FIXME: deprecated
+render_element: GUElementData, // FIXME: deprecated
+render_override: ?GUPositionOverride, // FIXME: deprecated
 
 mouse_pt: GUPos,
 mouse_left: GUButtonState, // LMB
@@ -272,6 +347,9 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
         .backend = backend,
         .fonts = ArrayList(GUFontAtlas).init(alloc),
         .images = ArrayList(GUTextureAtlas).init(alloc),
+        .element_tree = ArrayList(GUElement).init(alloc),
+        .element_stack = ArrayList(usize).init(alloc),
+        .render_commands_new = ArrayList(GURenderCommand).init(alloc),
         .render_commands = ArrayList(GURenderCommand).init(alloc),
         .layout_blocks = ArrayList(GULayoutBlock).init(alloc),
         .render_block = undefined,
@@ -282,10 +360,29 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
 
 pub fn Deinit(self: *GU) void {
     self.layout_blocks.deinit();
+    self.render_commands_new.deinit();
     self.render_commands.deinit();
+    self.element_stack.deinit();
+    self.element_tree.deinit();
     self.images.deinit();
     self.fonts.deinit();
 }
+
+// RESOURCES
+
+// TODO: impl handle-based system
+pub fn AddFont(self: *GU, font: GUFontAtlas) !usize {
+    try self.fonts.append(font);
+    return self.fonts.items.len - 1;
+}
+
+// TODO: impl handle-based system
+pub fn AddImage(self: *GU, image: GUTextureAtlas) !usize {
+    try self.images.append(image);
+    return self.images.items.len - 1;
+}
+
+// LAYOUT
 
 pub fn BeginFrame(self: *GU) !void {
     std.debug.assert(self.layout_blocks.items.len == 0);
@@ -293,7 +390,9 @@ pub fn BeginFrame(self: *GU) !void {
 
     const surface_size = self.backend.GetSurfaceDimensions();
 
+    std.debug.assert(self.element_stack.items.len == 0);
     self.render_commands.clearRetainingCapacity();
+    self.element_tree.clearRetainingCapacity();
     self.mouse_left.Update();
 
     self.render_pos = .{ .x = 0, .y = 0 };
@@ -309,9 +408,8 @@ pub fn BeginFrame(self: *GU) !void {
     });
     self.render_block = &self.layout_blocks.items[self.layout_blocks.items.len - 1];
 
-    const padding = self.render_block.layout.padding orelse GUSize{ .w = 0, .h = 0 };
-    self.render_pos.x += padding.w;
-    self.render_pos.y += padding.h;
+    self.render_pos.x += self.render_block.layout.padding.w;
+    self.render_pos.y += self.render_block.layout.padding.h;
 }
 
 pub fn EndFrame(self: *GU) void {
@@ -325,7 +423,86 @@ pub fn EndFrame(self: *GU) void {
             .Image => |img| self.backend.DrawImage(img.image, &img.pos, img.color),
         }
     }
+
+    var it = GUElementIterator.Init(self.element_tree.items);
+    while (it.Next()) |element| {
+        std.log.debug("it-element: {s: <10}({*})    {d}x{d}", .{
+            @tagName(element.relation),
+            element.element,
+            element.element.area.w,
+            element.element.area.h,
+        });
+    }
+    for (self.render_commands_new.items) |command| {
+        switch (command) {
+            .Rect => |rect| self.backend.DrawRect(&rect.rect, rect.color),
+            .Text => |text| self.backend.DrawString(text.font, &text.pos, text.str, text.color),
+            .Image => |img| self.backend.DrawImage(img.image, &img.pos, img.color),
+        }
+    }
 }
+
+// as far as we're concerned, what the user sees as a generic layout container
+// is just a 'null' element to us, so we use these internally for clarity
+const DoElement = DoContainer;
+const EndElement = EndContainer;
+
+/// returns whether creating a new container was successful. guarantees the element
+/// tree will be in a valid state (i.e. the same as before calling, on failure).
+pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
+    const parent_i: ?usize = self.element_stack.getLastOrNull();
+    const parent: ?*GUElement = if (parent_i) |i| &self.element_tree.items[i] else null;
+
+    const element_i = self.element_tree.items.len; // next index will equal len
+
+    self.element_tree.append(GUElement{
+        .area = GURect{ .x = 0, .y = 0, .w = 0, .h = 0 },
+        .layout = if (layout) |lo| lo.* else BLANK_LAYOUT,
+        .id = element_i,
+        .parent = parent_i,
+        .next_sibling = null,
+        .children = 0,
+        .first_child = null,
+    }) catch return false;
+
+    self.element_stack.append(element_i) catch {
+        _ = self.element_tree.pop();
+        return false;
+    };
+
+    if (parent) |pa| {
+        if (pa.first_child == null) pa.first_child = element_i;
+        pa.children += 1;
+    }
+
+    if (self.element_sibling) |sibling| {
+        self.element_tree.items[sibling].next_sibling = element_i;
+        self.element_sibling = null;
+    }
+
+    return true;
+}
+
+pub fn EndContainer(self: *GU) void {
+    const element_i = self.element_stack.pop();
+    const element = &self.element_tree.items[element_i];
+    self.element_sibling = element_i;
+
+    element.area.w += element.layout.padding.w * 2;
+    element.area.h += element.layout.padding.h * 2;
+    if (element.children > 1)
+        element.area.w += element.layout.gaps.w * @as(f32, @floatFromInt(element.children - 1));
+
+    if (element.parent) |pa_i| {
+        const parent = &self.element_tree.items[pa_i];
+        parent.area.w += element.area.w;
+        parent.area.h += element.area.h;
+    }
+}
+
+// ------------------
+// WARNING: OLD STUFF
+// ------------------
 
 // ELEMENT POSITIONING
 
@@ -338,7 +515,7 @@ inline fn ResolveElementDimension(values: ?[]const f32, index: u32, parent_size:
     return parent_size + def; // in dynamic case, size is negated from scope size
 }
 
-// TODO: account for padding, gaps
+// TODO: account for gaps
 /// inform system of current element, so that GetNextElementPosition has something
 /// to work with. calculates how things should be relative to the layout context,
 /// and therefore can be used to tell how much space the element will take up in
@@ -350,7 +527,7 @@ fn SetElementData(self: *GU, element: GUElementType, size: ?GUSize) void {
         return;
     }
 
-    const padding: GUSize = self.render_block.layout.padding orelse .{ .w = 0, .h = 0 };
+    const padding: GUSize = self.render_block.layout.padding;
 
     // TODO: change LayoutBlock width to equal max row size, just like height; will
     // need to solve same problem height has with resolving child dimension in the
@@ -385,9 +562,9 @@ fn SetElementData(self: *GU, element: GUElementType, size: ?GUSize) void {
 fn DoNextElementNewLineSetup(self: *GU) void {
     // TODO: pos x: derive from layout state/stack
     // TODO: pos y: use row items max height
-    const padding = self.render_block.layout.padding orelse GUSize{ .w = 0, .h = 0 };
+    const padding = self.render_block.layout.padding;
     self.render_block.RowMaxHeightIncrement(self.render_element.size.h);
-    self.render_pos.x = self.render_block.area.x + padding.w; // TODO: apply padding
+    self.render_pos.x = self.render_block.area.x + padding.w;
     self.render_pos.y += self.render_block.row_max_height;
     self.render_block.row_max_height = 0;
     self.render_block.row_number += 1;
@@ -471,7 +648,7 @@ pub fn NextElementOverrideOffset(self: *GU, offset: GUSize) void {
 // ELEMENTS
 
 pub fn StartLayoutBlock(self: *GU, layout: ?*const GULayout) bool {
-    const next_pos = self.GetNextElementPosition(); // TODO: apply padding to render_pos after
+    const next_pos = self.GetNextElementPosition();
     const next_size = &self.render_element.size;
     self.SetElementData(.LayoutBlock, .{ .w = 0, .h = 0 }); // filled in by SetElementData if able
 
@@ -484,9 +661,8 @@ pub fn StartLayoutBlock(self: *GU, layout: ?*const GULayout) bool {
     }) catch return false;
 
     self.render_block = &self.layout_blocks.items[self.layout_blocks.items.len - 1];
-    const padding = self.render_block.layout.padding orelse GUSize{ .w = 0, .h = 0 };
-    self.render_pos.x += padding.w;
-    self.render_pos.y += padding.h;
+    self.render_pos.x += self.render_block.layout.padding.w;
+    self.render_pos.y += self.render_block.layout.padding.h;
 
     self.SetElementData(.None, null);
 
@@ -496,10 +672,10 @@ pub fn StartLayoutBlock(self: *GU, layout: ?*const GULayout) bool {
 pub fn EndLayoutBlock(self: *GU) void {
     const block = self.render_block;
     if (block.area.h == 0) { // if already set, height was predetermined
-        const padding = self.render_block.layout.padding orelse GUSize{ .w = 0, .h = 0 };
+        const padding = self.render_block.layout.padding;
         self.NextElementOverrideNewLine();
         const end_pos = self.GetNextElementPosition();
-        block.area.h = end_pos.y - block.area.y - padding.h * 2; // TODO: account for end padding
+        block.area.h = end_pos.y - block.area.y - padding.h * 2;
     }
     self.render_pos = .{ .x = block.area.x, .y = block.area.y };
 
@@ -579,18 +755,4 @@ pub fn DoButton(self: *GU, btn: *GUButton, font: ?usize, str: []const u8) !bool 
 
     self.SetElementData(.Button, .{ .w = rect.w, .h = rect.h });
     return output;
-}
-
-// RESOURCES
-
-// TODO: impl handle-based system
-pub fn AddFont(self: *GU, font: GUFontAtlas) !usize {
-    try self.fonts.append(font);
-    return self.fonts.items.len - 1;
-}
-
-// TODO: impl handle-based system
-pub fn AddImage(self: *GU, image: GUTextureAtlas) !usize {
-    try self.images.append(image);
-    return self.images.items.len - 1;
 }

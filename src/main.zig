@@ -230,6 +230,7 @@ pub fn main() !void {
         .widths = &[_]f32{ 200, -400, 200 },
         .heights = &[_]f32{ 100, 200 },
         .padding = GUSize{ .w = 4, .h = 2 },
+        .gaps = GUSize{ .w = 2, .h = 4 },
     };
 
     var gu = GU.Init(alloc, rd.GetBackend(), base_layout);
@@ -273,8 +274,8 @@ pub fn main() !void {
         }
 
         // NOTE: frame advance helper for debugging
-        //if (!step) continue;
-        //step = false;
+        if (!step) continue;
+        step = false;
 
         try SDLE(c.SDL_SetRenderDrawColor(rd.renderer, 0x00, 0x00, 0x22, 0xFF));
         try SDLE(c.SDL_RenderClear(rd.renderer));
@@ -333,6 +334,22 @@ pub fn main() !void {
         try gu.DoLabel(null, 0x00C0C0FF, "testing... !!@$(#!QOIEANSHT)");
 
         try gu.DoLabel(null, 0xC0C000FF, "testing... !!@$(#!QOIEANSHT)");
+
+        if (gu.DoContainer(null)) {
+            defer gu.EndContainer();
+            if (gu.DoContainer(null)) {
+                defer gu.EndContainer();
+            }
+            if (gu.DoContainer(null)) {
+                defer gu.EndContainer();
+                if (gu.DoContainer(null)) {
+                    defer gu.EndContainer();
+                }
+            }
+            if (gu.DoContainer(null)) {
+                defer gu.EndContainer();
+            }
+        }
 
         gu.EndFrame();
 
