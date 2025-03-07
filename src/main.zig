@@ -142,6 +142,14 @@ const AsciiFont = struct {
     }
 };
 
+// FIXME: add target texture for gui to draw to; will allow use of different blend
+// modes, and therefore enable alpha to work when drawing elements, because the
+// window target itself seems to not allow alpha blending for fills (at least on
+// windows). may also need to make something like DrawRenderQueue as part of the
+// GUBackend interface, so that a backend such as SDL can control timing of
+// switching render targets and such for gui rendering
+// NOTE: for example of using texture as render target with alpha blending, see:
+//   https://discourse.libsdl.org/t/sdl3-texture-alpha-blend-not-working/58154/2
 const RenderData = struct {
     window: ?*c.SDL_Window,
     renderer: ?*c.SDL_Renderer,
@@ -227,9 +235,10 @@ pub fn main() !void {
     // UI-RELATED SETUP
 
     const base_layout = GULayout{
+        .bg = 0xFFFFFF80,
         .widths = &[_]f32{ 200, -400, 200 },
         .heights = &[_]f32{ 100, 200 },
-        .padding = GUSize{ .w = 4, .h = 2 },
+        .padding = GUSize{ .w = 4, .h = 4 },
         .gaps = GUSize{ .w = 2, .h = 4 },
     };
 
@@ -274,8 +283,8 @@ pub fn main() !void {
         }
 
         // NOTE: frame advance helper for debugging
-        if (!step) continue;
-        step = false;
+        //if (!step) continue;
+        //step = false;
 
         try SDLE(c.SDL_SetRenderDrawColor(rd.renderer, 0x00, 0x00, 0x22, 0xFF));
         try SDLE(c.SDL_RenderClear(rd.renderer));
@@ -335,19 +344,30 @@ pub fn main() !void {
 
         try gu.DoLabel(null, 0xC0C000FF, "testing... !!@$(#!QOIEANSHT)");
 
-        if (gu.DoContainer(null)) {
+        if (gu.DoContainer(&base_layout)) {
             defer gu.EndContainer();
             if (gu.DoContainer(null)) {
                 defer gu.EndContainer();
+                gu.SetContainerColor(0xFF0000FF);
+                var container = &gu.element_tree.items[gu.element_stack.getLast()];
+                container.mode = .{ .Rect = GUSize{ .w = 8, .h = 16 } };
             }
             if (gu.DoContainer(null)) {
                 defer gu.EndContainer();
+                gu.SetContainerColor(0x00FF00FF);
+                gu.SetContainerPadding(.{ .w = 2, .h = 2 });
                 if (gu.DoContainer(null)) {
                     defer gu.EndContainer();
+                    gu.SetContainerColor(0xFFFF00FF);
+                    var container = &gu.element_tree.items[gu.element_stack.getLast()];
+                    container.mode = .{ .Rect = GUSize{ .w = 12, .h = 24 } };
                 }
             }
             if (gu.DoContainer(null)) {
                 defer gu.EndContainer();
+                gu.SetContainerColor(0x0000FFFF);
+                var container = &gu.element_tree.items[gu.element_stack.getLast()];
+                container.mode = .{ .Rect = GUSize{ .w = 48, .h = 32 } };
             }
         }
 

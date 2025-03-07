@@ -210,12 +210,22 @@ pub const GUButtonState = struct {
 const GUElement = struct {
     layout: GULayout,
     area: GURect,
+    mode: union(enum) {
+        None: void,
+        Rect: GUSize,
+        Image: u32,
+        Label: struct {
+            font: u32,
+            str: []const u8,
+        },
+    },
 
     id: usize,
     parent: ?usize,
     children: usize,
     first_child: ?usize,
-    next_sibling: ?usize,
+    sibling_next: ?usize,
+    sibling_prev: ?usize,
 };
 
 pub const GUElementType = enum(u32) { None, LayoutBlock, Rect, Image, Label, Button };
@@ -226,6 +236,11 @@ pub const GUElementData = struct {
     size: GUSize,
 };
 
+// TODO: specify traversal order during Init, as a convenience so that user doesn't
+// have to manually skip items when it's order-based
+/// depth-first walk of element tree with pre- and post-order traversal; elements
+/// with children are touched both on the way down and up, i.e. once before then
+/// again after any children are walked
 const GUElementIterator = struct {
     source: []GUElement,
     this: ?usize,
@@ -265,7 +280,7 @@ const GUElementIterator = struct {
             };
         }
 
-        if (element.next_sibling) |sibling| {
+        if (element.sibling_next) |sibling| {
             self.this = sibling;
             return .{
                 .element = &self.source[sibling],
@@ -286,7 +301,7 @@ const GUElementIterator = struct {
 };
 
 pub const GULayout = struct {
-    //bg: ?u32 = null,
+    bg: u32,
     widths: ?[]const f32,
     heights: ?[]const f32,
     padding: GUSize,
@@ -314,8 +329,8 @@ const GUPositionOverride = union(enum) {
     Offset: GUSize,
 };
 
-const DEFAULT_LAYOUT = GULayout{ .widths = null, .heights = null, .padding = GUSize{ .w = 0, .h = 0 }, .gaps = .{ .w = 0, .h = 0 } };
-const BLANK_LAYOUT = GULayout{ .widths = null, .heights = null, .padding = GUSize{ .w = 0, .h = 0 }, .gaps = .{ .w = 0, .h = 0 } };
+const DEFAULT_LAYOUT = GULayout{ .bg = 0x00000000, .widths = null, .heights = null, .padding = GUSize{ .w = 0, .h = 0 }, .gaps = .{ .w = 0, .h = 0 } };
+const BLANK_LAYOUT = GULayout{ .bg = 0x00000000, .widths = null, .heights = null, .padding = GUSize{ .w = 0, .h = 0 }, .gaps = .{ .w = 0, .h = 0 } };
 
 allocator: Allocator,
 
@@ -393,6 +408,7 @@ pub fn BeginFrame(self: *GU) !void {
     std.debug.assert(self.element_stack.items.len == 0);
     self.render_commands.clearRetainingCapacity();
     self.element_tree.clearRetainingCapacity();
+    self.element_sibling = null;
     self.mouse_left.Update();
 
     self.render_pos = .{ .x = 0, .y = 0 };
@@ -424,15 +440,9 @@ pub fn EndFrame(self: *GU) void {
         }
     }
 
-    var it = GUElementIterator.Init(self.element_tree.items);
-    while (it.Next()) |element| {
-        std.log.debug("it-element: {s: <10}({*})    {d}x{d}", .{
-            @tagName(element.relation),
-            element.element,
-            element.element.area.w,
-            element.element.area.h,
-        });
-    }
+    self.DoElementPositioning();
+    self.DoElementDrawCommandEmit();
+    //self.DoElementDebugLog();
     for (self.render_commands_new.items) |command| {
         switch (command) {
             .Rect => |rect| self.backend.DrawRect(&rect.rect, rect.color),
@@ -458,9 +468,11 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
     self.element_tree.append(GUElement{
         .area = GURect{ .x = 0, .y = 0, .w = 0, .h = 0 },
         .layout = if (layout) |lo| lo.* else BLANK_LAYOUT,
+        .mode = .{ .None = {} },
         .id = element_i,
         .parent = parent_i,
-        .next_sibling = null,
+        .sibling_next = null,
+        .sibling_prev = self.element_sibling,
         .children = 0,
         .first_child = null,
     }) catch return false;
@@ -476,7 +488,7 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
     }
 
     if (self.element_sibling) |sibling| {
-        self.element_tree.items[sibling].next_sibling = element_i;
+        self.element_tree.items[sibling].sibling_next = element_i;
         self.element_sibling = null;
     }
 
@@ -488,6 +500,24 @@ pub fn EndContainer(self: *GU) void {
     const element = &self.element_tree.items[element_i];
     self.element_sibling = element_i;
 
+    switch (element.mode) {
+        .None => {},
+        .Rect => |rect| {
+            element.area.w = rect.w;
+            element.area.h = rect.h;
+        },
+        .Image => |image_id| {
+            const image_size = &self.images.items[image_id].Size();
+            element.area.w = image_size.w;
+            element.area.h = image_size.h;
+        },
+        .Label => |label| {
+            const label_size = &self.fonts.items[label.font].StringSize(label.str);
+            element.area.w = label_size.w;
+            element.area.h = label_size.h;
+        },
+    }
+
     element.area.w += element.layout.padding.w * 2;
     element.area.h += element.layout.padding.h * 2;
     if (element.children > 1)
@@ -496,7 +526,83 @@ pub fn EndContainer(self: *GU) void {
     if (element.parent) |pa_i| {
         const parent = &self.element_tree.items[pa_i];
         parent.area.w += element.area.w;
-        parent.area.h += element.area.h;
+        parent.area.h = @max(parent.area.h, element.area.h);
+    }
+}
+
+pub fn SetContainerColor(self: *GU, color: u32) void {
+    const i = self.element_stack.getLast();
+    const element = &self.element_tree.items[i];
+    element.layout.bg = color;
+}
+
+pub fn SetContainerPadding(self: *GU, padding: GUSize) void {
+    const i = self.element_stack.getLast();
+    const element = &self.element_tree.items[i];
+    element.layout.padding = padding;
+}
+
+fn DoElementPositioning(self: *GU) void {
+    var it = GUElementIterator.Init(self.element_tree.items);
+    while (it.Next()) |it_data| {
+        const e = it_data.element;
+        // first visit only; Child, Sibling and None shouldn't overlap
+        if (it_data.relation != .Parent) {
+            const base_pos: GUPos, const p_padding: GUSize, const p_gap: GUSize = parenting: {
+                if (e.parent) |parent| {
+                    const p = &self.element_tree.items[parent];
+                    break :parenting .{
+                        GUPos{ .x = p.area.x, .y = p.area.y },
+                        p.layout.padding,
+                        p.layout.gaps,
+                    };
+                }
+                break :parenting .{
+                    GUPos{ .x = e.area.x, .y = e.area.y },
+                    GUSize{ .w = 0, .h = 0 },
+                    GUSize{ .w = 0, .h = 0 },
+                };
+            };
+
+            if (e.sibling_prev) |sibling_i| {
+                const sibling = &self.element_tree.items[sibling_i];
+                e.area.x = sibling.area.x + sibling.area.w + p_gap.w;
+                e.area.y = sibling.area.y;
+                continue;
+            }
+
+            if (e.parent) |_| {
+                e.area.x = base_pos.x + p_padding.w;
+                e.area.y = base_pos.y + p_padding.h;
+                continue;
+            }
+        }
+    }
+}
+
+fn DoElementDrawCommandEmit(self: *GU) void {
+    var it = GUElementIterator.Init(self.element_tree.items);
+    while (it.Next()) |it_data| {
+        const e = it_data.element;
+        if (it_data.relation == .Parent) continue;
+        if (GUColor.FromInt(e.layout.bg).a == 0) continue;
+        self.render_commands_new.append(.{
+            .Rect = .{
+                .rect = .{ .x = e.area.x, .y = e.area.y, .w = e.area.w, .h = e.area.h },
+                .color = e.layout.bg,
+            },
+        }) catch {};
+    }
+}
+
+fn DoElementDebugLog(self: *GU) void {
+    var it = GUElementIterator.Init(self.element_tree.items);
+    while (it.Next()) |it_data| {
+        const e = it_data.element;
+        std.log.debug(
+            "it-element: {s: <10}({*})    {d}x{d}",
+            .{ @tagName(it_data.relation), e, e.area.w, e.area.h },
+        );
     }
 }
 
