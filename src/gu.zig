@@ -3,6 +3,8 @@ const GU = @This();
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
+const StringHashMap = std.StringHashMap;
+const maxInt = std.math.maxInt;
 
 pub const GURect = struct {
     x: f32,
@@ -148,15 +150,16 @@ pub const GUButton = struct {
 
     mode: enum(u32) { Press, Release } = .Press,
     state: enum(u32) { Idle, Hover, Down } = .Idle,
+    area: GURect,
+    element: usize,
 
     pub fn Update(
         self: *GUButton,
-        rect: *const GURect,
         pt: *const GUPos,
         btn_just_down: bool,
         btn_just_up: bool,
     ) bool {
-        if (rect.PointInRect(pt)) {
+        if (self.area.PointInRect(pt)) {
             if (self.state == .Idle)
                 self.state = .Hover;
 
@@ -240,6 +243,8 @@ pub const GUElementData = struct {
     size: GUSize,
 };
 
+// FIXME: iterator won't traverse the whole element list if there are multiple top
+// level nodes
 // TODO: specify traversal order during Init, as a convenience so that user doesn't
 // have to manually skip items when it's order-based
 /// depth-first walk of element tree with pre- and post-order traversal; elements
@@ -350,6 +355,9 @@ element_tree: ArrayList(GUElement),
 element_stack: ArrayList(usize),
 element_sibling: ?usize, // most recent sibling
 
+buttons: StringHashMap(GUButton),
+button_delete_queue: ArrayList([]const u8),
+
 layout_blocks: ArrayList(GULayoutBlock), // FIXME: deprecated
 base_layout: GULayout,
 
@@ -371,6 +379,8 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
         .images = ArrayList(GUTextureAtlas).init(alloc),
         .element_tree = ArrayList(GUElement).init(alloc),
         .element_stack = ArrayList(usize).init(alloc),
+        .buttons = StringHashMap(GUButton).init(alloc),
+        .button_delete_queue = ArrayList([]const u8).init(alloc),
         .render_commands_new = ArrayList(GURenderCommand).init(alloc),
         .render_commands = ArrayList(GURenderCommand).init(alloc),
         .layout_blocks = ArrayList(GULayoutBlock).init(alloc),
@@ -449,6 +459,7 @@ pub fn EndFrame(self: *GU) void {
     }
 
     self.DoElementPositioning();
+    self.DoButtonPostProcessing();
     self.DoElementEmitDrawCommands();
     //self.DoElementDebugLog();
     for (self.render_commands_new.items) |command| {
@@ -498,6 +509,8 @@ fn DoElementPositioning(self: *GU) void {
     }
 }
 
+// FIXME: probably don't need an iterator here, since the element tree should be
+// implicitly in the correct order with respect to z-order when read linearly
 fn DoElementEmitDrawCommands(self: *GU) void {
     var it = GUElementIterator.Init(self.element_tree.items);
     while (it.Next()) |it_data| {
@@ -535,6 +548,27 @@ fn DoElementDebugLog(self: *GU) void {
             .{ @tagName(it_data.relation), e, e.area.w, e.area.h },
         );
     }
+}
+
+fn DoButtonPostProcessing(self: *GU) void {
+    std.debug.assert(self.button_delete_queue.items.len == 0);
+
+    var it = self.buttons.iterator();
+    while (it.next()) |btn_info| {
+        const btn = btn_info.value_ptr;
+        if (btn.element == maxInt(usize)) {
+            self.button_delete_queue.append(btn_info.key_ptr.*) catch |err| {
+                std.log.err("DoButtonPostProcessing ({s})", .{@errorName(err)});
+                unreachable;
+            };
+            continue;
+        }
+        btn.area = self.element_tree.items[btn.element].area;
+        btn.element = maxInt(usize);
+    }
+
+    while (self.button_delete_queue.popOrNull()) |item|
+        _ = self.buttons.remove(item);
 }
 
 // LAYOUT
@@ -675,6 +709,49 @@ pub fn DoLabelNEW(self: *GU, font: ?GUFontHandle, color: ?u32, str: []const u8) 
     const element = self.GetElement();
     element.mode = .{ .Label = .{ .font = font orelse 0, .str = str } };
     element.layout.color = color orelse 0xFFFFFFFF;
+}
+
+/// returns whether button was 'activated' (pressed)
+pub fn DoButtonNEW(self: *GU, font: ?usize, str: []const u8) bool {
+    if (!self.DoElement(null)) return false;
+    defer self.EndElement();
+    const element = self.GetElement();
+
+    const btn: *GUButton = get_button: {
+        const btn_key = std.fmt.allocPrint(self.allocator, "{X:0>16}{s}", .{ element.id, str }) catch
+            return false;
+        const btn_info = self.buttons.getOrPut(btn_key) catch
+            return false;
+
+        const btn = btn_info.value_ptr;
+        if (!btn_info.found_existing) {
+            btn.* = GUButton{
+                .state = .Idle,
+                .mode = .Press,
+                .area = GURect{ .x = 0, .y = 0, .w = 0, .h = 0 },
+                .element = element.id,
+            };
+        } else btn.element = element.id;
+
+        break :get_button btn;
+    };
+
+    const activated = btn.Update(
+        &self.mouse_pt,
+        self.mouse_left.just_down,
+        self.mouse_left.just_up,
+    );
+
+    element.layout.color = switch (btn.state) {
+        .Idle => 0x008000FF,
+        .Hover => 0x00C000FF,
+        .Down => 0x004000FF,
+    };
+    element.layout.padding = .{ .w = GUButton.PADDING_HORIZONTAL, .h = GUButton.PADDING_VERTICAL };
+
+    self.DoLabelNEW(font, null, str);
+
+    return activated;
 }
 
 // ------------------
