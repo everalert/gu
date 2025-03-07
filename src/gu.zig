@@ -207,16 +207,20 @@ pub const GUButtonState = struct {
     }
 };
 
+// TODO: impl image tilesets
 const GUElement = struct {
     layout: GULayout,
     area: GURect,
     mode: union(enum) {
         None: void,
         Rect: GUSize,
-        Image: u32,
+        Image: struct {
+            image: GUImageHandle,
+            //tile: ?u32,
+        },
         Label: struct {
-            font: u32,
             str: []const u8,
+            font: GUFontHandle,
         },
     },
 
@@ -301,7 +305,7 @@ const GUElementIterator = struct {
 };
 
 pub const GULayout = struct {
-    bg: u32,
+    color: u32,
     widths: ?[]const f32,
     heights: ?[]const f32,
     padding: GUSize,
@@ -329,15 +333,18 @@ const GUPositionOverride = union(enum) {
     Offset: GUSize,
 };
 
-const DEFAULT_LAYOUT = GULayout{ .bg = 0x00000000, .widths = null, .heights = null, .padding = GUSize{ .w = 0, .h = 0 }, .gaps = .{ .w = 0, .h = 0 } };
-const BLANK_LAYOUT = GULayout{ .bg = 0x00000000, .widths = null, .heights = null, .padding = GUSize{ .w = 0, .h = 0 }, .gaps = .{ .w = 0, .h = 0 } };
+const GUImageHandle = usize;
+const GUFontHandle = usize;
+
+const DEFAULT_LAYOUT = GULayout{ .color = 0x00000000, .widths = null, .heights = null, .padding = GUSize{ .w = 0, .h = 0 }, .gaps = .{ .w = 0, .h = 0 } };
+const BLANK_LAYOUT = GULayout{ .color = 0x00000000, .widths = null, .heights = null, .padding = GUSize{ .w = 0, .h = 0 }, .gaps = .{ .w = 0, .h = 0 } };
 
 allocator: Allocator,
 
 backend: GUBackend,
 
-fonts: ArrayList(GUFontAtlas), // TODO: impl with handles
-images: ArrayList(GUTextureAtlas), // TODO: impl with handles
+fonts: ArrayList(GUFontAtlas), // TODO: impl with handles, update GUFontHandle
+images: ArrayList(GUTextureAtlas), // TODO: impl with handles, update GUImageHandle
 
 element_tree: ArrayList(GUElement),
 element_stack: ArrayList(usize),
@@ -397,7 +404,7 @@ pub fn AddImage(self: *GU, image: GUTextureAtlas) !usize {
     return self.images.items.len - 1;
 }
 
-// LAYOUT
+// FRAME
 
 pub fn BeginFrame(self: *GU) !void {
     std.debug.assert(self.layout_blocks.items.len == 0);
@@ -442,7 +449,7 @@ pub fn EndFrame(self: *GU) void {
     }
 
     self.DoElementPositioning();
-    self.DoElementDrawCommandEmit();
+    self.DoElementEmitDrawCommands();
     //self.DoElementDebugLog();
     for (self.render_commands_new.items) |command| {
         switch (command) {
@@ -451,96 +458,6 @@ pub fn EndFrame(self: *GU) void {
             .Image => |img| self.backend.DrawImage(img.image, &img.pos, img.color),
         }
     }
-}
-
-// as far as we're concerned, what the user sees as a generic layout container
-// is just a 'null' element to us, so we use these internally for clarity
-const DoElement = DoContainer;
-const EndElement = EndContainer;
-
-/// returns whether creating a new container was successful. guarantees the element
-/// tree will be in a valid state (i.e. the same as before calling, on failure).
-pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
-    const parent_i: ?usize = self.element_stack.getLastOrNull();
-    const parent: ?*GUElement = if (parent_i) |i| &self.element_tree.items[i] else null;
-
-    const element_i = self.element_tree.items.len; // next index will equal len
-
-    self.element_tree.append(GUElement{
-        .area = GURect{ .x = 0, .y = 0, .w = 0, .h = 0 },
-        .layout = if (layout) |lo| lo.* else BLANK_LAYOUT,
-        .mode = .{ .None = {} },
-        .id = element_i,
-        .parent = parent_i,
-        .sibling_next = null,
-        .sibling_prev = self.element_sibling,
-        .children = 0,
-        .first_child = null,
-    }) catch return false;
-
-    self.element_stack.append(element_i) catch {
-        _ = self.element_tree.pop();
-        return false;
-    };
-
-    if (parent) |pa| {
-        if (pa.first_child == null) pa.first_child = element_i;
-        pa.children += 1;
-    }
-
-    if (self.element_sibling) |sibling| {
-        self.element_tree.items[sibling].sibling_next = element_i;
-        self.element_sibling = null;
-    }
-
-    return true;
-}
-
-pub fn EndContainer(self: *GU) void {
-    const element_i = self.element_stack.pop();
-    const element = &self.element_tree.items[element_i];
-    self.element_sibling = element_i;
-
-    switch (element.mode) {
-        .None => {},
-        .Rect => |rect| {
-            element.area.w = rect.w;
-            element.area.h = rect.h;
-        },
-        .Image => |image_id| {
-            const image_size = &self.images.items[image_id].Size();
-            element.area.w = image_size.w;
-            element.area.h = image_size.h;
-        },
-        .Label => |label| {
-            const label_size = &self.fonts.items[label.font].StringSize(label.str);
-            element.area.w = label_size.w;
-            element.area.h = label_size.h;
-        },
-    }
-
-    element.area.w += element.layout.padding.w * 2;
-    element.area.h += element.layout.padding.h * 2;
-    if (element.children > 1)
-        element.area.w += element.layout.gaps.w * @as(f32, @floatFromInt(element.children - 1));
-
-    if (element.parent) |pa_i| {
-        const parent = &self.element_tree.items[pa_i];
-        parent.area.w += element.area.w;
-        parent.area.h = @max(parent.area.h, element.area.h);
-    }
-}
-
-pub fn SetContainerColor(self: *GU, color: u32) void {
-    const i = self.element_stack.getLast();
-    const element = &self.element_tree.items[i];
-    element.layout.bg = color;
-}
-
-pub fn SetContainerPadding(self: *GU, padding: GUSize) void {
-    const i = self.element_stack.getLast();
-    const element = &self.element_tree.items[i];
-    element.layout.padding = padding;
 }
 
 fn DoElementPositioning(self: *GU) void {
@@ -581,18 +498,31 @@ fn DoElementPositioning(self: *GU) void {
     }
 }
 
-fn DoElementDrawCommandEmit(self: *GU) void {
+fn DoElementEmitDrawCommands(self: *GU) void {
     var it = GUElementIterator.Init(self.element_tree.items);
     while (it.Next()) |it_data| {
         const e = it_data.element;
         if (it_data.relation == .Parent) continue;
-        if (GUColor.FromInt(e.layout.bg).a == 0) continue;
-        self.render_commands_new.append(.{
-            .Rect = .{
+        if (GUColor.FromInt(e.layout.color).a == 0) continue;
+
+        self.render_commands_new.append(switch (e.mode) {
+            .Label => |label| .{ .Text = .{
+                .pos = .{ .x = e.area.x, .y = e.area.y },
+                .font = &self.fonts.items[label.font],
+                .color = e.layout.color,
+                .str = label.str,
+            } },
+            .Image => |img| .{ .Image = .{
+                .pos = .{ .x = e.area.x, .y = e.area.y },
+                .image = &self.images.items[img.image],
+                .color = e.layout.color,
+                .tile = null,
+            } },
+            .Rect, .None => .{ .Rect = .{
                 .rect = .{ .x = e.area.x, .y = e.area.y, .w = e.area.w, .h = e.area.h },
-                .color = e.layout.bg,
-            },
-        }) catch {};
+                .color = e.layout.color,
+            } },
+        }) catch |err| std.log.err("DoElementEmitDrawCommands ({s})", .{@errorName(err)});
     }
 }
 
@@ -605,6 +535,146 @@ fn DoElementDebugLog(self: *GU) void {
             .{ @tagName(it_data.relation), e, e.area.w, e.area.h },
         );
     }
+}
+
+// LAYOUT
+
+/// returns whether creating a new container was successful. guarantees the element
+/// tree will be in a valid state (i.e. the same as before calling, on failure).
+pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
+    const parent_i: ?usize = self.element_stack.getLastOrNull();
+    const element_i = self.element_tree.items.len; // next index will equal len
+
+    self.element_tree.append(GUElement{
+        .area = GURect{ .x = 0, .y = 0, .w = 0, .h = 0 },
+        .layout = if (layout) |lo| lo.* else BLANK_LAYOUT,
+        .mode = .{ .None = {} },
+        .id = element_i,
+        .parent = parent_i,
+        .sibling_next = null,
+        .sibling_prev = self.element_sibling,
+        .children = 0,
+        .first_child = null,
+    }) catch return false;
+
+    self.element_stack.append(element_i) catch {
+        _ = self.element_tree.pop();
+        return false;
+    };
+
+    const parent: ?*GUElement = if (parent_i) |i| &self.element_tree.items[i] else null;
+
+    if (parent) |pa| {
+        if (pa.first_child == null) pa.first_child = element_i;
+        pa.children += 1;
+    }
+
+    if (self.element_sibling) |sibling| {
+        self.element_tree.items[sibling].sibling_next = element_i;
+        self.element_sibling = null;
+    }
+
+    return true;
+}
+
+pub fn EndContainer(self: *GU) void {
+    const element_i = self.element_stack.pop();
+    const element = &self.element_tree.items[element_i];
+    self.element_sibling = element_i;
+
+    switch (element.mode) {
+        .None => {},
+        .Rect => |rect| {
+            element.area.w = rect.w;
+            element.area.h = rect.h;
+        },
+        .Image => |image| {
+            const image_size = &self.images.items[image.image].Size();
+            element.area.w = image_size.w;
+            element.area.h = image_size.h;
+        },
+        .Label => |label| {
+            const label_size = &self.fonts.items[label.font].StringSize(label.str);
+            element.area.w = label_size.w;
+            element.area.h = label_size.h;
+        },
+    }
+
+    element.area.w += element.layout.padding.w * 2;
+    element.area.h += element.layout.padding.h * 2;
+    if (element.children > 1)
+        element.area.w += element.layout.gaps.w * @as(f32, @floatFromInt(element.children - 1));
+
+    if (element.parent) |pa_i| {
+        const parent = &self.element_tree.items[pa_i];
+        parent.area.w += element.area.w;
+        parent.area.h = @max(parent.area.h, element.area.h);
+    }
+}
+
+pub inline fn GetContainer(self: *GU) *GUElement {
+    const i = self.element_stack.getLast();
+    const element = &self.element_tree.items[i];
+    return element;
+}
+
+pub fn SetContainerColor(self: *GU, color: u32) void {
+    const element = self.GetContainer();
+    element.layout.color = color;
+}
+
+pub fn SetContainerPadding(self: *GU, padding: GUSize) void {
+    const element = self.GetContainer();
+    element.layout.padding = padding;
+}
+
+pub fn SetContainerGaps(self: *GU, gaps: GUSize) void {
+    const element = self.GetContainer();
+    element.layout.gaps = gaps;
+}
+
+pub fn SetContainerSize(self: *GU, w: f32, h: f32) void {
+    const element = self.GetContainer();
+    element.area.w = w;
+    element.area.h = h;
+}
+
+// as far as we're concerned, what the user sees as a generic layout container
+// is just a 'null' element to us, so we use these internally for clarity
+const DoElement = DoContainer;
+const EndElement = EndContainer;
+const GetElement = GetContainer;
+const SetElementPadding = SetContainerPadding;
+const SetElementGaps = SetContainerGaps;
+const SetElementColor = SetContainerColor;
+const SetElementSize = SetContainerSize;
+
+// FIXME: rename at refactor handover
+pub fn DoRectNEW(self: *GU, size: GUSize, color: u32) void {
+    if (!self.DoElement(null)) return;
+    defer self.EndElement();
+    const element = self.GetElement();
+    element.mode = .{ .Rect = size };
+    element.layout.color = color;
+}
+
+// FIXME: rename at refactor handover
+pub fn DoImageNEW(self: *GU, image: GUImageHandle, color: ?u32) void {
+    if (!self.DoElement(null)) return;
+    defer self.EndElement();
+    const element = self.GetElement();
+    element.mode = .{ .Image = .{ .image = image } };
+    element.layout.color = color orelse 0xFFFFFFFF;
+}
+
+// TODO: add formatting, like standard string formatting functions
+// FIXME: rename at refactor handover
+pub fn DoLabelNEW(self: *GU, font: ?GUFontHandle, color: ?u32, str: []const u8) void {
+    if (!self.DoElement(null)) return;
+    defer self.EndElement();
+    const element = self.GetElement();
+    element.mode = .{ .Label = .{ .font = font orelse 0, .str = str } };
+    element.layout.color = color orelse 0xFFFFFFFF;
 }
 
 // ------------------

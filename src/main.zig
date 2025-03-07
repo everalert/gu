@@ -228,7 +228,7 @@ pub fn main() !void {
     // UI-RELATED SETUP
 
     const base_layout = GULayout{
-        .bg = 0xFFFFFF80,
+        .color = 0xFFFFFF40,
         .widths = &[_]f32{ 200, -400, 200 },
         .heights = &[_]f32{ 100, 200 },
         .padding = GUSize{ .w = 4, .h = 4 },
@@ -343,29 +343,21 @@ pub fn main() !void {
 
         if (gu.DoContainer(&base_layout)) {
             defer gu.EndContainer();
-            if (gu.DoContainer(null)) {
-                defer gu.EndContainer();
-                gu.SetContainerColor(0xFF0000FF);
-                var container = &gu.element_tree.items[gu.element_stack.getLast()];
-                container.mode = .{ .Rect = GUSize{ .w = 8, .h = 256 } };
-            }
+            gu.DoRectNEW(.{ .w = 8, .h = 256 }, 0xFF0000FF);
             if (gu.DoContainer(null)) {
                 defer gu.EndContainer();
                 gu.SetContainerColor(0x00FF00FF);
-                gu.SetContainerPadding(.{ .w = 2, .h = 2 });
-                if (gu.DoContainer(null)) {
-                    defer gu.EndContainer();
-                    gu.SetContainerColor(0xFFFF00FF);
-                    var container = &gu.element_tree.items[gu.element_stack.getLast()];
-                    container.mode = .{ .Rect = GUSize{ .w = 12, .h = 24 } };
-                }
+                gu.SetContainerPadding(.{ .w = 8, .h = 4 });
+                gu.SetContainerGaps(.{ .w = 8, .h = 4 });
+
+                gu.DoRectNEW(.{ .w = 12, .h = 24 }, 0xFFFF00FF);
+                gu.DoRectNEW(.{ .w = 64, .h = 64 }, 0xFF0000FF);
+                gu.DoImageNEW(img_id, null);
+                gu.DoImageNEW(img_id, 0x0000FFFF);
+                gu.DoLabelNEW(font_id, null, "testingNEWLABEL");
+                gu.DoLabelNEW(font_id, 0xFF0000FF, "testingNEWLABEL");
             }
-            if (gu.DoContainer(null)) {
-                defer gu.EndContainer();
-                gu.SetContainerColor(0x0000FFFF);
-                var container = &gu.element_tree.items[gu.element_stack.getLast()];
-                container.mode = .{ .Rect = GUSize{ .w = 256, .h = 32 } };
-            }
+            gu.DoRectNEW(.{ .w = 256, .h = 32 }, 0x0000FFFF);
         }
 
         gu.EndFrame();
