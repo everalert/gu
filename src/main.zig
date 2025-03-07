@@ -142,14 +142,6 @@ const AsciiFont = struct {
     }
 };
 
-// FIXME: add target texture for gui to draw to; will allow use of different blend
-// modes, and therefore enable alpha to work when drawing elements, because the
-// window target itself seems to not allow alpha blending for fills (at least on
-// windows). may also need to make something like DrawRenderQueue as part of the
-// GUBackend interface, so that a backend such as SDL can control timing of
-// switching render targets and such for gui rendering
-// NOTE: for example of using texture as render target with alpha blending, see:
-//   https://discourse.libsdl.org/t/sdl3-texture-alpha-blend-not-working/58154/2
 const RenderData = struct {
     window: ?*c.SDL_Window,
     renderer: ?*c.SDL_Renderer,
@@ -160,6 +152,7 @@ const RenderData = struct {
         SDLE(c.SDL_SetHint(c.SDL_HINT_RENDER_VSYNC, "1")) catch {};
         try SDLE(c.SDL_CreateWindowAndRenderer("GU", WINDOW_W, WINDOW_H, 0, &w, &r));
         errdefer comptime unreachable;
+        SDLEP(c.SDL_SetRenderDrawBlendMode(r, c.SDL_BLENDMODE_BLEND));
         SDLE(c.SDL_SetWindowResizable(w, true)) catch {};
         return RenderData{ .window = w, .renderer = r };
     }
@@ -291,6 +284,8 @@ pub fn main() !void {
 
         try gu.BeginFrame();
 
+        // old stuff
+
         // NOTE: using base layout to reproduce child block row resolution bug;
         // remove DoNewLine to check elements wrap as expected
         if (gu.StartLayoutBlock(&base_layout)) {
@@ -344,13 +339,15 @@ pub fn main() !void {
 
         try gu.DoLabel(null, 0xC0C000FF, "testing... !!@$(#!QOIEANSHT)");
 
+        // new stuff
+
         if (gu.DoContainer(&base_layout)) {
             defer gu.EndContainer();
             if (gu.DoContainer(null)) {
                 defer gu.EndContainer();
                 gu.SetContainerColor(0xFF0000FF);
                 var container = &gu.element_tree.items[gu.element_stack.getLast()];
-                container.mode = .{ .Rect = GUSize{ .w = 8, .h = 16 } };
+                container.mode = .{ .Rect = GUSize{ .w = 8, .h = 256 } };
             }
             if (gu.DoContainer(null)) {
                 defer gu.EndContainer();
@@ -367,7 +364,7 @@ pub fn main() !void {
                 defer gu.EndContainer();
                 gu.SetContainerColor(0x0000FFFF);
                 var container = &gu.element_tree.items[gu.element_stack.getLast()];
-                container.mode = .{ .Rect = GUSize{ .w = 48, .h = 32 } };
+                container.mode = .{ .Rect = GUSize{ .w = 256, .h = 32 } };
             }
         }
 

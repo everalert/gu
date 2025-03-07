@@ -407,6 +407,7 @@ pub fn BeginFrame(self: *GU) !void {
 
     std.debug.assert(self.element_stack.items.len == 0);
     self.render_commands.clearRetainingCapacity();
+    self.render_commands_new.clearRetainingCapacity();
     self.element_tree.clearRetainingCapacity();
     self.element_sibling = null;
     self.mouse_left.Update();
