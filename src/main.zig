@@ -228,7 +228,7 @@ pub fn main() !void {
     // UI-RELATED SETUP
 
     const base_layout = GULayout{
-        .color = 0xFFFFFF80,
+        .color = 0xFFFFFF40,
         .widths = &[_]f32{ 200, -400, 200 },
         .heights = &[_]f32{ 100, 200 },
         .padding = GUSize{ .w = 4, .h = 4 },
@@ -292,7 +292,7 @@ pub fn main() !void {
             try gu.DoLabel(null, 0x00C000FF, "testblock1");
 
             gu.DoNewLine();
-            try gu.DoRect(80, 28, 0x008000FF); // was button 1
+            try gu.DoRect(76, 25, 0x008000FF); // was button 1
 
             gu.DoNewLine();
             try gu.DoImage(img_id, 0x00C000FF);
@@ -306,7 +306,7 @@ pub fn main() !void {
             try gu.DoLabel(null, 0xC000C0FF, "testblock2");
 
             gu.DoNewLine();
-            try gu.DoRect(80, 28, 0x008000FF); // was button 2
+            try gu.DoRect(76, 25, 0x008000FF); // was button 2
 
             gu.DoNewLine();
             try gu.DoImage(img_id, 0xC000C0FF);

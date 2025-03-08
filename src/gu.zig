@@ -236,7 +236,7 @@ const GUElement = struct {
     layout: GULayout,
     area: GURect,
     mode: union(enum) {
-        None: void,
+        Block: void,
         Rect: GUSize,
         Image: struct {
             image: GUImageHandle,
@@ -246,6 +246,7 @@ const GUElement = struct {
             str: []const u8,
             font: GUFontHandle,
         },
+        Button: void,
     },
 
     id: usize,
@@ -287,13 +288,13 @@ const GUElementIterator = struct {
 
     pub fn Next(self: *GUElementIterator) ?struct {
         element: *GUElement,
-        relation: enum { None, Child, Sibling, Parent },
+        relation: enum { Root, Child, Sibling, Parent },
     } {
         if (self.this == null) {
             if (self.source.len == 0) return null;
             self.this = 0;
             self.prev = null;
-            return .{ .element = &self.source[0], .relation = .None };
+            return .{ .element = &self.source[0], .relation = .Root };
         }
 
         const p = self.prev;
@@ -454,21 +455,28 @@ pub fn AddImage(self: *GU, image: GUTextureAtlas) !usize {
 // FRAME
 
 pub fn BeginFrame(self: *GU) !void {
-    std.debug.assert(self.layout_blocks.items.len == 0);
-    defer self.render_block = &self.layout_blocks.items[0];
-
     const surface_size = self.backend.GetSurfaceDimensions();
 
     std.debug.assert(self.element_stack.items.len == 0);
+    std.debug.assert(self.element_line_stack.items.len == 0);
     self.render_commands.clearRetainingCapacity();
     self.render_commands_new.clearRetainingCapacity();
     self.element_tree.clearRetainingCapacity();
     self.element_sibling = null;
     self.mouse_left.Update();
 
+    // TODO: set fixed size with dimensions matching window
+    // FIXME: this element ends up stupidly wide, see DoElementDebugLog readout;
+    // seems to not be an issue for previous root elements
+    if (!self.DoElement(&self.base_layout)) unreachable;
+
+    // FIXME: delete all below, only relevant to old impl
     self.render_pos = GUPos.Zero();
     self.render_element = .{ .element = .None, .size = GUSize.Zero() };
     self.render_override = null;
+
+    std.debug.assert(self.layout_blocks.items.len == 0);
+    defer self.render_block = &self.layout_blocks.items[0];
 
     try self.layout_blocks.append(.{
         .area = .{ .x = 0, .y = 0, .w = surface_size.w, .h = surface_size.h },
@@ -486,9 +494,9 @@ pub fn BeginFrame(self: *GU) !void {
 // TODO: initial element sizing as an explicit pass separate from the initial
 // element tree generation?
 pub fn EndFrame(self: *GU) void {
+    // old stuff
     std.debug.assert(self.layout_blocks.items.len == 1);
     _ = self.layout_blocks.pop();
-
     for (self.render_commands.items) |command| {
         switch (command) {
             .Rect => |rect| self.backend.DrawRect(&rect.rect, rect.color),
@@ -497,6 +505,8 @@ pub fn EndFrame(self: *GU) void {
         }
     }
 
+    // new stuff
+    self.EndElement(); // close base layout container
     self.DoElementLineBreakParsing();
     self.DoElementPositioning();
     self.DoButtonPostProcessing();
@@ -538,7 +548,7 @@ fn DoElementLineBreakParsing(self: *GU) void {
 
         if (e.parent == null) continue;
 
-        // don't check for .None because we don't track when no parent
+        // don't check for .Block because we don't track when no parent
         if (it_data.relation == .Child) {
             const p = &self.element_tree.items[e.parent.?];
             stack.append(std.mem.zeroInit(GULineData, .{
@@ -638,7 +648,7 @@ fn DoElementEmitDrawCommands(self: *GU) void {
                 .color = e.layout.color,
                 .tile = null,
             } },
-            .Rect, .None => .{ .Rect = .{
+            .Rect, .Button, .Block => .{ .Rect = .{
                 .rect = .{ .x = e.area.x, .y = e.area.y, .w = e.area.w, .h = e.area.h },
                 .color = e.layout.color,
             } },
@@ -651,8 +661,8 @@ fn DoElementDebugLog(self: *GU) void {
     while (it.Next()) |it_data| {
         const e = it_data.element;
         std.log.debug(
-            "it-element: {s: <10}({*})    {d}x{d}",
-            .{ @tagName(it_data.relation), e, e.area.w, e.area.h },
+            "it-element: ({*})  {s: <12}{s: <10}{d}x{d}",
+            .{ e, @tagName(it_data.relation), @tagName(e.mode), e.area.w, e.area.h },
         );
     }
 }
@@ -695,7 +705,7 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
     self.element_tree.append(GUElement{
         .area = GURect.Zero(),
         .layout = if (layout) |lo| lo.* else BLANK_LAYOUT,
-        .mode = .{ .None = {} },
+        .mode = .{ .Block = {} },
         .id = element_i,
         .parent = parent_i,
         .sibling_next = null,
@@ -732,7 +742,7 @@ pub fn EndContainer(self: *GU) void {
     self.element_queue_line_break = false; // cleanup unused line break
 
     switch (element.mode) {
-        .None => {},
+        .Block, .Button => {},
         .Rect => |rect| {
             element.area.w = rect.w;
             element.area.h = rect.h;
@@ -830,6 +840,7 @@ pub fn DoButtonNEW(self: *GU, font: ?usize, str: []const u8) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
     const element = self.GetElement();
+    element.mode = .{ .Button = {} };
 
     const btn: *GUButton = get_button: {
         const btn_key = std.fmt.allocPrint(self.allocator, "{X:0>16}{s}", .{ element.id, str }) catch
