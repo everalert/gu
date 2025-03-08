@@ -5,6 +5,7 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const StringHashMap = std.StringHashMap;
 const maxInt = std.math.maxInt;
+const zeroInit = std.mem.zeroInit;
 
 pub const GURect = struct {
     x: f32,
@@ -16,17 +17,37 @@ pub const GURect = struct {
         return pt.x >= self.x and pt.x < self.x + self.w and
             pt.y >= self.y and pt.y < self.y + self.h;
     }
+
+    pub fn Zero() GURect {
+        return GURect{ .x = 0, .y = 0, .w = 0, .h = 0 };
+    }
 };
 
 // TODO: rename to GUPoint?
 pub const GUPos = struct {
     x: f32,
     y: f32,
+
+    pub fn FromRect(rect: *GURect) GUPos {
+        return GUPos{ .x = rect.x, .y = rect.y };
+    }
+
+    pub fn Zero() GUPos {
+        return GUPos{ .x = 0, .y = 0 };
+    }
 };
 
 pub const GUSize = struct {
     w: f32,
     h: f32,
+
+    pub fn FromRect(rect: *GURect) GUSize {
+        return GUSize{ .w = rect.w, .h = rect.h };
+    }
+
+    pub fn Zero() GUSize {
+        return GUSize{ .w = 0, .h = 0 };
+    }
 };
 
 pub const GUColor = extern struct {
@@ -233,6 +254,7 @@ const GUElement = struct {
     first_child: ?usize,
     sibling_next: ?usize,
     sibling_prev: ?usize,
+    line_break: bool,
 };
 
 pub const GUElementType = enum(u32) { None, LayoutBlock, Rect, Image, Label, Button };
@@ -338,11 +360,22 @@ const GUPositionOverride = union(enum) {
     Offset: GUSize,
 };
 
+const GULineData = struct {
+    parent_padding: GUSize,
+    parent_gaps: GUSize,
+    line: u32,
+    current_y: f32,
+    current_h: f32,
+    current_items: u32,
+    current_w: f32,
+    max_w: f32, // incl padding/gaps
+};
+
 const GUImageHandle = usize;
 const GUFontHandle = usize;
 
-const DEFAULT_LAYOUT = GULayout{ .color = 0x00000000, .widths = null, .heights = null, .padding = GUSize{ .w = 0, .h = 0 }, .gaps = .{ .w = 0, .h = 0 } };
-const BLANK_LAYOUT = GULayout{ .color = 0x00000000, .widths = null, .heights = null, .padding = GUSize{ .w = 0, .h = 0 }, .gaps = .{ .w = 0, .h = 0 } };
+const DEFAULT_LAYOUT = GULayout{ .color = 0x00000000, .widths = null, .heights = null, .padding = GUSize.Zero(), .gaps = GUSize.Zero() };
+const BLANK_LAYOUT = GULayout{ .color = 0x00000000, .widths = null, .heights = null, .padding = GUSize.Zero(), .gaps = GUSize.Zero() };
 
 allocator: Allocator,
 
@@ -354,6 +387,8 @@ images: ArrayList(GUTextureAtlas), // TODO: impl with handles, update GUImageHan
 element_tree: ArrayList(GUElement),
 element_stack: ArrayList(usize),
 element_sibling: ?usize, // most recent sibling
+element_queue_line_break: bool,
+element_line_stack: ArrayList(GULineData),
 
 buttons: StringHashMap(GUButton),
 button_delete_queue: ArrayList([]const u8),
@@ -379,6 +414,7 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
         .images = ArrayList(GUTextureAtlas).init(alloc),
         .element_tree = ArrayList(GUElement).init(alloc),
         .element_stack = ArrayList(usize).init(alloc),
+        .element_line_stack = ArrayList(GULineData).init(alloc),
         .buttons = StringHashMap(GUButton).init(alloc),
         .button_delete_queue = ArrayList([]const u8).init(alloc),
         .render_commands_new = ArrayList(GURenderCommand).init(alloc),
@@ -394,6 +430,7 @@ pub fn Deinit(self: *GU) void {
     self.layout_blocks.deinit();
     self.render_commands_new.deinit();
     self.render_commands.deinit();
+    self.element_line_stack.deinit();
     self.element_stack.deinit();
     self.element_tree.deinit();
     self.images.deinit();
@@ -429,8 +466,8 @@ pub fn BeginFrame(self: *GU) !void {
     self.element_sibling = null;
     self.mouse_left.Update();
 
-    self.render_pos = .{ .x = 0, .y = 0 };
-    self.render_element = .{ .element = .None, .size = .{ .w = 0, .h = 0 } };
+    self.render_pos = GUPos.Zero();
+    self.render_element = .{ .element = .None, .size = GUSize.Zero() };
     self.render_override = null;
 
     try self.layout_blocks.append(.{
@@ -446,6 +483,8 @@ pub fn BeginFrame(self: *GU) !void {
     self.render_pos.y += self.render_block.layout.padding.h;
 }
 
+// TODO: initial element sizing as an explicit pass separate from the initial
+// element tree generation?
 pub fn EndFrame(self: *GU) void {
     std.debug.assert(self.layout_blocks.items.len == 1);
     _ = self.layout_blocks.pop();
@@ -458,10 +497,12 @@ pub fn EndFrame(self: *GU) void {
         }
     }
 
+    self.DoElementLineBreakParsing();
     self.DoElementPositioning();
     self.DoButtonPostProcessing();
     self.DoElementEmitDrawCommands();
     //self.DoElementDebugLog();
+
     for (self.render_commands_new.items) |command| {
         switch (command) {
             .Rect => |rect| self.backend.DrawRect(&rect.rect, rect.color),
@@ -471,40 +512,105 @@ pub fn EndFrame(self: *GU) void {
     }
 }
 
-fn DoElementPositioning(self: *GU) void {
+// TODO: update when implementing fixed-size dimensions, i.e. line break when
+// exceeding width and don't update fixed dimensions
+// TODO: update for text wrapping
+/// inserts line break markers where needed, and updates parent dimensions in
+/// case of line breaks occurring
+fn DoElementLineBreakParsing(self: *GU) void {
+    std.debug.assert(self.element_line_stack.items.len == 0);
+    defer std.debug.assert(self.element_line_stack.items.len == 0);
+
+    const stack = &self.element_line_stack;
+    var ld: *GULineData = undefined;
+
     var it = GUElementIterator.Init(self.element_tree.items);
     while (it.Next()) |it_data| {
         const e = it_data.element;
-        // first visit only; Child, Sibling and None shouldn't overlap
-        if (it_data.relation != .Parent) {
-            const base_pos: GUPos, const p_padding: GUSize, const p_gap: GUSize = parenting: {
-                if (e.parent) |parent| {
-                    const p = &self.element_tree.items[parent];
-                    break :parenting .{
-                        GUPos{ .x = p.area.x, .y = p.area.y },
-                        p.layout.padding,
-                        p.layout.gaps,
-                    };
-                }
-                break :parenting .{
-                    GUPos{ .x = e.area.x, .y = e.area.y },
-                    GUSize{ .w = 0, .h = 0 },
-                    GUSize{ .w = 0, .h = 0 },
-                };
+
+        if (it_data.relation == .Parent) {
+            e.area.w = @max(ld.max_w, ld.current_w + ld.parent_padding.w * 2 + ld.parent_gaps.w * @as(f32, @floatFromInt(ld.current_items -| 1)));
+            e.area.h = ld.current_h + ld.current_y + ld.parent_padding.h * 2 + ld.parent_gaps.h * @as(f32, @floatFromInt(ld.line -| 1));
+            _ = self.element_line_stack.pop();
+            ld = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else undefined;
+            continue;
+        }
+
+        if (e.parent == null) continue;
+
+        // don't check for .None because we don't track when no parent
+        if (it_data.relation == .Child) {
+            const p = &self.element_tree.items[e.parent.?];
+            stack.append(std.mem.zeroInit(GULineData, .{
+                .parent_padding = p.layout.padding,
+                .parent_gaps = p.layout.gaps,
+            })) catch |err| {
+                std.log.err("DoElementLineBreakParsing ({s})", .{@errorName(err)});
+                unreachable;
             };
+            ld = &stack.items[stack.items.len - 1];
+        }
 
-            if (e.sibling_prev) |sibling_i| {
-                const sibling = &self.element_tree.items[sibling_i];
-                e.area.x = sibling.area.x + sibling.area.w + p_gap.w;
-                e.area.y = sibling.area.y;
-                continue;
-            }
+        if (it_data.relation == .Child or e.line_break) {
+            ld.max_w = @max(ld.max_w, ld.current_w + ld.parent_padding.w * 2 + ld.parent_gaps.w * @as(f32, @floatFromInt(ld.current_items -| 1)));
+            ld.line += 1;
+            ld.current_y += ld.current_h;
+            ld.current_w = 0;
+            ld.current_h = 0;
+            ld.current_items = 0;
+        }
 
-            if (e.parent) |_| {
-                e.area.x = base_pos.x + p_padding.w;
-                e.area.y = base_pos.y + p_padding.h;
-                continue;
-            }
+        ld.current_items += 1;
+        ld.current_w += e.area.w;
+        ld.current_h = @max(ld.current_h, e.area.h);
+    }
+}
+
+fn DoElementPositioning(self: *GU) void {
+    std.debug.assert(self.element_line_stack.items.len == 0);
+    defer std.debug.assert(self.element_line_stack.items.len == 0);
+
+    const stack = &self.element_line_stack;
+    var ld_base = zeroInit(GULineData, .{});
+    var ld: *GULineData = &ld_base;
+    var p: ?*GUElement = null;
+
+    var it = GUElementIterator.Init(self.element_tree.items);
+    while (it.Next()) |it_data| {
+        const e = it_data.element;
+
+        if (it_data.relation == .Parent) {
+            _ = self.element_line_stack.pop();
+            ld = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &ld_base;
+            p = if (e.parent) |parent| &self.element_tree.items[parent] else null;
+            continue;
+        }
+
+        if (it_data.relation == .Child) {
+            p = &self.element_tree.items[e.parent.?];
+            stack.appendAssumeCapacity(zeroInit(GULineData, .{})); // capacity set during linebreak parsing
+            ld = &stack.items[stack.items.len - 1];
+            e.area.x = p.?.area.x + p.?.layout.padding.w;
+            e.area.y = p.?.area.y + p.?.layout.padding.h;
+            ld.current_y = e.area.y;
+            ld.current_h = @max(ld.current_h, e.area.h);
+            continue;
+        }
+
+        const gaps = if (p != null) p.?.layout.gaps else GUSize.Zero();
+
+        if (e.line_break) {
+            const pos = if (p != null) GUPos.FromRect(&p.?.area) else GUPos.Zero();
+            const padding = if (p != null) p.?.layout.padding else GUSize.Zero();
+            e.area.x = pos.x + padding.w;
+            e.area.y = ld.current_y + ld.current_h + gaps.h;
+            ld.current_y = e.area.y;
+            ld.current_h = e.area.h;
+        } else {
+            const area = if (e.sibling_prev) |s| self.element_tree.items[s].area else GURect.Zero();
+            e.area.x = area.x + area.w + gaps.w;
+            e.area.y = ld.current_y;
+            ld.current_h = @max(ld.current_h, e.area.h);
         }
     }
 }
@@ -514,8 +620,9 @@ fn DoElementPositioning(self: *GU) void {
 fn DoElementEmitDrawCommands(self: *GU) void {
     var it = GUElementIterator.Init(self.element_tree.items);
     while (it.Next()) |it_data| {
-        const e = it_data.element;
         if (it_data.relation == .Parent) continue;
+        const e = it_data.element;
+
         if (GUColor.FromInt(e.layout.color).a == 0) continue;
 
         self.render_commands_new.append(switch (e.mode) {
@@ -579,8 +686,14 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
     const parent_i: ?usize = self.element_stack.getLastOrNull();
     const element_i = self.element_tree.items.len; // next index will equal len
 
+    const do_line_break: bool = lb: {
+        if (!self.element_queue_line_break) break :lb false;
+        self.element_queue_line_break = false;
+        break :lb true;
+    };
+
     self.element_tree.append(GUElement{
-        .area = GURect{ .x = 0, .y = 0, .w = 0, .h = 0 },
+        .area = GURect.Zero(),
         .layout = if (layout) |lo| lo.* else BLANK_LAYOUT,
         .mode = .{ .None = {} },
         .id = element_i,
@@ -589,6 +702,7 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
         .sibling_prev = self.element_sibling,
         .children = 0,
         .first_child = null,
+        .line_break = do_line_break,
     }) catch return false;
 
     self.element_stack.append(element_i) catch {
@@ -615,6 +729,7 @@ pub fn EndContainer(self: *GU) void {
     const element_i = self.element_stack.pop();
     const element = &self.element_tree.items[element_i];
     self.element_sibling = element_i;
+    self.element_queue_line_break = false; // cleanup unused line break
 
     switch (element.mode) {
         .None => {},
@@ -636,8 +751,7 @@ pub fn EndContainer(self: *GU) void {
 
     element.area.w += element.layout.padding.w * 2;
     element.area.h += element.layout.padding.h * 2;
-    if (element.children > 1)
-        element.area.w += element.layout.gaps.w * @as(f32, @floatFromInt(element.children - 1));
+    element.area.w += element.layout.gaps.w * @as(f32, @floatFromInt(element.children -| 1));
 
     if (element.parent) |pa_i| {
         const parent = &self.element_tree.items[pa_i];
@@ -728,7 +842,7 @@ pub fn DoButtonNEW(self: *GU, font: ?usize, str: []const u8) bool {
             btn.* = GUButton{
                 .state = .Idle,
                 .mode = .Press,
-                .area = GURect{ .x = 0, .y = 0, .w = 0, .h = 0 },
+                .area = GURect.Zero(),
                 .element = element.id,
             };
         } else btn.element = element.id;
@@ -752,6 +866,10 @@ pub fn DoButtonNEW(self: *GU, font: ?usize, str: []const u8) bool {
     self.DoLabelNEW(font, null, str);
 
     return activated;
+}
+
+pub fn DoLineBreak(self: *GU) void {
+    self.element_queue_line_break = true;
 }
 
 // ------------------

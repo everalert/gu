@@ -337,38 +337,35 @@ pub fn main() !void {
 
         if (gu.DoContainer(&base_layout)) {
             defer gu.EndContainer();
-
             gu.DoLabelNEW(null, 0x00C000FF, "testblock1");
-            //gu.DoNewLine();
+            gu.DoLineBreak();
             if (gu.DoButtonNEW(font_id, "Button")) {
                 std.log.debug("b1 activation result!!", .{});
             }
-            //gu.DoNewLine();
+            gu.DoLineBreak();
             gu.DoImageNEW(img_id, 0x00C000FF);
-            //gu.DoNewLine();
+            gu.DoLineBreak();
             gu.DoImageNEW(img_id, null);
         }
         if (gu.DoContainer(null)) {
             defer gu.EndContainer();
-
             gu.DoLabelNEW(null, 0xC000C0FF, "testblock2");
-            //gu.DoNewLine();
+            gu.DoLineBreak();
             if (gu.DoButtonNEW(font_id, "Button")) {
                 std.log.debug("b2 activation result!!", .{});
             }
-            //gu.DoNewLine();
+            gu.DoLineBreak();
             gu.DoImageNEW(img_id, 0xC000C0FF);
-            //gu.DoNewLine();
+            gu.DoLineBreak();
             gu.DoImageNEW(img_id, null);
         }
         if (gu.DoContainer(null)) {
             defer gu.EndContainer();
-
             gu.DoRectNEW(.{ .w = 64, .h = 64 }, 0x000055FF);
-            //gu.DoNewLine();
+            gu.DoLineBreak();
             //gu.NextElementOverridePosition(.{ .x = 10, .y = 10 });
             gu.DoLabelNEW(font_id, 0xC00000FF, "testblock3");
-            //gu.DoNewLine();
+            gu.DoLineBreak();
             gu.DoRectNEW(.{ .w = 64, .h = 64 }, 0x2222AAFF); // old outline color
         }
         gu.DoLabelNEW(null, 0x0000C0FF, "testing... !!@$(#!QOIEANSHT)");
