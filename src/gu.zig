@@ -466,6 +466,8 @@ pub fn BeginFrame(self: *GU) !void {
     self.mouse_left.Update();
 
     // TODO: set fixed size with dimensions matching window
+    // FIXME: this element ends up stupidly wide, see DoElementDebugLog readout;
+    // seems to not be an issue for previous root elements
     if (!self.DoElement(&self.base_layout)) unreachable;
 
     // FIXME: delete all below, only relevant to old impl
@@ -625,16 +627,9 @@ fn DoElementPositioning(self: *GU) void {
     }
 }
 
-// FIXME: probably don't need an iterator here, since the element tree should be
-// implicitly in the correct order with respect to z-order when read linearly
 fn DoElementEmitDrawCommands(self: *GU) void {
-    var it = GUElementIterator.Init(self.element_tree.items);
-    while (it.Next()) |it_data| {
-        if (it_data.relation == .Parent) continue;
-        const e = it_data.element;
-
+    for (self.element_tree.items) |*e| {
         if (GUColor.FromInt(e.layout.color).a == 0) continue;
-
         self.render_commands_new.append(switch (e.mode) {
             .Label => |label| .{ .Text = .{
                 .pos = .{ .x = e.area.x, .y = e.area.y },
