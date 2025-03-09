@@ -408,7 +408,7 @@ mouse_pt: GUPos,
 mouse_left: GUButtonState, // LMB
 
 pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
-    return std.mem.zeroInit(GU, .{
+    return zeroInit(GU, .{
         .allocator = alloc,
         .backend = backend,
         .fonts = ArrayList(GUFontAtlas).init(alloc),
@@ -466,8 +466,6 @@ pub fn BeginFrame(self: *GU) !void {
     self.mouse_left.Update();
 
     // TODO: set fixed size with dimensions matching window
-    // FIXME: this element ends up stupidly wide, see DoElementDebugLog readout;
-    // seems to not be an issue for previous root elements
     if (!self.DoElement(&self.base_layout)) unreachable;
 
     // FIXME: delete all below, only relevant to old impl
@@ -532,7 +530,8 @@ fn DoElementLineBreakParsing(self: *GU) void {
     defer std.debug.assert(self.element_line_stack.items.len == 0);
 
     const stack = &self.element_line_stack;
-    var ld: *GULineData = undefined;
+    var ld_base = zeroInit(GULineData, .{ .line = 1 });
+    var ld: *GULineData = &ld_base;
 
     var it = GUElementIterator.Init(self.element_tree.items);
     while (it.Next()) |it_data| {
@@ -542,25 +541,23 @@ fn DoElementLineBreakParsing(self: *GU) void {
             e.area.w = @max(ld.max_w, ld.current_w + ld.parent_padding.w * 2 + ld.parent_gaps.w * @as(f32, @floatFromInt(ld.current_items -| 1)));
             e.area.h = ld.current_h + ld.current_y + ld.parent_padding.h * 2 + ld.parent_gaps.h * @as(f32, @floatFromInt(ld.line -| 1));
             _ = self.element_line_stack.pop();
-            ld = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else undefined;
+            ld = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &ld_base;
+            ld.current_items += 1;
+            ld.current_w += e.area.w;
+            ld.current_h = @max(ld.current_h, e.area.h);
             continue;
         }
 
-        if (e.parent == null) continue;
-
-        // don't check for .Block because we don't track when no parent
         if (it_data.relation == .Child) {
             const p = &self.element_tree.items[e.parent.?];
-            stack.append(std.mem.zeroInit(GULineData, .{
+            stack.append(zeroInit(GULineData, .{
                 .parent_padding = p.layout.padding,
                 .parent_gaps = p.layout.gaps,
-            })) catch |err| {
-                std.log.err("DoElementLineBreakParsing ({s})", .{@errorName(err)});
-                unreachable;
-            };
+            })) catch |err| std.debug.panic("DoElementLineBreakParsing ({s})", .{@errorName(err)});
             ld = &stack.items[stack.items.len - 1];
         }
 
+        // .Root init covered by ld_base
         if (it_data.relation == .Child or e.line_break) {
             ld.max_w = @max(ld.max_w, ld.current_w + ld.parent_padding.w * 2 + ld.parent_gaps.w * @as(f32, @floatFromInt(ld.current_items -| 1)));
             ld.line += 1;
@@ -570,6 +567,9 @@ fn DoElementLineBreakParsing(self: *GU) void {
             ld.current_items = 0;
         }
 
+        // do the following when returning as parent, to prevent propagating
+        // pre-resized dimensions
+        if (e.first_child != null) continue;
         ld.current_items += 1;
         ld.current_w += e.area.w;
         ld.current_h = @max(ld.current_h, e.area.h);
@@ -674,10 +674,8 @@ fn DoButtonPostProcessing(self: *GU) void {
     while (it.next()) |btn_info| {
         const btn = btn_info.value_ptr;
         if (btn.element == maxInt(usize)) {
-            self.button_delete_queue.append(btn_info.key_ptr.*) catch |err| {
-                std.log.err("DoButtonPostProcessing ({s})", .{@errorName(err)});
-                unreachable;
-            };
+            self.button_delete_queue.append(btn_info.key_ptr.*) catch |err|
+                std.debug.panic("DoButtonPostProcessing ({s})", .{@errorName(err)});
             continue;
         }
         btn.area = self.element_tree.items[btn.element].area;
