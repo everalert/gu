@@ -483,8 +483,6 @@ pub fn EndFrame(self: *GU) void {
 }
 
 // FIXME: cleanup/streamline, maybe split into multiple passes if that makes sense
-// FIXME: non-precomputable elements do not produce an auto line break when line
-// would exceed parent width
 // TODO: rename to DoElementResizeAndParseLineBreaks ??
 // TODO: update for text wrapping; will need to assert no padding/gaps, and remove
 // .Fixed assertion for .Label in EndContainer
@@ -503,19 +501,6 @@ fn DoElementLineBreakParsing(self: *GU) void {
         const e = it_data.element;
         const p: ?*GUElement = if (e.parent) |pa_i| &self.element_tree.items[pa_i] else null;
 
-        if (it_data.relation == .Parent) {
-            if (!e.layout.mode_w.IsPreComputable())
-                e.area.w = @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items));
-            if (!e.layout.mode_h.IsPreComputable())
-                e.area.h = ld.current_h + ld.current_y + ld.AxisSpacing(.Cross, ld.line);
-            _ = self.element_line_stack.pop();
-            ld = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &ld_base;
-            ld.current_items += 1;
-            ld.current_w += e.area.w;
-            ld.current_h = @max(ld.current_h, e.area.h);
-            continue;
-        }
-
         if (it_data.relation == .Child) {
             stack.appendAssumeCapacity(zeroInit(GULineData, .{
                 .parent_padding = p.?.layout.padding,
@@ -524,10 +509,22 @@ fn DoElementLineBreakParsing(self: *GU) void {
             ld = &stack.items[stack.items.len - 1];
         }
 
-        if (e.layout.mode_w == .Stretch)
-            e.area.w = @max(p.?.area.w + e.area.w - ld.AxisSpacing(.Main, p.?.layout.widths.?.len), 0);
-        if (e.layout.mode_h == .Stretch)
-            e.area.h = @max(p.?.area.h + e.area.h - ld.AxisSpacing(.Cross, p.?.layout.heights.?.len), 0);
+        if (it_data.relation == .Parent) {
+            if (!e.layout.mode_w.IsPreComputable())
+                e.area.w = @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items));
+            if (!e.layout.mode_h.IsPreComputable())
+                e.area.h = ld.current_h + ld.current_y + ld.AxisSpacing(.Cross, ld.line);
+
+            _ = self.element_line_stack.pop();
+            ld = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &ld_base;
+        }
+
+        if (it_data.relation != .Parent) {
+            if (e.layout.mode_w == .Stretch)
+                e.area.w = @max(p.?.area.w + e.area.w - ld.AxisSpacing(.Main, p.?.layout.widths.?.len), 0);
+            if (e.layout.mode_h == .Stretch)
+                e.area.h = @max(p.?.area.h + e.area.h - ld.AxisSpacing(.Cross, p.?.layout.heights.?.len), 0);
+        }
 
         if (p != null and
             p.?.layout.widths == null and
@@ -545,9 +542,6 @@ fn DoElementLineBreakParsing(self: *GU) void {
             ld.current_items = 0;
         }
 
-        // if a parent, do the following on the return trip instead, to prevent
-        // propagating pre-resized dimensions
-        if (e.first_child != null) continue;
         ld.current_items += 1;
         ld.current_w += e.area.w;
         ld.current_h = @max(ld.current_h, e.area.h);
