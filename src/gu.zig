@@ -235,6 +235,7 @@ pub const GUButtonState = struct {
 const GUElement = struct {
     layout: GULayout,
     area: GURect,
+    fill: GUSize, // how big the element is for layout calculations
     mode: union(enum) {
         Block: void,
         Rect: GUSize,
@@ -332,7 +333,28 @@ const GUElementIterator = struct {
     }
 };
 
+const GUDimensionMode = enum(u32) {
+    Auto, // Fit when parent does not specify dimension, or 0=Fit, <0=Stretch, >0=Fixed
+    Fit, // child dimensions plus any margins, etc.
+    Stretch, // usable space of parent dimension minus input value; requires pre-finalizable parent dimension
+    Fixed,
+
+    fn ParseAuto(dimension: f32) GUDimensionMode {
+        const sign = std.math.sign(dimension);
+        if (sign == 1) return .Fixed;
+        if (sign == 0) return .Fit;
+        if (sign == -1) return .Stretch;
+        unreachable;
+    }
+
+    inline fn IsPreComputable(mode: GUDimensionMode) bool {
+        return mode == .Fixed or mode == .Stretch;
+    }
+};
+
 pub const GULayout = struct {
+    mode_w: GUDimensionMode, // derived from parent 'widths' field if .Auto
+    mode_h: GUDimensionMode, // derived from parent 'heights' field if .Auto
     color: u32,
     widths: ?[]const f32,
     heights: ?[]const f32,
@@ -370,13 +392,28 @@ const GULineData = struct {
     current_items: u32,
     current_w: f32,
     max_w: f32, // incl padding/gaps
+
+    // TODO: impl axis def in GULayout and derive
+    pub inline fn AxisSpacing(self: *GULineData, comptime axis: enum { Main, Cross }, items: usize) f32 {
+        const padding: f32, const gaps: f32 = switch (axis) {
+            .Main => .{ // x-axis
+                self.parent_padding.w * 2,
+                self.parent_gaps.w * @as(f32, @floatFromInt(items -| 1)),
+            },
+            .Cross => .{ // y-axis
+                self.parent_padding.h * 2,
+                self.parent_gaps.h * @as(f32, @floatFromInt(items -| 1)),
+            },
+        };
+        return padding + gaps;
+    }
 };
 
 const GUImageHandle = usize;
 const GUFontHandle = usize;
 
-const DEFAULT_LAYOUT = GULayout{ .color = 0x00000000, .widths = null, .heights = null, .padding = GUSize.Zero(), .gaps = GUSize.Zero() };
-const BLANK_LAYOUT = GULayout{ .color = 0x00000000, .widths = null, .heights = null, .padding = GUSize.Zero(), .gaps = GUSize.Zero() };
+const DEFAULT_LAYOUT = zeroInit(GULayout, .{});
+const BLANK_LAYOUT = zeroInit(GULayout, .{});
 
 allocator: Allocator,
 
@@ -465,10 +502,13 @@ pub fn BeginFrame(self: *GU) !void {
     self.element_sibling = null;
     self.mouse_left.Update();
 
-    // TODO: set fixed size with dimensions matching window
-    // FIXME: this element ends up stupidly wide, see DoElementDebugLog readout;
-    // seems to not be an issue for previous root elements
+    self.element_line_stack.append(zeroInit(GULineData, .{ .line = 1 })) catch unreachable;
     if (!self.DoElement(&self.base_layout)) unreachable;
+    const element = self.GetElement();
+    element.layout.mode_w = .Fixed;
+    element.layout.mode_h = .Fixed;
+    element.area.w = surface_size.w;
+    element.area.h = surface_size.h;
 
     // FIXME: delete all below, only relevant to old impl
     self.render_pos = GUPos.Zero();
@@ -506,7 +546,10 @@ pub fn EndFrame(self: *GU) void {
     }
 
     // new stuff
+
     self.EndElement(); // close base layout container
+    _ = self.element_line_stack.pop();
+
     self.DoElementLineBreakParsing();
     self.DoElementPositioning();
     self.DoButtonPostProcessing();
@@ -522,9 +565,12 @@ pub fn EndFrame(self: *GU) void {
     }
 }
 
+// FIXME: cleanup/streamline, maybe split into multiple passes if that makes sense
+// TODO: rename to DoElementResizeAndParseLineBreaks ??
 // TODO: update when implementing fixed-size dimensions, i.e. line break when
 // exceeding width and don't update fixed dimensions
-// TODO: update for text wrapping
+// TODO: update for text wrapping; will need to assert no padding/gaps, and remove
+// .Fixed assertion for .Label in EndContainer
 /// inserts line break markers where needed, and updates parent dimensions in
 /// case of line breaks occurring
 fn DoElementLineBreakParsing(self: *GU) void {
@@ -538,10 +584,13 @@ fn DoElementLineBreakParsing(self: *GU) void {
     var it = GUElementIterator.Init(self.element_tree.items);
     while (it.Next()) |it_data| {
         const e = it_data.element;
+        const p: ?*GUElement = if (e.parent) |pa_i| &self.element_tree.items[pa_i] else null;
 
         if (it_data.relation == .Parent) {
-            e.area.w = @max(ld.max_w, ld.current_w + ld.parent_padding.w * 2 + ld.parent_gaps.w * @as(f32, @floatFromInt(ld.current_items -| 1)));
-            e.area.h = ld.current_h + ld.current_y + ld.parent_padding.h * 2 + ld.parent_gaps.h * @as(f32, @floatFromInt(ld.line -| 1));
+            if (!e.layout.mode_w.IsPreComputable())
+                e.area.w = @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items));
+            if (!e.layout.mode_h.IsPreComputable())
+                e.area.h = ld.current_h + ld.current_y + ld.AxisSpacing(.Cross, ld.line);
             _ = self.element_line_stack.pop();
             ld = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &ld_base;
             ld.current_items += 1;
@@ -551,17 +600,27 @@ fn DoElementLineBreakParsing(self: *GU) void {
         }
 
         if (it_data.relation == .Child) {
-            const p = &self.element_tree.items[e.parent.?];
-            stack.append(zeroInit(GULineData, .{
-                .parent_padding = p.layout.padding,
-                .parent_gaps = p.layout.gaps,
-            })) catch |err| std.debug.panic("DoElementLineBreakParsing ({s})", .{@errorName(err)});
+            stack.appendAssumeCapacity(zeroInit(GULineData, .{
+                .parent_padding = p.?.layout.padding,
+                .parent_gaps = p.?.layout.gaps,
+            })); // capacity set during initial tree gen
             ld = &stack.items[stack.items.len - 1];
         }
 
+        if (e.layout.mode_w == .Stretch)
+            e.area.w = @max(p.?.area.w + e.area.w - ld.AxisSpacing(.Main, p.?.layout.widths.?.len), 0);
+        if (e.layout.mode_h == .Stretch)
+            e.area.h = @max(p.?.area.h + e.area.h - ld.AxisSpacing(.Cross, p.?.layout.heights.?.len), 0);
+
+        if (p != null and
+            p.?.layout.widths == null and
+            p.?.layout.mode_w.IsPreComputable() and
+            ld.current_w + ld.parent_gaps.w + e.area.w > p.?.area.w - ld.parent_padding.w * 2)
+            e.line_break = true;
+
         // .Root init covered by ld_base
         if (it_data.relation == .Child or e.line_break) {
-            ld.max_w = @max(ld.max_w, ld.current_w + ld.parent_padding.w * 2 + ld.parent_gaps.w * @as(f32, @floatFromInt(ld.current_items -| 1)));
+            ld.max_w = @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items));
             ld.line += 1;
             ld.current_y += ld.current_h;
             ld.current_w = 0;
@@ -569,8 +628,8 @@ fn DoElementLineBreakParsing(self: *GU) void {
             ld.current_items = 0;
         }
 
-        // do the following when returning as parent, to prevent propagating
-        // pre-resized dimensions
+        // if a parent, do the following on the return trip instead, to prevent
+        // propagating pre-resized dimensions
         if (e.first_child != null) continue;
         ld.current_items += 1;
         ld.current_w += e.area.w;
@@ -600,7 +659,7 @@ fn DoElementPositioning(self: *GU) void {
 
         if (it_data.relation == .Child) {
             p = &self.element_tree.items[e.parent.?];
-            stack.appendAssumeCapacity(zeroInit(GULineData, .{})); // capacity set during linebreak parsing
+            stack.appendAssumeCapacity(zeroInit(GULineData, .{})); // capacity set during initial tree gen
             ld = &stack.items[stack.items.len - 1];
             e.area.x = p.?.area.x + p.?.layout.padding.w;
             e.area.y = p.?.area.y + p.?.layout.padding.h;
@@ -632,19 +691,19 @@ fn DoElementEmitDrawCommands(self: *GU) void {
         if (GUColor.FromInt(e.layout.color).a == 0) continue;
         self.render_commands_new.append(switch (e.mode) {
             .Label => |label| .{ .Text = .{
-                .pos = .{ .x = e.area.x, .y = e.area.y },
+                .pos = GUPos.FromRect(&e.area),
                 .font = &self.fonts.items[label.font],
                 .color = e.layout.color,
                 .str = label.str,
             } },
             .Image => |img| .{ .Image = .{
-                .pos = .{ .x = e.area.x, .y = e.area.y },
+                .pos = GUPos.FromRect(&e.area),
                 .image = &self.images.items[img.image],
                 .color = e.layout.color,
                 .tile = null,
             } },
             .Rect, .Button, .Block => .{ .Rect = .{
-                .rect = .{ .x = e.area.x, .y = e.area.y, .w = e.area.w, .h = e.area.h },
+                .rect = e.area,
                 .color = e.layout.color,
             } },
         }) catch |err| std.log.err("DoElementEmitDrawCommands ({s})", .{@errorName(err)});
@@ -686,17 +745,19 @@ fn DoButtonPostProcessing(self: *GU) void {
 /// returns whether creating a new container was successful. guarantees the element
 /// tree will be in a valid state (i.e. the same as before calling, on failure).
 pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
+    if (layout) |lo| {
+        if (lo.widths) |w| std.debug.assert(w.len > 0);
+        if (lo.heights) |h| std.debug.assert(h.len > 0);
+    }
+
     const parent_i: ?usize = self.element_stack.getLastOrNull();
     const element_i = self.element_tree.items.len; // next index will equal len
 
-    const do_line_break: bool = lb: {
-        if (!self.element_queue_line_break) break :lb false;
-        self.element_queue_line_break = false;
-        break :lb true;
-    };
+    const ld: *GULineData = &self.element_line_stack.items[self.element_line_stack.items.len - 1];
 
     self.element_tree.append(GUElement{
         .area = GURect.Zero(),
+        .fill = GUSize.Zero(),
         .layout = if (layout) |lo| lo.* else BLANK_LAYOUT,
         .mode = .{ .Block = {} },
         .id = element_i,
@@ -705,7 +766,7 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
         .sibling_prev = self.element_sibling,
         .children = 0,
         .first_child = null,
-        .line_break = do_line_break,
+        .line_break = false,
     }) catch return false;
 
     self.element_stack.append(element_i) catch {
@@ -714,10 +775,30 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
     };
 
     const parent: ?*GUElement = if (parent_i) |i| &self.element_tree.items[i] else null;
+    const element: *GUElement = &self.element_tree.items[element_i];
+
+    if (self.element_queue_line_break or
+        (parent != null and parent.?.layout.widths != null and
+        ld.current_items == parent.?.layout.widths.?.len))
+    {
+        self.element_queue_line_break = false;
+        ld.line += 1;
+        ld.current_items = 0;
+        element.line_break = true;
+    }
+    ld.current_items += 1;
 
     if (parent) |pa| {
         if (pa.first_child == null) pa.first_child = element_i;
-        pa.children += 1;
+        if (pa.layout.widths) |widths| {
+            element.area.w = widths[(ld.current_items - 1) % widths.len];
+            element.layout.mode_w = GUDimensionMode.ParseAuto(element.area.w);
+        }
+        if (pa.layout.heights) |heights| {
+            element.area.h = heights[(ld.line - 1) % heights.len];
+            element.layout.mode_h = GUDimensionMode.ParseAuto(element.area.h);
+        }
+        pa.children += 1; // FIXME: now redundant with line break parsing implemented?
     }
 
     if (self.element_sibling) |sibling| {
@@ -725,18 +806,47 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
         self.element_sibling = null;
     }
 
+    self.element_line_stack.append(zeroInit(GULineData, .{ .line = 1 })) catch |err|
+        std.debug.panic("DoContainer: ({s})", .{@errorName(err)});
     return true;
 }
 
 pub fn EndContainer(self: *GU) void {
+    _ = self.element_line_stack.pop();
     const element_i = self.element_stack.pop();
-    const element = &self.element_tree.items[element_i];
+    const element: *GUElement = &self.element_tree.items[element_i];
+    const parent: ?*GUElement = if (element.parent) |p| &self.element_tree.items[p] else null;
     self.element_sibling = element_i;
     self.element_queue_line_break = false; // cleanup unused line break
 
+    if (element.layout.mode_w == .Stretch) {
+        std.debug.assert(parent != null);
+        std.debug.assert(parent.?.layout.widths != null);
+        std.debug.assert(parent.?.layout.mode_w.IsPreComputable());
+        std.debug.assert(element.area.w < 0);
+    }
+    if (element.layout.mode_h == .Stretch) {
+        std.debug.assert(parent != null);
+        std.debug.assert(parent.?.layout.heights != null);
+        std.debug.assert(parent.?.layout.mode_h.IsPreComputable());
+        std.debug.assert(element.area.h < 0);
+    }
+
     switch (element.mode) {
-        .Block, .Button => {},
+        .Block, .Button => {
+            // does nothing since post-computed elements have their area overwritten later?
+            //if (!element.layout.mode_w.IsPreComputable()) {
+            //    element.area.w += element.layout.padding.w * 2;
+            //    element.area.w += element.layout.gaps.w * @as(f32, @floatFromInt(element.children -| 1));
+            //    if (parent) |p| p.area.w += element.area.w;
+            //}
+            //if (!element.layout.mode_h.IsPreComputable()) {
+            //    element.area.h += element.layout.padding.h * 2;
+            //    if (parent) |p| p.area.h = @max(p.area.h, element.area.h);
+            //}
+        },
         .Rect => |rect| {
+            // TODO: stretch-like rect dimensions
             element.area.w = rect.w;
             element.area.h = rect.h;
         },
@@ -746,20 +856,11 @@ pub fn EndContainer(self: *GU) void {
             element.area.h = image_size.h;
         },
         .Label => |label| {
+            // TODO: account for text wrapping
             const label_size = &self.fonts.items[label.font].StringSize(label.str);
             element.area.w = label_size.w;
             element.area.h = label_size.h;
         },
-    }
-
-    element.area.w += element.layout.padding.w * 2;
-    element.area.h += element.layout.padding.h * 2;
-    element.area.w += element.layout.gaps.w * @as(f32, @floatFromInt(element.children -| 1));
-
-    if (element.parent) |pa_i| {
-        const parent = &self.element_tree.items[pa_i];
-        parent.area.w += element.area.w;
-        parent.area.h = @max(parent.area.h, element.area.h);
     }
 }
 
@@ -807,6 +908,8 @@ pub fn DoRectNEW(self: *GU, size: GUSize, color: u32) void {
     const element = self.GetElement();
     element.mode = .{ .Rect = size };
     element.layout.color = color;
+    element.layout.mode_w = .Fixed;
+    element.layout.mode_h = .Fixed;
 }
 
 // FIXME: rename at refactor handover
@@ -816,6 +919,8 @@ pub fn DoImageNEW(self: *GU, image: GUImageHandle, color: ?u32) void {
     const element = self.GetElement();
     element.mode = .{ .Image = .{ .image = image } };
     element.layout.color = color orelse 0xFFFFFFFF;
+    element.layout.mode_w = .Fixed;
+    element.layout.mode_h = .Fixed;
 }
 
 // TODO: add formatting, like standard string formatting functions
@@ -826,6 +931,8 @@ pub fn DoLabelNEW(self: *GU, font: ?GUFontHandle, color: ?u32, str: []const u8) 
     const element = self.GetElement();
     element.mode = .{ .Label = .{ .font = font orelse 0, .str = str } };
     element.layout.color = color orelse 0xFFFFFFFF;
+    element.layout.mode_w = .Fixed;
+    element.layout.mode_h = .Fixed;
 }
 
 /// returns whether button was 'activated' (pressed)
