@@ -230,9 +230,9 @@ pub fn main() !void {
     const base_layout = GULayout{
         .mode_w = .Auto,
         .mode_h = .Auto,
-        .color = 0xFFFFFF40,
+        .color = 0x00000000,
         .widths = &[_]f32{ 200, -400, 200 },
-        .heights = &[_]f32{ 100, 200 },
+        .heights = &[_]f32{ 100, -100 },
         .padding = GUSize{ .w = 8, .h = 8 },
         .gaps = GUSize{ .w = 8, .h = 8 },
     };
@@ -240,7 +240,7 @@ pub fn main() !void {
         .color = 0x80000060,
     });
     const layout_white = std.mem.zeroInit(GULayout, .{
-        .color = 0xFFFFFF40,
+        .color = 0xFFFFFF20,
     });
 
     var gu = GU.Init(alloc, rd.GetBackend(), base_layout);
@@ -290,117 +290,59 @@ pub fn main() !void {
 
         try gu.BeginFrame();
 
-        // old stuff
-
-        // NOTE: using base layout to reproduce child block row resolution bug;
-        // remove DoNewLine to check elements wrap as expected
-        //if (gu.StartLayoutBlock(&base_layout)) {
-        if (gu.StartLayoutBlock(null)) {
-            defer gu.EndLayoutBlock();
-
-            try gu.DoLabel(null, 0x00C000FF, "testblock1");
-
-            gu.DoNewLine();
-            try gu.DoRect(76, 25, 0x008000FF); // was button 1
-
-            gu.DoNewLine();
-            try gu.DoImage(img_id, 0x00C000FF);
-            gu.DoNewLine();
-            try gu.DoImage(img_id, null);
-        }
-
-        if (gu.StartLayoutBlock(null)) {
-            defer gu.EndLayoutBlock();
-
-            try gu.DoLabel(null, 0xC000C0FF, "testblock2");
-
-            gu.DoNewLine();
-            try gu.DoRect(76, 25, 0x008000FF); // was button 2
-
-            gu.DoNewLine();
-            try gu.DoImage(img_id, 0xC000C0FF);
-            gu.DoNewLine();
-            try gu.DoImage(img_id, null);
-        }
-
-        if (gu.StartLayoutBlock(null)) {
-            defer gu.EndLayoutBlock();
-
-            try gu.DoRect(64, 64, 0x000055FF);
-
-            gu.DoNewLine();
-            //gu.NextElementOverridePosition(.{ .x = 10, .y = 10 });
-            try gu.DoLabel(font_id, 0xC00000FF, "testblock3");
-
-            gu.DoNewLine();
-            try gu.DoRect(64, 64, 0x2222AAFF); // old outline color
-        }
-
-        try gu.DoLabel(null, 0x0000C0FF, "testing... !!@$(#!QOIEANSHT)");
-
-        try gu.DoLabel(null, 0x00C0C0FF, "testing... !!@$(#!QOIEANSHT)");
-
-        try gu.DoLabel(null, 0xC0C000FF, "testing... !!@$(#!QOIEANSHT)");
-
-        // new stuff
-
-        //if (gu.DoContainer(&base_layout)) {
         if (gu.DoContainer(&layout_white)) {
             defer gu.EndContainer();
             if (gu.DoContainer(&layout_red)) {
                 defer gu.EndContainer();
-                gu.DoLabelNEW(null, 0x00C000FF, "testblock1");
+                gu.DoLabel(null, 0x00C000FF, "testblock1");
             }
             gu.DoLineBreak();
             if (gu.DoContainer(&layout_red)) {
                 defer gu.EndContainer();
-                if (gu.DoButtonNEW(font_id, "Button")) {
+                if (gu.DoButton(font_id, "Button")) {
                     std.log.debug("b1 activation result!!", .{});
                 }
             }
             gu.DoLineBreak();
             if (gu.DoContainer(&layout_red)) {
                 defer gu.EndContainer();
-                gu.DoImageNEW(img_id, 0x00C000FF);
+                gu.DoImage(img_id, 0x00C000FF);
             }
             gu.DoLineBreak();
             if (gu.DoContainer(&layout_red)) {
                 defer gu.EndContainer();
-                gu.DoImageNEW(img_id, null);
+                gu.DoImage(img_id, null);
             }
         }
         if (gu.DoContainer(&layout_white)) {
             defer gu.EndContainer();
-            gu.DoLabelNEW(null, 0xC000C0FF, "testblock2");
-            gu.DoLineBreak();
-            if (gu.DoButtonNEW(font_id, "Button")) {
+            gu.DoLabel(null, 0xC000C0FF, "testblock2");
+            if (gu.DoButton(font_id, "Button")) {
                 std.log.debug("b2 activation result!!", .{});
             }
-            gu.DoLineBreak();
-            gu.DoImageNEW(img_id, 0xC000C0FF);
-            gu.DoLineBreak();
-            gu.DoImageNEW(img_id, null);
+            gu.DoImage(img_id, 0xC000C0FF);
+            gu.DoImage(img_id, null);
         }
         if (gu.DoContainer(&layout_white)) {
             defer gu.EndContainer();
-            gu.DoRectNEW(.{ .w = 64, .h = 64 }, 0x000055FF);
+            gu.DoRect(.{ .w = 64, .h = 64 }, 0x000055FF);
             gu.DoLineBreak();
             //gu.NextElementOverridePosition(.{ .x = 10, .y = 10 });
-            gu.DoLabelNEW(font_id, 0xC00000FF, "testblock3");
+            gu.DoLabel(font_id, 0xC00000FF, "testblock3");
             gu.DoLineBreak();
-            gu.DoRectNEW(.{ .w = 64, .h = 64 }, 0x2222AAFF); // old outline color
+            gu.DoRect(.{ .w = 64, .h = 64 }, 0x2222AAFF); // old outline color
         }
         if (gu.DoContainer(&layout_white)) {
             defer gu.EndContainer();
-            gu.DoLabelNEW(null, 0x0000C0FF, "testing... !!@$(#!QOIEANSHT)");
+            gu.DoLabel(null, 0x0000C0FF, "testing... !!@$(#!QOIEANSHT)");
         }
         if (gu.DoContainer(&layout_white)) {
             defer gu.EndContainer();
-            gu.DoLabelNEW(null, 0x00C0C0FF, "testing... !!@$(#!QOIEANSHT)");
+            gu.DoLabel(null, 0x00C0C0FF, "testing... !!@$(#!QOIEANSHT)");
         }
         if (gu.DoContainer(&layout_white)) {
             defer gu.EndContainer();
-            gu.DoLabelNEW(null, 0xC0C000FF, "testing... !!@$(#!QOIEANSHT)");
+            gu.DoLabel(null, 0xC0C000FF, "testing... !!@$(#!QOIEANSHT)");
         }
 
         gu.EndFrame();

@@ -8,6 +8,7 @@ const maxInt = std.math.maxInt;
 const zeroInit = std.mem.zeroInit;
 
 pub const GURect = struct {
+    pub const Zero = GURect{ .x = 0, .y = 0, .w = 0, .h = 0 };
     x: f32,
     y: f32,
     w: f32,
@@ -17,36 +18,26 @@ pub const GURect = struct {
         return pt.x >= self.x and pt.x < self.x + self.w and
             pt.y >= self.y and pt.y < self.y + self.h;
     }
-
-    pub fn Zero() GURect {
-        return GURect{ .x = 0, .y = 0, .w = 0, .h = 0 };
-    }
 };
 
 // TODO: rename to GUPoint?
 pub const GUPos = struct {
+    pub const Zero = GUPos{ .x = 0, .y = 0 };
     x: f32,
     y: f32,
 
     pub fn FromRect(rect: *GURect) GUPos {
         return GUPos{ .x = rect.x, .y = rect.y };
     }
-
-    pub fn Zero() GUPos {
-        return GUPos{ .x = 0, .y = 0 };
-    }
 };
 
 pub const GUSize = struct {
+    pub const Zero = GUSize{ .w = 0, .h = 0 };
     w: f32,
     h: f32,
 
     pub fn FromRect(rect: *GURect) GUSize {
         return GUSize{ .w = rect.w, .h = rect.h };
-    }
-
-    pub fn Zero() GUSize {
-        return GUSize{ .w = 0, .h = 0 };
     }
 };
 
@@ -232,6 +223,7 @@ pub const GUButtonState = struct {
 };
 
 // TODO: impl image tilesets
+// TODO: impl absolute/relative positioning
 const GUElement = struct {
     layout: GULayout,
     area: GURect,
@@ -259,16 +251,6 @@ const GUElement = struct {
     line_break: bool,
 };
 
-pub const GUElementType = enum(u32) { None, LayoutBlock, Rect, Image, Label, Button };
-
-// intended to pass forward some info to help make layout decisions
-pub const GUElementData = struct {
-    element: GUElementType,
-    size: GUSize,
-};
-
-// FIXME: iterator won't traverse the whole element list if there are multiple top
-// level nodes
 // TODO: specify traversal order during Init, as a convenience so that user doesn't
 // have to manually skip items when it's order-based
 /// depth-first walk of element tree with pre- and post-order traversal; elements
@@ -363,26 +345,6 @@ pub const GULayout = struct {
     //scroll: ?
 };
 
-pub const GULayoutBlock = struct {
-    area: GURect,
-    layout: GULayout,
-    row_number: u32,
-    row_elements: u32,
-    row_max_height: f32,
-
-    pub inline fn RowMaxHeightIncrement(self: *GULayoutBlock, height: f32) void {
-        std.debug.assert(height > 0);
-        self.row_max_height = @max(self.row_max_height, height);
-    }
-};
-
-const GUPositionOverride = union(enum) {
-    Skip: void,
-    NewLine: void,
-    Position: GUPos,
-    Offset: GUSize,
-};
-
 const GULineData = struct {
     parent_padding: GUSize,
     parent_gaps: GUSize,
@@ -431,15 +393,9 @@ element_line_stack: ArrayList(GULineData),
 buttons: StringHashMap(GUButton),
 button_delete_queue: ArrayList([]const u8),
 
-layout_blocks: ArrayList(GULayoutBlock), // FIXME: deprecated
 base_layout: GULayout,
 
-render_commands_new: ArrayList(GURenderCommand), // FIXME: for refactor, delete and rename/remove refs when finalizing
 render_commands: ArrayList(GURenderCommand),
-render_pos: GUPos, // FIXME: deprecated
-render_block: *GULayoutBlock, // FIXME: deprecated
-render_element: GUElementData, // FIXME: deprecated
-render_override: ?GUPositionOverride, // FIXME: deprecated
 
 mouse_pt: GUPos,
 mouse_left: GUButtonState, // LMB
@@ -455,18 +411,13 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
         .element_line_stack = ArrayList(GULineData).init(alloc),
         .buttons = StringHashMap(GUButton).init(alloc),
         .button_delete_queue = ArrayList([]const u8).init(alloc),
-        .render_commands_new = ArrayList(GURenderCommand).init(alloc),
         .render_commands = ArrayList(GURenderCommand).init(alloc),
-        .layout_blocks = ArrayList(GULayoutBlock).init(alloc),
-        .render_block = undefined,
         .base_layout = base_layout orelse DEFAULT_LAYOUT,
         .mouse_pt = .{ .x = -1, .y = -1 },
     });
 }
 
 pub fn Deinit(self: *GU) void {
-    self.layout_blocks.deinit();
-    self.render_commands_new.deinit();
     self.render_commands.deinit();
     self.element_line_stack.deinit();
     self.element_stack.deinit();
@@ -497,7 +448,6 @@ pub fn BeginFrame(self: *GU) !void {
     std.debug.assert(self.element_stack.items.len == 0);
     std.debug.assert(self.element_line_stack.items.len == 0);
     self.render_commands.clearRetainingCapacity();
-    self.render_commands_new.clearRetainingCapacity();
     self.element_tree.clearRetainingCapacity();
     self.element_sibling = null;
     self.mouse_left.Update();
@@ -509,44 +459,11 @@ pub fn BeginFrame(self: *GU) !void {
     element.layout.mode_h = .Fixed;
     element.area.w = surface_size.w;
     element.area.h = surface_size.h;
-
-    // FIXME: delete all below, only relevant to old impl
-    self.render_pos = GUPos.Zero();
-    self.render_element = .{ .element = .None, .size = GUSize.Zero() };
-    self.render_override = null;
-
-    std.debug.assert(self.layout_blocks.items.len == 0);
-    defer self.render_block = &self.layout_blocks.items[0];
-
-    try self.layout_blocks.append(.{
-        .area = .{ .x = 0, .y = 0, .w = surface_size.w, .h = surface_size.h },
-        .layout = self.base_layout,
-        .row_number = 0,
-        .row_elements = 0,
-        .row_max_height = 0,
-    });
-    self.render_block = &self.layout_blocks.items[self.layout_blocks.items.len - 1];
-
-    self.render_pos.x += self.render_block.layout.padding.w;
-    self.render_pos.y += self.render_block.layout.padding.h;
 }
 
 // TODO: initial element sizing as an explicit pass separate from the initial
 // element tree generation?
 pub fn EndFrame(self: *GU) void {
-    // old stuff
-    std.debug.assert(self.layout_blocks.items.len == 1);
-    _ = self.layout_blocks.pop();
-    for (self.render_commands.items) |command| {
-        switch (command) {
-            .Rect => |rect| self.backend.DrawRect(&rect.rect, rect.color),
-            .Text => |text| self.backend.DrawString(text.font, &text.pos, text.str, text.color),
-            .Image => |img| self.backend.DrawImage(img.image, &img.pos, img.color),
-        }
-    }
-
-    // new stuff
-
     self.EndElement(); // close base layout container
     _ = self.element_line_stack.pop();
 
@@ -556,7 +473,7 @@ pub fn EndFrame(self: *GU) void {
     self.DoElementEmitDrawCommands();
     //self.DoElementDebugLog();
 
-    for (self.render_commands_new.items) |command| {
+    for (self.render_commands.items) |command| {
         switch (command) {
             .Rect => |rect| self.backend.DrawRect(&rect.rect, rect.color),
             .Text => |text| self.backend.DrawString(text.font, &text.pos, text.str, text.color),
@@ -566,9 +483,9 @@ pub fn EndFrame(self: *GU) void {
 }
 
 // FIXME: cleanup/streamline, maybe split into multiple passes if that makes sense
+// FIXME: non-precomputable elements do not produce an auto line break when line
+// would exceed parent width
 // TODO: rename to DoElementResizeAndParseLineBreaks ??
-// TODO: update when implementing fixed-size dimensions, i.e. line break when
-// exceeding width and don't update fixed dimensions
 // TODO: update for text wrapping; will need to assert no padding/gaps, and remove
 // .Fixed assertion for .Label in EndContainer
 /// inserts line break markers where needed, and updates parent dimensions in
@@ -668,17 +585,17 @@ fn DoElementPositioning(self: *GU) void {
             continue;
         }
 
-        const gaps = if (p != null) p.?.layout.gaps else GUSize.Zero();
+        const gaps = if (p != null) p.?.layout.gaps else GUSize.Zero;
 
         if (e.line_break) {
-            const pos = if (p != null) GUPos.FromRect(&p.?.area) else GUPos.Zero();
-            const padding = if (p != null) p.?.layout.padding else GUSize.Zero();
+            const pos = if (p != null) GUPos.FromRect(&p.?.area) else GUPos.Zero;
+            const padding = if (p != null) p.?.layout.padding else GUSize.Zero;
             e.area.x = pos.x + padding.w;
             e.area.y = ld.current_y + ld.current_h + gaps.h;
             ld.current_y = e.area.y;
             ld.current_h = e.area.h;
         } else {
-            const area = if (e.sibling_prev) |s| self.element_tree.items[s].area else GURect.Zero();
+            const area = if (e.sibling_prev) |s| self.element_tree.items[s].area else GURect.Zero;
             e.area.x = area.x + area.w + gaps.w;
             e.area.y = ld.current_y;
             ld.current_h = @max(ld.current_h, e.area.h);
@@ -689,7 +606,7 @@ fn DoElementPositioning(self: *GU) void {
 fn DoElementEmitDrawCommands(self: *GU) void {
     for (self.element_tree.items) |*e| {
         if (GUColor.FromInt(e.layout.color).a == 0) continue;
-        self.render_commands_new.append(switch (e.mode) {
+        self.render_commands.append(switch (e.mode) {
             .Label => |label| .{ .Text = .{
                 .pos = GUPos.FromRect(&e.area),
                 .font = &self.fonts.items[label.font],
@@ -756,8 +673,8 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
     const ld: *GULineData = &self.element_line_stack.items[self.element_line_stack.items.len - 1];
 
     self.element_tree.append(GUElement{
-        .area = GURect.Zero(),
-        .fill = GUSize.Zero(),
+        .area = GURect.Zero,
+        .fill = GUSize.Zero,
         .layout = if (layout) |lo| lo.* else BLANK_LAYOUT,
         .mode = .{ .Block = {} },
         .id = element_i,
@@ -833,18 +750,7 @@ pub fn EndContainer(self: *GU) void {
     }
 
     switch (element.mode) {
-        .Block, .Button => {
-            // does nothing since post-computed elements have their area overwritten later?
-            //if (!element.layout.mode_w.IsPreComputable()) {
-            //    element.area.w += element.layout.padding.w * 2;
-            //    element.area.w += element.layout.gaps.w * @as(f32, @floatFromInt(element.children -| 1));
-            //    if (parent) |p| p.area.w += element.area.w;
-            //}
-            //if (!element.layout.mode_h.IsPreComputable()) {
-            //    element.area.h += element.layout.padding.h * 2;
-            //    if (parent) |p| p.area.h = @max(p.area.h, element.area.h);
-            //}
-        },
+        .Block, .Button => {},
         .Rect => |rect| {
             // TODO: stretch-like rect dimensions
             element.area.w = rect.w;
@@ -901,8 +807,7 @@ const SetElementGaps = SetContainerGaps;
 const SetElementColor = SetContainerColor;
 const SetElementSize = SetContainerSize;
 
-// FIXME: rename at refactor handover
-pub fn DoRectNEW(self: *GU, size: GUSize, color: u32) void {
+pub fn DoRect(self: *GU, size: GUSize, color: u32) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
@@ -912,8 +817,7 @@ pub fn DoRectNEW(self: *GU, size: GUSize, color: u32) void {
     element.layout.mode_h = .Fixed;
 }
 
-// FIXME: rename at refactor handover
-pub fn DoImageNEW(self: *GU, image: GUImageHandle, color: ?u32) void {
+pub fn DoImage(self: *GU, image: GUImageHandle, color: ?u32) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
@@ -924,8 +828,7 @@ pub fn DoImageNEW(self: *GU, image: GUImageHandle, color: ?u32) void {
 }
 
 // TODO: add formatting, like standard string formatting functions
-// FIXME: rename at refactor handover
-pub fn DoLabelNEW(self: *GU, font: ?GUFontHandle, color: ?u32, str: []const u8) void {
+pub fn DoLabel(self: *GU, font: ?GUFontHandle, color: ?u32, str: []const u8) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
@@ -936,7 +839,7 @@ pub fn DoLabelNEW(self: *GU, font: ?GUFontHandle, color: ?u32, str: []const u8) 
 }
 
 /// returns whether button was 'activated' (pressed)
-pub fn DoButtonNEW(self: *GU, font: ?usize, str: []const u8) bool {
+pub fn DoButton(self: *GU, font: ?usize, str: []const u8) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
     const element = self.GetElement();
@@ -953,7 +856,7 @@ pub fn DoButtonNEW(self: *GU, font: ?usize, str: []const u8) bool {
             btn.* = GUButton{
                 .state = .Idle,
                 .mode = .Press,
-                .area = GURect.Zero(),
+                .area = GURect.Zero,
                 .element = element.id,
             };
         } else btn.element = element.id;
@@ -974,268 +877,11 @@ pub fn DoButtonNEW(self: *GU, font: ?usize, str: []const u8) bool {
     };
     element.layout.padding = .{ .w = GUButton.PADDING_HORIZONTAL, .h = GUButton.PADDING_VERTICAL };
 
-    self.DoLabelNEW(font, null, str);
+    self.DoLabel(font, null, str);
 
     return activated;
 }
 
 pub fn DoLineBreak(self: *GU) void {
     self.element_queue_line_break = true;
-}
-
-// ------------------
-// WARNING: OLD STUFF
-// ------------------
-
-// ELEMENT POSITIONING
-
-// TODO: minimum length for dynamic case
-inline fn ResolveElementDimension(values: ?[]const f32, index: u32, parent_size: f32, default: f32) f32 {
-    if (values == null) return default;
-
-    const def = values.?[index % values.?.len];
-    if (def > 0) return def;
-    return parent_size + def; // in dynamic case, size is negated from scope size
-}
-
-// TODO: account for gaps
-/// inform system of current element, so that GetNextElementPosition has something
-/// to work with. calculates how things should be relative to the layout context,
-/// and therefore can be used to tell how much space the element will take up in
-/// advance for trivial element sizing cases
-fn SetElementData(self: *GU, element: GUElementType, size: ?GUSize) void {
-    if (element == .None) {
-        std.debug.assert(size == null);
-        self.render_element = GUElementData{ .element = .None, .size = .{ .w = 0, .h = 0 } };
-        return;
-    }
-
-    const padding: GUSize = self.render_block.layout.padding;
-
-    // TODO: change LayoutBlock width to equal max row size, just like height; will
-    // need to solve same problem height has with resolving child dimension in the
-    // interim before the final dimension can be known
-    const width = ResolveElementDimension(
-        self.render_block.layout.widths,
-        self.render_block.row_elements,
-        self.render_block.area.w - padding.w * 2,
-        if (element == .LayoutBlock) self.render_block.area.w else size.?.w,
-    );
-
-    // FIXME: because dynamically sized layout blocks are sized at 0 in the interim
-    // as a way of signaling a later resize, dynamic defined row sizes (negative
-    // number) resolve to a negative height, fucking all of it up. one idea to
-    // resolve this may be to implement a deferred sizing queue that keeps track
-    // of what needs to be resized and what depends on it, then clear that at
-    // the end of each layout scope to make sure there is no bleed or excessive
-    // dependency chain
-    const height = ResolveElementDimension(
-        self.render_block.layout.heights,
-        self.render_block.row_number,
-        self.render_block.area.h - padding.h * 2,
-        size.?.h,
-    );
-
-    self.render_element = .{
-        .element = element,
-        .size = .{ .w = width, .h = height },
-    };
-}
-
-fn DoNextElementNewLineSetup(self: *GU) void {
-    // TODO: pos x: derive from layout state/stack
-    // TODO: pos y: use row items max height
-    const padding = self.render_block.layout.padding;
-    self.render_block.RowMaxHeightIncrement(self.render_element.size.h);
-    self.render_pos.x = self.render_block.area.x + padding.w;
-    self.render_pos.y += self.render_block.row_max_height;
-    self.render_block.row_max_height = 0;
-    self.render_block.row_number += 1;
-}
-
-// TODO: track row height (max of element heights on current row) for newline increment
-/// resolves a new position for drawing an element, with respect to usage state
-/// and layout constraints. state set by functions such as NextElementOverrideX,
-/// SetElementData, etc. is 'committed' at this stage and codified into the
-/// current (now previous) active element.
-fn GetNextElementPosition(self: *GU) GUPos {
-    if (self.render_override) |override| {
-        return switch (override) {
-            .Skip => self.render_pos,
-            .NewLine => newline: {
-                self.render_block.row_elements = 0;
-                self.DoNextElementNewLineSetup();
-                self.NextElementOverrideClear();
-                break :newline self.render_pos;
-            },
-            .Position => |pos| pos: {
-                // TODO: generalize as a 'free positioning system' and decouple
-                // from tracked position, so that you can return to the old
-                // positioning state after you're done drawing wherever
-                self.render_pos = pos;
-                self.NextElementOverrideClear();
-                break :pos pos;
-            },
-            .Offset => |offset| offset: {
-                const pos = GUPos{ .x = self.render_pos.x + offset.w, .y = self.render_pos.y + offset.h };
-                self.NextElementOverrideClear();
-                break :offset pos;
-            },
-        };
-    }
-
-    switch (self.render_element.element) {
-        .None => {},
-        else => {
-            if (self.render_block.layout.widths != null and
-                (self.render_block.row_elements + 1) % self.render_block.layout.widths.?.len == 0)
-            {
-                self.DoNextElementNewLineSetup();
-            } else {
-                self.render_block.RowMaxHeightIncrement(self.render_element.size.h);
-                self.render_pos.x += self.render_element.size.w;
-            }
-            self.render_block.row_elements += 1;
-        },
-    }
-
-    return self.render_pos;
-}
-
-pub fn NextElementOverrideClear(self: *GU) void {
-    std.debug.assert(self.render_override != null);
-    self.render_override = null;
-}
-
-inline fn NextElementOverrideSet(self: *GU, override: GUPositionOverride) void {
-    std.debug.assert(self.render_override == null);
-    self.render_override = override;
-}
-
-fn NextElementOverrideSkip(self: *GU) void {
-    self.NextElementOverrideSet(.{ .Skip = {} });
-}
-
-fn NextElementOverrideNewLine(self: *GU) void {
-    self.NextElementOverrideSet(.{ .NewLine = {} });
-}
-
-pub fn NextElementOverridePosition(self: *GU, pos: GUPos) void {
-    self.NextElementOverrideSet(.{ .Position = pos });
-}
-
-pub fn NextElementOverrideOffset(self: *GU, offset: GUSize) void {
-    self.NextElementOverrideSet(.{ .Offset = offset });
-}
-
-// ELEMENTS
-
-pub fn StartLayoutBlock(self: *GU, layout: ?*const GULayout) bool {
-    const next_pos = self.GetNextElementPosition();
-    const next_size = &self.render_element.size;
-    self.SetElementData(.LayoutBlock, .{ .w = 0, .h = 0 }); // filled in by SetElementData if able
-
-    self.layout_blocks.append(.{
-        .area = .{ .x = next_pos.x, .y = next_pos.y, .w = next_size.w, .h = next_size.h },
-        .layout = if (layout) |lo| lo.* else BLANK_LAYOUT,
-        .row_number = 0,
-        .row_elements = 0,
-        .row_max_height = 0,
-    }) catch return false;
-
-    self.render_block = &self.layout_blocks.items[self.layout_blocks.items.len - 1];
-    self.render_pos.x += self.render_block.layout.padding.w;
-    self.render_pos.y += self.render_block.layout.padding.h;
-
-    self.SetElementData(.None, null);
-
-    return true;
-}
-
-pub fn EndLayoutBlock(self: *GU) void {
-    const block = self.render_block;
-    if (block.area.h == 0) { // if already set, height was predetermined
-        const padding = self.render_block.layout.padding;
-        self.NextElementOverrideNewLine();
-        const end_pos = self.GetNextElementPosition();
-        block.area.h = end_pos.y - block.area.y - padding.h * 2;
-    }
-    self.render_pos = .{ .x = block.area.x, .y = block.area.y };
-
-    _ = self.layout_blocks.pop();
-    self.render_block = &self.layout_blocks.items[self.layout_blocks.items.len - 1];
-
-    self.SetElementData(.LayoutBlock, .{ .w = block.area.w, .h = block.area.h });
-}
-
-pub const DoNewLine = NextElementOverrideNewLine;
-
-pub fn DoLabel(self: *GU, font: ?usize, color: ?u32, str: []const u8) !void {
-    std.debug.assert(self.fonts.items.len >= (font orelse 1));
-    const font_ref = &self.fonts.items[font orelse 0];
-    try self.render_commands.append(.{
-        .Text = .{
-            .pos = self.GetNextElementPosition(),
-            .font = font_ref,
-            .color = color orelse 0xFFFFFFFF,
-            .str = str,
-        },
-    });
-    self.SetElementData(.Label, font_ref.StringSize(str));
-}
-
-pub fn DoRect(self: *GU, w: f32, h: f32, color: ?u32) !void {
-    const pos = self.GetNextElementPosition();
-    try self.render_commands.append(.{
-        .Rect = .{
-            .rect = .{ .x = pos.x, .y = pos.y, .w = w, .h = h },
-            .color = color orelse 0xFFFFFFFF,
-        },
-    });
-    self.SetElementData(.Rect, .{ .w = w, .h = h });
-}
-
-pub fn DoImage(self: *GU, image: ?usize, color: ?u32) !void {
-    std.debug.assert(self.images.items.len >= (image orelse 1));
-    const image_ref = &self.images.items[image orelse 0];
-    try self.render_commands.append(.{
-        .Image = .{
-            .pos = self.GetNextElementPosition(),
-            .image = &self.images.items[image orelse 0],
-            .color = color orelse 0xFFFFFFFF,
-            .tile = null,
-        },
-    });
-    self.SetElementData(.Image, image_ref.Size());
-}
-
-/// returns whether button was 'activated' (pressed)
-pub fn DoButton(self: *GU, btn: *GUButton, font: ?usize, str: []const u8) !bool {
-    const pos = self.GetNextElementPosition();
-
-    const f = &self.fonts.items[font orelse 0];
-    const str_size = f.StringSize(str);
-    const rect = GURect{
-        .x = pos.x,
-        .y = pos.y,
-        .w = GUButton.PADDING_HORIZONTAL * 2 + str_size.w,
-        .h = GUButton.PADDING_VERTICAL * 2 + str_size.h,
-    };
-
-    const output = btn.Update(&rect, &self.mouse_pt, self.mouse_left.just_down, self.mouse_left.just_up);
-
-    {
-        self.NextElementOverrideSkip();
-        defer self.NextElementOverrideClear();
-        switch (btn.state) {
-            .Idle => try self.DoRect(rect.w, rect.h, 0x008000FF),
-            .Hover => try self.DoRect(rect.w, rect.h, 0x00C000FF),
-            .Down => try self.DoRect(rect.w, rect.h, 0x004000FF),
-        }
-    }
-    self.NextElementOverrideOffset(.{ .w = GUButton.PADDING_HORIZONTAL, .h = GUButton.PADDING_VERTICAL });
-    try self.DoLabel(null, null, str);
-
-    self.SetElementData(.Button, .{ .w = rect.w, .h = rect.h });
-    return output;
 }
