@@ -145,6 +145,7 @@ const AsciiFont = struct {
 const RenderData = struct {
     window: ?*c.SDL_Window,
     renderer: ?*c.SDL_Renderer,
+    stored_clip: ?c.SDL_Rect,
 
     pub fn Init() !RenderData {
         var w: ?*c.SDL_Window = undefined;
@@ -154,7 +155,7 @@ const RenderData = struct {
         errdefer comptime unreachable;
         SDLEP(c.SDL_SetRenderDrawBlendMode(r, c.SDL_BLENDMODE_BLEND));
         SDLE(c.SDL_SetWindowResizable(w, true)) catch {};
-        return RenderData{ .window = w, .renderer = r };
+        return RenderData{ .window = w, .renderer = r, .stored_clip = null };
     }
 
     pub fn Deinit(self: *RenderData) void {
@@ -172,16 +173,18 @@ const RenderData = struct {
         return GUSize{ .w = @floatFromInt(screen_w), .h = @floatFromInt(screen_h) };
     }
 
-    fn DrawString(_: *anyopaque, font: *GUFontAtlas, pos: *const GUPos, str: []const u8, color: u32) void {
-        //const self: *RenderData = @alignCast(@ptrCast(ptr));
-        font.SetColor(color);
-        font.DrawString(str, pos);
-    }
-
-    fn DrawImage(_: *anyopaque, image: *GUTextureAtlas, pos: *const GUPos, color: u32) void {
-        //const self: *RenderData = @alignCast(@ptrCast(ptr));
-        image.SetColor(color);
-        image.Draw(pos);
+    fn GetClip(ptr: *anyopaque) GURect {
+        const self: *RenderData = @alignCast(@ptrCast(ptr));
+        if (self.stored_clip) |*clip| {
+            return GURect{
+                .x = @as(f32, @floatFromInt(clip.x)),
+                .y = @as(f32, @floatFromInt(clip.y)),
+                .w = @as(f32, @floatFromInt(clip.w)),
+                .h = @as(f32, @floatFromInt(clip.h)),
+            };
+        }
+        const sd = GetSurfaceDimensions(ptr);
+        return GURect{ .x = 0, .y = 0, .w = sd.w, .h = sd.h };
     }
 
     fn DrawRect(ptr: *anyopaque, rect: *const GURect, color: u32) void {
@@ -196,6 +199,48 @@ const RenderData = struct {
         //}
     }
 
+    fn DrawString(_: *anyopaque, font: *GUFontAtlas, pos: *const GUPos, str: []const u8, color: u32) void {
+        //const self: *RenderData = @alignCast(@ptrCast(ptr));
+        font.SetColor(color);
+        font.DrawString(str, pos);
+    }
+
+    fn DrawImage(_: *anyopaque, image: *GUTextureAtlas, pos: *const GUPos, color: u32) void {
+        //const self: *RenderData = @alignCast(@ptrCast(ptr));
+        image.SetColor(color);
+        image.Draw(pos);
+    }
+
+    fn SetClip(ptr: *anyopaque, area: *const GURect) void {
+        const self: *RenderData = @alignCast(@ptrCast(ptr));
+        const rect = c.SDL_Rect{
+            .x = @as(c_int, @intFromFloat(area.x)),
+            .y = @as(c_int, @intFromFloat(area.y)),
+            .w = @as(c_int, @intFromFloat(area.w)),
+            .h = @as(c_int, @intFromFloat(area.h)),
+        };
+        SDLEP(c.SDL_SetRenderClipRect(self.renderer, &rect));
+    }
+
+    fn BeginRendering(ptr: *anyopaque) void {
+        const self: *RenderData = @alignCast(@ptrCast(ptr));
+        std.debug.assert(self.stored_clip == null);
+        if (c.SDL_RenderClipEnabled(self.renderer)) {
+            var clip: c.SDL_Rect = undefined;
+            SDLEP(c.SDL_GetRenderClipRect(self.renderer, &clip));
+            self.stored_clip = clip;
+        }
+    }
+
+    fn EndRendering(ptr: *anyopaque) void {
+        const self: *RenderData = @alignCast(@ptrCast(ptr));
+        SDLEP(c.SDL_SetRenderClipRect(
+            self.renderer,
+            if (self.stored_clip) |*clip| clip else null,
+        ));
+        self.stored_clip = null;
+    }
+
     pub fn GetBackend(self: *RenderData) GUBackend {
         return GUBackend{
             .ptr = self,
@@ -203,6 +248,9 @@ const RenderData = struct {
             .fnDrawRect = DrawRect,
             .fnDrawImage = DrawImage,
             .fnDrawString = DrawString,
+            .fnSetClip = SetClip,
+            .fnBeginRendering = BeginRendering,
+            .fnEndRendering = EndRendering,
         };
     }
 };

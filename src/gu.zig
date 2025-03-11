@@ -4,6 +4,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const StringHashMap = std.StringHashMap;
+const FormatOptions = std.fmt.FormatOptions;
 const maxInt = std.math.maxInt;
 const zeroInit = std.mem.zeroInit;
 
@@ -14,9 +15,35 @@ pub const GURect = struct {
     w: f32,
     h: f32,
 
-    pub fn PointInRect(self: *const GURect, pt: *const GUPos) bool {
-        return pt.x >= self.x and pt.x < self.x + self.w and
-            pt.y >= self.y and pt.y < self.y + self.h;
+    pub fn IsCollidingPoint(self: *const GURect, pt: *const GUPos) bool {
+        return (pt.x >= self.x and
+            pt.x < self.x + self.w and
+            pt.y >= self.y and
+            pt.y < self.y + self.h);
+    }
+
+    pub fn IsCollidingRect(self: *const GURect, other: *const GURect) bool {
+        return (self.x + self.w >= other.x and
+            self.x <= other.x + other.w and
+            self.y + self.h >= other.y and
+            self.y <= other.y + other.h);
+    }
+
+    /// AND operation
+    pub fn GetIntersection(r1: *const GURect, r2: *const GURect) GURect {
+        const x = @max(r1.x, r2.x);
+        const y = @max(r1.y, r2.y);
+        const w = @min(r1.x + r1.w, r2.x + r2.w) - x;
+        const h = @min(r1.y + r1.h, r2.y + r2.h) - y;
+        return GURect{ .x = x, .y = y, .w = w, .h = h };
+    }
+
+    /// compatibility with std.fmt
+    pub fn format(self: *const GURect, comptime _: []const u8, _: FormatOptions, writer: anytype) !void {
+        try writer.print(
+            "GURect(x:{d: <4} y:{d: <4} w:{d: <4} h:{d: <4})",
+            .{ self.x, self.y, self.w, self.h },
+        );
     }
 };
 
@@ -59,6 +86,9 @@ pub const GUBackend = struct {
     fnDrawRect: *const fn (*anyopaque, *const GURect, u32) void,
     fnDrawString: *const fn (*anyopaque, *GUFontAtlas, *const GUPos, []const u8, u32) void,
     fnDrawImage: *const fn (*anyopaque, *GUTextureAtlas, *const GUPos, u32) void,
+    fnSetClip: *const fn (*anyopaque, *const GURect) void,
+    fnBeginRendering: *const fn (*anyopaque) void,
+    fnEndRendering: *const fn (*anyopaque) void,
 
     pub fn GetSurfaceDimensions(self: *GUBackend) GUSize {
         return self.fnGetSurfaceDimensions(self.ptr);
@@ -75,6 +105,21 @@ pub const GUBackend = struct {
     // TODO: impl tile drawing, see GURenderCommand->Image
     pub fn DrawImage(self: *GUBackend, tex: *GUTextureAtlas, pos: *const GUPos, color: u32) void {
         self.fnDrawImage(self.ptr, tex, pos, color);
+    }
+
+    pub fn SetClip(self: *GUBackend, area: *const GURect) void {
+        self.fnSetClip(self.ptr, area);
+    }
+
+    /// called as a way to signal to the backend that we are about to render a
+    /// frame, and give it a 'hook' to do any related setup (store clip state, etc.)
+    pub fn BeginRendering(self: *GUBackend) void {
+        self.fnBeginRendering(self.ptr);
+    }
+
+    /// a 'hook' for the backend to cleanup after we're done with a frame
+    pub fn EndRendering(self: *GUBackend) void {
+        self.fnEndRendering(self.ptr);
     }
 };
 
@@ -94,6 +139,9 @@ pub const GURenderCommand = union(enum) {
         tile: ?u32, // for texture atlases
         pos: GUPos,
         color: u32,
+    },
+    Clip: struct {
+        area: GURect,
     },
 };
 
@@ -171,7 +219,7 @@ pub const GUButton = struct {
         btn_just_down: bool,
         btn_just_up: bool,
     ) bool {
-        if (self.area.PointInRect(pt)) {
+        if (self.area.IsCollidingPoint(pt)) {
             if (self.state == .Idle)
                 self.state = .Hover;
 
@@ -390,6 +438,8 @@ element_sibling: ?usize, // most recent sibling
 element_queue_line_break: bool,
 element_line_stack: ArrayList(GULineData),
 
+clip_stack: ArrayList(GURect),
+
 buttons: StringHashMap(GUButton),
 button_delete_queue: ArrayList([]const u8),
 
@@ -409,6 +459,7 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
         .element_tree = ArrayList(GUElement).init(alloc),
         .element_stack = ArrayList(usize).init(alloc),
         .element_line_stack = ArrayList(GULineData).init(alloc),
+        .clip_stack = ArrayList(GURect).init(alloc),
         .buttons = StringHashMap(GUButton).init(alloc),
         .button_delete_queue = ArrayList([]const u8).init(alloc),
         .render_commands = ArrayList(GURenderCommand).init(alloc),
@@ -419,6 +470,7 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
 
 pub fn Deinit(self: *GU) void {
     self.render_commands.deinit();
+    self.clip_stack.deinit();
     self.element_line_stack.deinit();
     self.element_stack.deinit();
     self.element_tree.deinit();
@@ -467,6 +519,8 @@ pub fn EndFrame(self: *GU) void {
     self.EndElement(); // close base layout container
     _ = self.element_line_stack.pop();
 
+    self.backend.BeginRendering();
+
     self.DoElementLineBreakParsing();
     self.DoElementPositioning();
     self.DoButtonPostProcessing();
@@ -478,8 +532,11 @@ pub fn EndFrame(self: *GU) void {
             .Rect => |rect| self.backend.DrawRect(&rect.rect, rect.color),
             .Text => |text| self.backend.DrawString(text.font, &text.pos, text.str, text.color),
             .Image => |img| self.backend.DrawImage(img.image, &img.pos, img.color),
+            .Clip => |clip| self.backend.SetClip(&clip.area),
         }
     }
+
+    self.backend.EndRendering();
 }
 
 // FIXME: cleanup/streamline, maybe split into multiple passes if that makes sense
@@ -598,8 +655,42 @@ fn DoElementPositioning(self: *GU) void {
 }
 
 fn DoElementEmitDrawCommands(self: *GU) void {
-    for (self.element_tree.items) |*e| {
+    std.debug.assert(self.element_stack.items.len == 0);
+    std.debug.assert(self.clip_stack.items.len == 0);
+    defer std.debug.assert(self.element_stack.items.len == 0);
+    defer std.debug.assert(self.clip_stack.items.len == 0);
+
+    const stack = &self.clip_stack;
+    const sd = self.backend.GetSurfaceDimensions();
+    const c_base = GURect{ .x = 0, .y = 0, .w = sd.w, .h = sd.h };
+    self.render_commands.append(.{ .Clip = .{ .area = c_base } }) catch |err|
+        std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+    var c: *const GURect = &c_base;
+
+    var it = GUElementIterator.Init(self.element_tree.items);
+    while (it.Next()) |it_data| {
+        const e = it_data.element;
+
+        if (!e.area.IsCollidingRect(c)) continue;
+
+        if (it_data.relation == .Parent) {
+            _ = stack.pop();
+            c = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &c_base;
+            self.render_commands.append(.{ .Clip = .{ .area = c.* } }) catch |err|
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+            continue;
+        }
+
+        defer if (it_data.relation != .Parent and e.first_child != null) {
+            stack.append(e.area.GetIntersection(c)) catch |err|
+                std.log.err("DoElementEmitDrawCommands: Clip Stack ({s})", .{@errorName(err)});
+            c = &stack.items[stack.items.len - 1];
+            self.render_commands.append(.{ .Clip = .{ .area = c.* } }) catch |err|
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+        };
+
         if (GUColor.FromInt(e.layout.color).a == 0) continue;
+
         self.render_commands.append(switch (e.mode) {
             .Label => |label| .{ .Text = .{
                 .pos = GUPos.FromRect(&e.area),
@@ -617,7 +708,7 @@ fn DoElementEmitDrawCommands(self: *GU) void {
                 .rect = e.area,
                 .color = e.layout.color,
             } },
-        }) catch |err| std.log.err("DoElementEmitDrawCommands ({s})", .{@errorName(err)});
+        }) catch |err| std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
     }
 }
 
