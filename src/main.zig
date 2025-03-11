@@ -299,6 +299,7 @@ pub fn main() !void {
     const font_id = try gu.AddFont(font.GetFontAtlas());
     const img_id = try gu.AddImage(font.GetTextureAtlas());
 
+    var b2toggle: bool = false;
     var step: bool = true;
 
     // MAIN LOOP
@@ -365,8 +366,11 @@ pub fn main() !void {
         if (gu.DoContainer(&layout_white)) {
             defer gu.EndContainer();
             gu.DoLabel(null, 0xC000C0FF, "testblock2");
-            if (gu.DoButton(font_id, "Button")) {
-                std.log.debug("b2 activation result!!", .{});
+            if (gu.DoToggleButton(&b2toggle, font_id, "ToggleButton")) {
+                std.log.debug("b2 toggled!!", .{});
+            }
+            if (b2toggle) {
+                gu.DoLabel(null, null, "only visible if b2 is on");
             }
             gu.DoImage(img_id, 0xC000C0FF);
             gu.DoImage(img_id, null);

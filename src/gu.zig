@@ -204,12 +204,17 @@ pub const GUTextureAtlas = struct {
     }
 };
 
+const GUButtonMode = enum(u32) { Press, Release };
+const GUButtonState = enum(u32) { Idle, Hover, Down };
 pub const GUButton = struct {
     const PADDING_VERTICAL: f32 = 2;
     const PADDING_HORIZONTAL: f32 = 8;
+    const COLOR_IDLE: u32 = 0x008000FF;
+    const COLOR_HOVER: u32 = 0x00C000FF;
+    const COLOR_DOWN: u32 = 0x004000FF;
 
-    mode: enum(u32) { Press, Release } = .Press,
-    state: enum(u32) { Idle, Hover, Down } = .Idle,
+    mode: GUButtonMode = .Press,
+    state: GUButtonState = .Idle,
     area: GURect,
     element: usize,
 
@@ -245,22 +250,24 @@ pub const GUButton = struct {
     }
 };
 
-// TODO: rename to GUKeyState?
-pub const GUButtonState = struct {
+// NOTE: keep here, intended as a 'using button api' struct, not part of the button api
+const GUButtonData = struct { button: *GUButton, activated: bool };
+
+pub const GUKeyState = struct {
     down: bool = false,
     just_up: bool = false,
     just_down: bool = false,
     accumulator_down: bool = false,
     accumulator_changes: u32 = 0,
 
-    pub fn Accumulate(self: *GUButtonState, down: bool) void {
+    pub fn Accumulate(self: *GUKeyState, down: bool) void {
         if (self.accumulator_down != down) {
             self.accumulator_down = down;
             self.accumulator_changes += 1;
         }
     }
 
-    pub fn Update(self: *GUButtonState) void {
+    pub fn Update(self: *GUKeyState) void {
         self.just_down = (self.accumulator_down and self.accumulator_down != self.down) or
             self.accumulator_changes > 1;
         self.just_up = (!self.accumulator_down and self.accumulator_down != self.down) or
@@ -448,7 +455,7 @@ base_layout: GULayout,
 render_commands: ArrayList(GURenderCommand),
 
 mouse_pt: GUPos,
-mouse_left: GUButtonState, // LMB
+mouse_left: GUKeyState, // LMB
 
 pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
     return zeroInit(GU, .{
@@ -923,24 +930,24 @@ pub fn DoLabel(self: *GU, font: ?GUFontHandle, color: ?u32, str: []const u8) voi
     element.layout.mode_h = .Fixed;
 }
 
-/// returns whether button was 'activated' (pressed)
-pub fn DoButton(self: *GU, font: ?usize, str: []const u8) bool {
-    if (!self.DoElement(null)) return false;
-    defer self.EndElement();
+/// turns element into a button and executes the button logic. button is identified
+/// internally by hash of the element id concatenated with str
+/// to emulate DoButton behaviour, use mode .Press and return .activated or false if null
+pub fn DoButtonLogic(self: *GU, mode: GUButtonMode, str: []const u8) ?GUButtonData {
     const element = self.GetElement();
     element.mode = .{ .Button = {} };
 
     const btn: *GUButton = get_button: {
         const btn_key = std.fmt.allocPrint(self.allocator, "{X:0>16}{s}", .{ element.id, str }) catch
-            return false;
+            return null;
         const btn_info = self.buttons.getOrPut(btn_key) catch
-            return false;
+            return null;
 
         const btn = btn_info.value_ptr;
         if (!btn_info.found_existing) {
             btn.* = GUButton{
                 .state = .Idle,
-                .mode = .Press,
+                .mode = mode,
                 .area = GURect.Zero,
                 .element = element.id,
             };
@@ -955,16 +962,51 @@ pub fn DoButton(self: *GU, font: ?usize, str: []const u8) bool {
         self.mouse_left.just_up,
     );
 
-    element.layout.color = switch (btn.state) {
-        .Idle => 0x008000FF,
-        .Hover => 0x00C000FF,
-        .Down => 0x004000FF,
+    return GUButtonData{ .button = btn, .activated = activated };
+}
+
+/// returns whether button was 'activated' (pressed)
+pub fn DoButton(self: *GU, font: ?GUFontHandle, str: []const u8) bool {
+    if (!self.DoElement(null)) return false;
+    defer self.EndElement();
+    const element = self.GetElement();
+
+    const btn = self.DoButtonLogic(.Press, str) orelse return false;
+
+    element.layout.color = switch (btn.button.state) {
+        .Idle => GUButton.COLOR_IDLE,
+        .Hover => GUButton.COLOR_HOVER,
+        .Down => GUButton.COLOR_DOWN,
     };
     element.layout.padding = .{ .w = GUButton.PADDING_HORIZONTAL, .h = GUButton.PADDING_VERTICAL };
 
     self.DoLabel(font, null, str);
 
-    return activated;
+    return btn.activated;
+}
+
+/// same general behaviour as DoButton, but updates an 'active' bool for you.
+/// if button is culled (due to not rendering, clip culling, etc.), the external
+/// bool will NOT be toggled
+/// returns whether button was 'activated' (pressed and subsequently toggled)
+pub fn DoToggleButton(self: *GU, active: *bool, font: ?GUFontHandle, str: []const u8) bool {
+    if (!self.DoElement(null)) return false;
+    defer self.EndElement();
+    const element = self.GetElement();
+
+    const btn = self.DoButtonLogic(.Press, str) orelse return false;
+    if (btn.activated) active.* = !active.*;
+
+    element.layout.color = switch (btn.button.state) {
+        .Idle => if (active.*) GUButton.COLOR_DOWN else GUButton.COLOR_IDLE,
+        .Hover => if (active.*) GUButton.COLOR_IDLE else GUButton.COLOR_HOVER,
+        .Down => GUButton.COLOR_DOWN,
+    };
+    element.layout.padding = .{ .w = GUButton.PADDING_HORIZONTAL, .h = GUButton.PADDING_VERTICAL };
+
+    self.DoLabel(font, null, str);
+
+    return btn.activated;
 }
 
 pub fn DoLineBreak(self: *GU) void {
