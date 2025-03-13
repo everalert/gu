@@ -397,7 +397,12 @@ pub const GULayout = struct {
     heights: ?[]const f32,
     padding: GUSize,
     gaps: GUSize,
+    auto_line_break: bool,
     //scroll: ?
+
+    const Default = zeroInit(GULayout, .{
+        .auto_line_break = true,
+    });
 };
 
 const GULineData = struct {
@@ -428,9 +433,6 @@ const GULineData = struct {
 
 const GUImageHandle = usize;
 const GUFontHandle = usize;
-
-const DEFAULT_LAYOUT = zeroInit(GULayout, .{});
-const BLANK_LAYOUT = zeroInit(GULayout, .{});
 
 allocator: Allocator,
 
@@ -470,7 +472,7 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
         .buttons = StringHashMap(GUButton).init(alloc),
         .button_delete_queue = ArrayList([]const u8).init(alloc),
         .render_commands = ArrayList(GURenderCommand).init(alloc),
-        .base_layout = base_layout orelse DEFAULT_LAYOUT,
+        .base_layout = base_layout orelse GULayout.Default,
         .mouse_pt = .{ .x = -1, .y = -1 },
     });
 }
@@ -591,12 +593,12 @@ fn DoElementLineBreakParsing(self: *GU) void {
         }
 
         if (p != null and
+            p.?.layout.auto_line_break and
             p.?.layout.widths == null and
             p.?.layout.mode_w.IsPreComputable() and
             ld.current_w + ld.parent_gaps.w + e.area.w > p.?.area.w - ld.parent_padding.w * 2)
             e.line_break = true;
 
-        // .Root init covered by ld_base
         if (it_data.relation == .Child or e.line_break) {
             ld.max_w = @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items));
             ld.line += 1;
@@ -767,7 +769,7 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
     self.element_tree.append(GUElement{
         .area = GURect.Zero,
         .fill = GUSize.Zero,
-        .layout = if (layout) |lo| lo.* else BLANK_LAYOUT,
+        .layout = if (layout) |lo| lo.* else GULayout.Default,
         .mode = .{ .Block = {} },
         .id = element_i,
         .parent = parent_i,
@@ -862,6 +864,8 @@ pub fn EndContainer(self: *GU) void {
     }
 }
 
+/// returns pointer to current element. pointer is only guaranteed to be valid
+/// until the next call to DoContainer
 pub inline fn GetContainer(self: *GU) *GUElement {
     const i = self.element_stack.getLast();
     const element = &self.element_tree.items[i];

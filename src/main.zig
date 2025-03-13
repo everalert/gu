@@ -283,12 +283,17 @@ pub fn main() !void {
         .heights = &[_]f32{ 100, -100 },
         .padding = GUSize{ .w = 8, .h = 8 },
         .gaps = GUSize{ .w = 8, .h = 8 },
+        .auto_line_break = false,
     };
     const layout_red = std.mem.zeroInit(GULayout, .{
         .color = 0x80000060,
     });
     const layout_white = std.mem.zeroInit(GULayout, .{
         .color = 0xFFFFFF20,
+    });
+    const layout_white_break = std.mem.zeroInit(GULayout, .{
+        .color = 0xFFFFFF20,
+        .auto_line_break = true,
     });
 
     var gu = GU.Init(alloc, rd.GetBackend(), base_layout);
@@ -388,9 +393,16 @@ pub fn main() !void {
             defer gu.EndContainer();
             gu.DoLabel(null, 0x0000C0FF, "testing... !!@$(#!QOIEANSHT)");
         }
-        if (gu.DoContainer(&layout_white)) {
+        if (gu.DoContainer(&layout_white_break)) {
             defer gu.EndContainer();
-            gu.DoLabel(null, 0x00C0C0FF, "testing... !!@$(#!QOIEANSHT)");
+            gu.DoLabel(null, 0x00C0C0FF, "testing... with auto linebreak!!");
+            if (gu.DoToggleButton(&b2toggle, font_id, "ToggleButton")) {
+                std.log.debug("b2 toggled!!", .{});
+            }
+            if (b2toggle) {
+                gu.DoLabel(null, null, "only visible if b2 is on");
+            }
+            gu.DoImage(img_id, null);
         }
         if (gu.DoContainer(&layout_white)) {
             defer gu.EndContainer();
