@@ -348,12 +348,12 @@ pub fn main() !void {
             defer gu.EndContainer();
             if (gu.DoContainer(&layout_red)) {
                 defer gu.EndContainer();
-                gu.DoLabel(null, 0x00C000FF, "testblock1");
+                gu.DoLabel(null, 0x00C000FF, "testblock1", .{});
             }
             gu.DoLineBreak();
             if (gu.DoContainer(&layout_red)) {
                 defer gu.EndContainer();
-                if (gu.DoButton(font_id, "Button")) {
+                if (gu.DoButton(font_id, "Button", .{})) {
                     std.log.debug("b1 activation result!!", .{});
                 }
             }
@@ -370,12 +370,12 @@ pub fn main() !void {
         }
         if (gu.DoContainer(&layout_white)) {
             defer gu.EndContainer();
-            gu.DoLabel(null, 0xC000C0FF, "testblock2");
-            if (gu.DoToggleButton(&b2toggle, font_id, "ToggleButton")) {
+            gu.DoLabel(null, 0xC000C0FF, "testblock2", .{});
+            if (gu.DoToggleButton(&b2toggle, font_id, "ToggleButton: {any}", .{b2toggle})) {
                 std.log.debug("b2 toggled!!", .{});
             }
             if (b2toggle) {
-                gu.DoLabel(null, null, "only visible if b2 is on");
+                gu.DoLabel(null, null, "only visible if b2 is on", .{});
             }
             gu.DoImage(img_id, 0xC000C0FF);
             gu.DoImage(img_id, null);
@@ -385,28 +385,28 @@ pub fn main() !void {
             gu.DoRect(.{ .w = 64, .h = 64 }, 0x000055FF);
             gu.DoLineBreak();
             //gu.NextElementOverridePosition(.{ .x = 10, .y = 10 });
-            gu.DoLabel(font_id, 0xC00000FF, "testblock3");
+            gu.DoLabel(font_id, 0xC00000FF, "testblock3", .{});
             gu.DoLineBreak();
             gu.DoRect(.{ .w = 64, .h = 64 }, 0x2222AAFF); // old outline color
         }
         if (gu.DoContainer(&layout_white)) {
             defer gu.EndContainer();
-            gu.DoLabel(null, 0x0000C0FF, "testing... !!@$(#!QOIEANSHT)");
+            gu.DoLabel(null, 0x0000C0FF, "testing... !!@$(#!QOIEANSHT)", .{});
         }
         if (gu.DoContainer(&layout_white_break)) {
             defer gu.EndContainer();
-            gu.DoLabel(null, 0x00C0C0FF, "testing... with auto linebreak!!");
-            if (gu.DoToggleButton(&b2toggle, font_id, "ToggleButton")) {
+            gu.DoLabel(null, 0x00C0C0FF, "testing... with auto linebreak!!", .{});
+            if (gu.DoToggleButton(&b2toggle, font_id, "ToggleButton", .{})) {
                 std.log.debug("b2 toggled!!", .{});
             }
             if (b2toggle) {
-                gu.DoLabel(null, null, "only visible if b2 is on");
+                gu.DoLabel(null, null, "only visible if b2 is on", .{});
             }
             gu.DoImage(img_id, null);
         }
         if (gu.DoContainer(&layout_white)) {
             defer gu.EndContainer();
-            gu.DoLabel(null, 0xC0C000FF, "testing... !!@$(#!QOIEANSHT)");
+            gu.DoLabel(null, 0xC0C000FF, "testing... !!@$(#!QOIEANSHT)", .{});
         }
 
         gu.EndFrame();

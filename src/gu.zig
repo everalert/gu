@@ -2,6 +2,7 @@ const GU = @This();
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const ArrayList = std.ArrayList;
 const StringHashMap = std.StringHashMap;
 const FormatOptions = std.fmt.FormatOptions;
@@ -448,6 +449,7 @@ element_queue_line_break: bool,
 element_line_stack: ArrayList(GULineData),
 
 clip_stack: ArrayList(GURect),
+label_arena: ArenaAllocator,
 
 buttons: StringHashMap(GUButton),
 button_delete_queue: ArrayList([]const u8),
@@ -462,6 +464,7 @@ mouse_left: GUKeyState, // LMB
 pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
     return zeroInit(GU, .{
         .allocator = alloc,
+        .label_arena = ArenaAllocator.init(alloc),
         .backend = backend,
         .fonts = ArrayList(GUFontAtlas).init(alloc),
         .images = ArrayList(GUTextureAtlas).init(alloc),
@@ -478,6 +481,7 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
 }
 
 pub fn Deinit(self: *GU) void {
+    self.label_arena.deinit();
     self.render_commands.deinit();
     self.clip_stack.deinit();
     self.element_line_stack.deinit();
@@ -508,6 +512,7 @@ pub fn BeginFrame(self: *GU) !void {
 
     std.debug.assert(self.element_stack.items.len == 0);
     std.debug.assert(self.element_line_stack.items.len == 0);
+    _ = self.label_arena.reset(.retain_capacity);
     self.render_commands.clearRetainingCapacity();
     self.element_tree.clearRetainingCapacity();
     self.element_sibling = null;
@@ -924,10 +929,12 @@ pub fn DoImage(self: *GU, image: GUImageHandle, color: ?u32) void {
 }
 
 // TODO: add formatting, like standard string formatting functions
-pub fn DoLabel(self: *GU, font: ?GUFontHandle, color: ?u32, str: []const u8) void {
+pub fn DoLabel(self: *GU, font: ?GUFontHandle, color: ?u32, comptime fmt: []const u8, args: anytype) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
+    const str = std.fmt.allocPrint(self.label_arena.allocator(), fmt, args) catch |err|
+        std.debug.panic("DoLabel failed to allocate string: ({s})", .{@errorName(err)});
     element.mode = .{ .Label = .{ .font = font orelse 0, .str = str } };
     element.layout.color = color orelse 0xFFFFFFFF;
     element.layout.mode_w = .Fixed;
@@ -969,13 +976,14 @@ pub fn DoButtonLogic(self: *GU, mode: GUButtonMode, str: []const u8) ?GUButtonDa
     return GUButtonData{ .button = btn, .activated = activated };
 }
 
+// NOTE: id hash uses input fmt, not resolved formatted string
 /// returns whether button was 'activated' (pressed)
-pub fn DoButton(self: *GU, font: ?GUFontHandle, str: []const u8) bool {
+pub fn DoButton(self: *GU, font: ?GUFontHandle, comptime fmt: []const u8, args: anytype) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
     const element = self.GetElement();
 
-    const btn = self.DoButtonLogic(.Press, str) orelse return false;
+    const btn = self.DoButtonLogic(.Press, fmt) orelse return false;
 
     element.layout.color = switch (btn.button.state) {
         .Idle => GUButton.COLOR_IDLE,
@@ -984,21 +992,22 @@ pub fn DoButton(self: *GU, font: ?GUFontHandle, str: []const u8) bool {
     };
     element.layout.padding = .{ .w = GUButton.PADDING_HORIZONTAL, .h = GUButton.PADDING_VERTICAL };
 
-    self.DoLabel(font, null, str);
+    self.DoLabel(font, null, fmt, args);
 
     return btn.activated;
 }
 
+// NOTE: id hash uses input fmt, not resolved formatted string
 /// same general behaviour as DoButton, but updates an 'active' bool for you.
 /// if button is culled (due to not rendering, clip culling, etc.), the external
 /// bool will NOT be toggled
 /// returns whether button was 'activated' (pressed and subsequently toggled)
-pub fn DoToggleButton(self: *GU, active: *bool, font: ?GUFontHandle, str: []const u8) bool {
+pub fn DoToggleButton(self: *GU, active: *bool, font: ?GUFontHandle, comptime fmt: []const u8, args: anytype) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
     const element = self.GetElement();
 
-    const btn = self.DoButtonLogic(.Press, str) orelse return false;
+    const btn = self.DoButtonLogic(.Press, fmt) orelse return false;
     if (btn.activated) active.* = !active.*;
 
     element.layout.color = switch (btn.button.state) {
@@ -1008,7 +1017,7 @@ pub fn DoToggleButton(self: *GU, active: *bool, font: ?GUFontHandle, str: []cons
     };
     element.layout.padding = .{ .w = GUButton.PADDING_HORIZONTAL, .h = GUButton.PADDING_VERTICAL };
 
-    self.DoLabel(font, null, str);
+    self.DoLabel(font, null, fmt, args);
 
     return btn.activated;
 }
