@@ -255,162 +255,203 @@ const RenderData = struct {
     }
 };
 
-pub fn main() !void {
-    errdefer |err| SDLTryErrorPrint(@errorName(err));
+const BASE_LAYOUT = GULayout{
+    .mode_w = .Auto,
+    .mode_h = .Auto,
+    .color = 0x00000000,
+    .widths = &[_]f32{ 200, -400, 200 },
+    .heights = &[_]f32{ 100, -100 },
+    .padding = GUSize{ .w = 8, .h = 8 },
+    .gaps = GUSize{ .w = 8, .h = 8 },
+    .auto_line_break = false,
+};
+const LAYOUT_RED = std.mem.zeroInit(GULayout, .{
+    .color = 0x80000060,
+});
+const LAYOUT_WHITE = std.mem.zeroInit(GULayout, .{
+    .color = 0xFFFFFF20,
+});
+const LAYOUT_WHITE_BREAK = std.mem.zeroInit(GULayout, .{
+    .color = 0xFFFFFF20,
+    .auto_line_break = true,
+});
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const alloc = gpa.allocator();
+const App = struct {
+    gpa: std.heap.GeneralPurposeAllocator(.{}),
+    alloc: std.mem.Allocator,
 
-    // SDL INIT
+    rd: RenderData,
+    gu: GU,
+    font: AsciiFont,
+
+    font_id: usize,
+    img_id: usize,
+    b2toggle: bool,
+    step: bool,
+};
+
+var app_global: App = undefined;
+
+pub export fn SDL_AppInit(app: **App, argc: c_int, argv: [*][:0]u8) c.SDL_AppResult {
+    _ = argc;
+    _ = argv;
+
+    app_global.gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    app_global.alloc = app_global.gpa.allocator();
+    const alloc = app_global.alloc;
 
     c.SDL_SetMainReady();
-    try SDLE(c.SDL_SetAppMetadata("GU", "0.0.0", "com.galeforce.gu"));
-    try SDLE(c.SDL_Init(c.SDL_INIT_VIDEO));
-    defer c.SDL_Quit();
+    SDLEP(c.SDL_SetAppMetadata("GU", "0.0.0", "com.galeforce.gu"));
+    SDLEP(c.SDL_Init(c.SDL_INIT_VIDEO));
 
     // SDL VIDEO INIT
 
-    var rd = try RenderData.Init();
-    defer rd.Deinit();
+    app_global.rd = RenderData.Init() catch |e|
+        std.debug.panic("initializing RenderData failed: {s}", .{@errorName(e)});
 
-    // UI-RELATED SETUP
+    // UI-RELATED
 
-    const base_layout = GULayout{
-        .mode_w = .Auto,
-        .mode_h = .Auto,
-        .color = 0x00000000,
-        .widths = &[_]f32{ 200, -400, 200 },
-        .heights = &[_]f32{ 100, -100 },
-        .padding = GUSize{ .w = 8, .h = 8 },
-        .gaps = GUSize{ .w = 8, .h = 8 },
-        .auto_line_break = false,
-    };
-    const layout_red = std.mem.zeroInit(GULayout, .{
-        .color = 0x80000060,
-    });
-    const layout_white = std.mem.zeroInit(GULayout, .{
-        .color = 0xFFFFFF20,
-    });
-    const layout_white_break = std.mem.zeroInit(GULayout, .{
-        .color = 0xFFFFFF20,
-        .auto_line_break = true,
-    });
+    app_global.gu = GU.Init(alloc, app_global.rd.GetBackend(), BASE_LAYOUT);
 
-    var gu = GU.Init(alloc, rd.GetBackend(), base_layout);
-    defer gu.Deinit();
+    app_global.font = AsciiFont.Init(app_global.rd.renderer, FONT) catch |e|
+        std.debug.panic("initializing AsciiFont failed: {s}", .{@errorName(e)});
+    app_global.font_id = app_global.gu.AddFont(app_global.font.GetFontAtlas()) catch |e|
+        std.debug.panic("AddFont failed: {s}", .{@errorName(e)});
+    app_global.img_id = app_global.gu.AddImage(app_global.font.GetTextureAtlas()) catch |e|
+        std.debug.panic("AddImage failed: {s}", .{@errorName(e)});
 
-    var font = try AsciiFont.Init(rd.renderer, FONT);
-    defer font.Deinit();
-    const font_id = try gu.AddFont(font.GetFontAtlas());
-    const img_id = try gu.AddImage(font.GetTextureAtlas());
+    app_global.b2toggle = false;
+    app_global.step = true;
 
-    var b2toggle: bool = false;
-    var step: bool = true;
+    app.* = &app_global;
+    return c.SDL_APP_CONTINUE;
+}
 
-    // MAIN LOOP
-
-    var quit = false;
-    var event: c.SDL_Event = undefined;
-    while (!quit) quit: {
-        while (c.SDL_PollEvent(&event)) {
-            switch (event.type) {
-                c.SDL_EVENT_QUIT => {
-                    quit = true;
-                    break :quit;
-                },
-                c.SDL_EVENT_MOUSE_MOTION => {
-                    gu.mouse_pt.x = event.motion.x;
-                    gu.mouse_pt.y = event.motion.y;
-                },
-                c.SDL_EVENT_MOUSE_BUTTON_UP, c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
-                    if (event.button.button != c.SDL_BUTTON_LEFT) continue;
-                    const down = event.type == c.SDL_EVENT_MOUSE_BUTTON_DOWN;
-                    gu.mouse_left.Accumulate(down);
-                },
-                c.SDL_EVENT_KEY_DOWN => {
-                    if (event.key.scancode == c.SDL_SCANCODE_RETURN)
-                        step = true;
-                },
-                else => {},
-            }
-        }
-
-        // NOTE: frame advance helper for debugging
-        //if (!step) continue;
-        //step = false;
-
-        try SDLE(c.SDL_SetRenderDrawColor(rd.renderer, 0x00, 0x00, 0x22, 0xFF));
-        try SDLE(c.SDL_RenderClear(rd.renderer));
-
-        try gu.BeginFrame();
-
-        if (gu.DoContainer(&layout_white)) {
-            defer gu.EndContainer();
-            if (gu.DoContainer(&layout_red)) {
-                defer gu.EndContainer();
-                gu.DoLabel(null, 0x00C000FF, "testblock1", .{});
-            }
-            gu.DoLineBreak();
-            if (gu.DoContainer(&layout_red)) {
-                defer gu.EndContainer();
-                if (gu.DoButton(font_id, "Button", .{})) {
-                    std.log.debug("b1 activation result!!", .{});
-                }
-            }
-            gu.DoLineBreak();
-            if (gu.DoContainer(&layout_red)) {
-                defer gu.EndContainer();
-                gu.DoImage(img_id, 0x00C000FF);
-            }
-            gu.DoLineBreak();
-            if (gu.DoContainer(&layout_red)) {
-                defer gu.EndContainer();
-                gu.DoImage(img_id, null);
-            }
-        }
-        if (gu.DoContainer(&layout_white)) {
-            defer gu.EndContainer();
-            gu.DoLabel(null, 0xC000C0FF, "testblock2", .{});
-            if (gu.DoToggleButton(&b2toggle, font_id, "ToggleButton: {any}", .{b2toggle})) {
-                std.log.debug("b2 toggled!!", .{});
-            }
-            if (b2toggle) {
-                gu.DoLabel(null, null, "only visible if b2 is on", .{});
-            }
-            gu.DoImage(img_id, 0xC000C0FF);
-            gu.DoImage(img_id, null);
-        }
-        if (gu.DoContainer(&layout_white)) {
-            defer gu.EndContainer();
-            gu.DoRect(.{ .w = 64, .h = 64 }, 0x000055FF);
-            gu.DoLineBreak();
-            //gu.NextElementOverridePosition(.{ .x = 10, .y = 10 });
-            gu.DoLabel(font_id, 0xC00000FF, "testblock3", .{});
-            gu.DoLineBreak();
-            gu.DoRect(.{ .w = 64, .h = 64 }, 0x2222AAFF); // old outline color
-        }
-        if (gu.DoContainer(&layout_white)) {
-            defer gu.EndContainer();
-            gu.DoLabel(null, 0x0000C0FF, "testing... !!@$(#!QOIEANSHT)", .{});
-        }
-        if (gu.DoContainer(&layout_white_break)) {
-            defer gu.EndContainer();
-            gu.DoLabel(null, 0x00C0C0FF, "testing... with auto linebreak!!", .{});
-            if (gu.DoToggleButton(&b2toggle, font_id, "ToggleButton", .{})) {
-                std.log.debug("b2 toggled!!", .{});
-            }
-            if (b2toggle) {
-                gu.DoLabel(null, null, "only visible if b2 is on", .{});
-            }
-            gu.DoImage(img_id, null);
-        }
-        if (gu.DoContainer(&layout_white)) {
-            defer gu.EndContainer();
-            gu.DoLabel(null, 0xC0C000FF, "testing... !!@$(#!QOIEANSHT)", .{});
-        }
-
-        gu.EndFrame();
-
-        try SDLE(c.SDL_RenderPresent(rd.renderer));
+// normally WM_PAINT would be handled here to smoothly re-render during resize,
+// but SDL3 has no mechanism for accessing it in a 'normal' app, so we use a
+// callback app, which handles that case for us
+pub export fn SDL_AppEvent(app: *App, event: *c.SDL_Event) c.SDL_AppResult {
+    switch (event.type) {
+        c.SDL_EVENT_QUIT => {
+            return c.SDL_APP_SUCCESS;
+        },
+        c.SDL_EVENT_MOUSE_MOTION => {
+            app.gu.mouse_pt.x = event.motion.x;
+            app.gu.mouse_pt.y = event.motion.y;
+        },
+        c.SDL_EVENT_MOUSE_BUTTON_UP, c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
+            if (event.button.button != c.SDL_BUTTON_LEFT) return c.SDL_APP_CONTINUE;
+            const down = event.type == c.SDL_EVENT_MOUSE_BUTTON_DOWN;
+            app.gu.mouse_left.Accumulate(down);
+        },
+        c.SDL_EVENT_KEY_DOWN => {
+            if (event.key.scancode == c.SDL_SCANCODE_RETURN)
+                app.step = true;
+        },
+        else => {},
     }
+    return c.SDL_APP_CONTINUE;
+}
+
+pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
+    const rd = &app.rd;
+    const gu = &app.gu;
+    const font_id = app.font_id;
+    const img_id = app.img_id;
+
+    // NOTE: frame advance helper for debugging
+    //if (!app.step) return c.SDL_APP_CONTINUE;
+    //app.step = false;
+
+    SDLEP(c.SDL_SetRenderDrawColor(rd.renderer, 0x00, 0x00, 0x22, 0xFF));
+    SDLEP(c.SDL_RenderClear(rd.renderer));
+
+    try gu.BeginFrame();
+
+    if (gu.DoContainer(&LAYOUT_WHITE)) {
+        defer gu.EndContainer();
+        if (gu.DoContainer(&LAYOUT_RED)) {
+            defer gu.EndContainer();
+            gu.DoLabel(null, 0x00C000FF, "testblock1", .{});
+        }
+        gu.DoLineBreak();
+        if (gu.DoContainer(&LAYOUT_RED)) {
+            defer gu.EndContainer();
+            if (gu.DoButton(font_id, "Button", .{})) {
+                std.log.debug("b1 activation result!!", .{});
+            }
+        }
+        gu.DoLineBreak();
+        if (gu.DoContainer(&LAYOUT_RED)) {
+            defer gu.EndContainer();
+            gu.DoImage(img_id, 0x00C000FF);
+        }
+        gu.DoLineBreak();
+        if (gu.DoContainer(&LAYOUT_RED)) {
+            defer gu.EndContainer();
+            gu.DoImage(img_id, null);
+        }
+    }
+    if (gu.DoContainer(&LAYOUT_WHITE)) {
+        defer gu.EndContainer();
+        gu.DoLabel(null, 0xC000C0FF, "testblock2", .{});
+        if (gu.DoToggleButton(&app.b2toggle, font_id, "ToggleButton: {any}", .{app.b2toggle})) {
+            std.log.debug("b2 toggled!!", .{});
+        }
+        if (app.b2toggle) {
+            gu.DoLabel(null, null, "only visible if b2 is on", .{});
+        }
+        gu.DoImage(img_id, 0xC000C0FF);
+        gu.DoImage(img_id, null);
+    }
+    if (gu.DoContainer(&LAYOUT_WHITE)) {
+        defer gu.EndContainer();
+        gu.DoRect(.{ .w = 64, .h = 64 }, 0x000055FF);
+        gu.DoLineBreak();
+        //gu.NextElementOverridePosition(.{ .x = 10, .y = 10 });
+        gu.DoLabel(font_id, 0xC00000FF, "testblock3", .{});
+        gu.DoLineBreak();
+        gu.DoRect(.{ .w = 64, .h = 64 }, 0x2222AAFF); // old outline color
+    }
+    if (gu.DoContainer(&LAYOUT_WHITE)) {
+        defer gu.EndContainer();
+        gu.DoLabel(null, 0x0000C0FF, "testing... !!@$(#!QOIEANSHT)", .{});
+    }
+    if (gu.DoContainer(&LAYOUT_WHITE_BREAK)) {
+        defer gu.EndContainer();
+        gu.DoLabel(null, 0x00C0C0FF, "testing... with auto linebreak!!", .{});
+        if (gu.DoToggleButton(&app.b2toggle, font_id, "ToggleButton", .{})) {
+            std.log.debug("b2 toggled!!", .{});
+        }
+        if (app.b2toggle) {
+            gu.DoLabel(null, null, "only visible if b2 is on", .{});
+        }
+        gu.DoImage(img_id, null);
+    }
+    if (gu.DoContainer(&LAYOUT_WHITE)) {
+        defer gu.EndContainer();
+        gu.DoLabel(null, 0xC0C000FF, "testing... !!@$(#!QOIEANSHT)", .{});
+    }
+
+    gu.EndFrame();
+
+    SDLEP(c.SDL_RenderPresent(rd.renderer));
+
+    return c.SDL_APP_CONTINUE;
+}
+
+pub export fn SDL_AppQuit(app: *App, _: c.SDL_AppResult) void {
+    app.font.Deinit();
+    app.gu.Deinit();
+    app.rd.Deinit();
+}
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const alloc = gpa.allocator();
+
+    const args = try std.process.argsAlloc(alloc);
+    defer std.process.argsFree(alloc, args);
+
+    _ = c.SDL_main(@intCast(args.len), @ptrCast(args.ptr));
 }

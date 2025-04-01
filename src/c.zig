@@ -3,7 +3,7 @@ const std = @import("std");
 pub const c = @cImport({
     @cDefine("SDL_DISABLE_OLD_NAMES", {});
     @cInclude("SDL3/sdl.h");
-    @cDefine("SDL_MAIN_HANDLED", {});
+    @cDefine("SDL_MAIN_USE_CALLBACKS", {});
     @cInclude("SDL3/sdl_main.h");
 });
 
