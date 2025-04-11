@@ -21,7 +21,18 @@ pub fn build(b: *std.Build) void {
         exe.root_module.linkLibrary(sdl_lib);
     }
 
-    exe.root_module.addAnonymousImport("ascii-font", .{ .root_source_file = b.path("assets/ascii.bmp") });
+    exe.root_module.addAnonymousImport("ascii-font", .{
+        .root_source_file = b.path("assets/ascii.bmp"),
+    });
+    exe.root_module.addAnonymousImport("corner-round", .{
+        .root_source_file = b.path("assets/corner-round.bmp"),
+    });
+    exe.root_module.addAnonymousImport("corner-angular", .{
+        .root_source_file = b.path("assets/corner-angular.bmp"),
+    });
+    exe.root_module.addAnonymousImport("corner-beveled", .{
+        .root_source_file = b.path("assets/corner-beveled.bmp"),
+    });
 
     b.installArtifact(exe);
 

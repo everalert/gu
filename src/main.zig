@@ -8,6 +8,7 @@ const SDLTryErrorPrint = @import("c.zig").SDLTryErrorPrint;
 const GU = @import("gu.zig");
 const GUBackend = GU.GUBackend;
 const GURect = GU.GURect;
+const GUCorner = GU.GUCorner;
 const GUPos = GU.GUPos;
 const GUSize = GU.GUSize;
 const GUColor = GU.GUColor;
@@ -15,6 +16,7 @@ const GUTextureAtlas = GU.GUTextureAtlas;
 const GUFontAtlas = GU.GUFontAtlas;
 const GUButton = GU.GUButton;
 const GULayout = GU.GULayout;
+const GURenderCommand = GU.GURenderCommand;
 
 const WINDOW_W = 800;
 const WINDOW_H = 600;
@@ -142,23 +144,66 @@ const AsciiFont = struct {
     }
 };
 
+const CORNER_ROUND = @embedFile("corner-round");
+const CORNER_ANGULAR = @embedFile("corner-angular");
+const CORNER_BEVELED = @embedFile("corner-beveled");
+
+const CornerTexture = struct {
+    texture: *c.SDL_Texture,
+    size: f32,
+
+    pub fn Init(renderer: ?*c.SDL_Renderer, bmp: []const u8) !CornerTexture {
+        const stream: *c.SDL_IOStream = try SDLE(c.SDL_IOFromConstMem(bmp.ptr, bmp.len));
+        const surface: *c.SDL_Surface = try SDLE(c.SDL_LoadBMP_IO(stream, true));
+        defer c.SDL_DestroySurface(surface);
+        const t: *c.SDL_Texture = try SDLE(c.SDL_CreateTextureFromSurface(renderer, surface));
+
+        std.debug.assert(t.w == t.h);
+        std.debug.assert(@mod(t.w, 2) == 0);
+        return CornerTexture{
+            .texture = t,
+            .size = @floatFromInt(@divExact(t.w, 2)),
+        };
+    }
+
+    pub fn Deinit(self: *CornerTexture) void {
+        c.SDL_DestroyTexture(self.texture);
+    }
+};
+
 const RenderData = struct {
     window: ?*c.SDL_Window,
     renderer: ?*c.SDL_Renderer,
     stored_clip: ?c.SDL_Rect,
+    tex_corner_round: CornerTexture,
+    tex_corner_angular: CornerTexture,
+    tex_corner_beveled: CornerTexture,
 
     pub fn Init() !RenderData {
         var w: ?*c.SDL_Window = undefined;
         var r: ?*c.SDL_Renderer = undefined;
         SDLE(c.SDL_SetHint(c.SDL_HINT_RENDER_VSYNC, "1")) catch {};
         try SDLE(c.SDL_CreateWindowAndRenderer("GU", WINDOW_W, WINDOW_H, 0, &w, &r));
+        const tex_corner_round = try CornerTexture.Init(r, CORNER_ROUND);
+        const tex_corner_angular = try CornerTexture.Init(r, CORNER_ANGULAR);
+        const tex_corner_beveled = try CornerTexture.Init(r, CORNER_BEVELED);
         errdefer comptime unreachable;
         SDLEP(c.SDL_SetRenderDrawBlendMode(r, c.SDL_BLENDMODE_BLEND));
         SDLE(c.SDL_SetWindowResizable(w, true)) catch {};
-        return RenderData{ .window = w, .renderer = r, .stored_clip = null };
+        return RenderData{
+            .window = w,
+            .renderer = r,
+            .stored_clip = null,
+            .tex_corner_round = tex_corner_round,
+            .tex_corner_angular = tex_corner_angular,
+            .tex_corner_beveled = tex_corner_beveled,
+        };
     }
 
     pub fn Deinit(self: *RenderData) void {
+        self.tex_corner_round.Deinit();
+        self.tex_corner_angular.Deinit();
+        self.tex_corner_beveled.Deinit();
         c.SDL_DestroyWindow(self.window);
         c.SDL_DestroyRenderer(self.renderer);
     }
@@ -187,37 +232,58 @@ const RenderData = struct {
         return GURect{ .x = 0, .y = 0, .w = sd.w, .h = sd.h };
     }
 
-    fn DrawRect(ptr: *anyopaque, rect: *const GURect, color: u32) void {
+    fn DrawRect(ptr: *anyopaque, cmd: *const GURenderCommand.Rect) void {
         const self: *RenderData = @alignCast(@ptrCast(ptr));
-        const c1 = GUColor.FromInt(color);
+        const c1 = GUColor.FromInt(cmd.color);
         SDLEP(c.SDL_SetRenderDrawColor(self.renderer, c1.r, c1.g, c1.b, c1.a));
-        SDLEP(c.SDL_RenderFillRect(self.renderer, &.{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h }));
-        //if (outline_color) |col| {
-        //    const c2 = GUColor.FromInt(col);
-        //    SDLEP(c.SDL_SetRenderDrawColor(self.renderer, c2.r, c2.g, c2.b, c2.a));
-        //    SDLEP(c.SDL_RenderRect(self.renderer, &.{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h }));
-        //}
+
+        if (cmd.corner.style == .None or cmd.corner.radius <= 0 or cmd.rect.w <= 1 or cmd.rect.h <= 1) {
+            SDLEP(c.SDL_RenderFillRect(self.renderer, &.{ .x = cmd.rect.x, .y = cmd.rect.y, .w = cmd.rect.w, .h = cmd.rect.h }));
+            return;
+        }
+
+        const tex: *CornerTexture = switch (cmd.corner.style) {
+            .Round => &self.tex_corner_round,
+            .Custom1 => &self.tex_corner_angular,
+            .Custom2 => &self.tex_corner_beveled,
+            else => unreachable,
+        };
+        SDLEP(c.SDL_SetTextureAlphaMod(tex.texture, c1.a));
+        SDLEP(c.SDL_SetTextureColorMod(tex.texture, c1.r, c1.g, c1.b));
+
+        const dst_size: f32 = @min(@floor(cmd.rect.GetSmallestDimension() / 2), cmd.corner.radius);
+        SDLEP(c.SDL_RenderTexture9Grid(
+            self.renderer,
+            tex.texture,
+            null,
+            tex.size,
+            tex.size,
+            tex.size,
+            tex.size,
+            dst_size / tex.size,
+            &.{ .x = cmd.rect.x, .y = cmd.rect.y, .w = cmd.rect.w, .h = cmd.rect.h },
+        ));
     }
 
-    fn DrawString(_: *anyopaque, font: *GUFontAtlas, pos: *const GUPos, str: []const u8, color: u32) void {
+    fn DrawString(_: *anyopaque, cmd: *const GURenderCommand.Text) void {
         //const self: *RenderData = @alignCast(@ptrCast(ptr));
-        font.SetColor(color);
-        font.DrawString(str, pos);
+        cmd.font.SetColor(cmd.color);
+        cmd.font.DrawString(cmd.str, &cmd.pos);
     }
 
-    fn DrawImage(_: *anyopaque, image: *GUTextureAtlas, pos: *const GUPos, color: u32) void {
+    fn DrawImage(_: *anyopaque, cmd: *const GURenderCommand.Image) void {
         //const self: *RenderData = @alignCast(@ptrCast(ptr));
-        image.SetColor(color);
-        image.Draw(pos);
+        cmd.image.SetColor(cmd.color);
+        cmd.image.Draw(&cmd.pos);
     }
 
-    fn SetClip(ptr: *anyopaque, area: *const GURect) void {
+    fn SetClip(ptr: *anyopaque, cmd: *const GURenderCommand.Clip) void {
         const self: *RenderData = @alignCast(@ptrCast(ptr));
         const rect = c.SDL_Rect{
-            .x = @as(c_int, @intFromFloat(area.x)),
-            .y = @as(c_int, @intFromFloat(area.y)),
-            .w = @as(c_int, @intFromFloat(area.w)),
-            .h = @as(c_int, @intFromFloat(area.h)),
+            .x = @as(c_int, @intFromFloat(cmd.area.x)),
+            .y = @as(c_int, @intFromFloat(cmd.area.y)),
+            .w = @as(c_int, @intFromFloat(cmd.area.w)),
+            .h = @as(c_int, @intFromFloat(cmd.area.h)),
         };
         SDLEP(c.SDL_SetRenderClipRect(self.renderer, &rect));
     }
@@ -255,6 +321,9 @@ const RenderData = struct {
     }
 };
 
+const StyleAngular = GUCorner.Style.Custom1;
+const StyleBeveled = GUCorner.Style.Custom2;
+
 const BASE_LAYOUT = GULayout{
     .mode_w = .Auto,
     .mode_h = .Auto,
@@ -264,16 +333,24 @@ const BASE_LAYOUT = GULayout{
     .padding = GUSize{ .w = 8, .h = 8 },
     .gaps = GUSize{ .w = 8, .h = 8 },
     .auto_line_break = false,
+    .corner = .{ .radius = 0, .style = .None },
 };
+
 const LAYOUT_RED = std.mem.zeroInit(GULayout, .{
     .color = 0x80000060,
 });
+
 const LAYOUT_WHITE = std.mem.zeroInit(GULayout, .{
     .color = 0xFFFFFF20,
+    .padding = GUSize{ .w = 4, .h = 4 },
+    .corner = .{ .style = .Round, .radius = 8 },
 });
+
 const LAYOUT_WHITE_BREAK = std.mem.zeroInit(GULayout, .{
     .color = 0xFFFFFF20,
     .auto_line_break = true,
+    .padding = GUSize{ .w = 4, .h = 4 },
+    .corner = .{ .style = StyleBeveled, .radius = 6 },
 });
 
 const App = struct {

@@ -30,6 +30,14 @@ pub const GURect = struct {
             self.y <= other.y + other.h);
     }
 
+    pub inline fn HasNonZeroArea(self: *const GURect) bool {
+        return self.w > 0 and self.h > 0;
+    }
+
+    pub inline fn GetSmallestDimension(self: *const GURect) f32 {
+        return @min(self.w, self.h);
+    }
+
     /// AND operation
     pub fn GetIntersection(r1: *const GURect, r2: *const GURect) GURect {
         const x = @max(r1.x, r2.x);
@@ -84,10 +92,10 @@ pub const GUColor = extern struct {
 pub const GUBackend = struct {
     ptr: *anyopaque,
     fnGetSurfaceDimensions: *const fn (*anyopaque) GUSize,
-    fnDrawRect: *const fn (*anyopaque, *const GURect, u32) void,
-    fnDrawString: *const fn (*anyopaque, *GUFontAtlas, *const GUPos, []const u8, u32) void,
-    fnDrawImage: *const fn (*anyopaque, *GUTextureAtlas, *const GUPos, u32) void,
-    fnSetClip: *const fn (*anyopaque, *const GURect) void,
+    fnDrawRect: *const fn (*anyopaque, *const GURenderCommand.Rect) void,
+    fnDrawString: *const fn (*anyopaque, *const GURenderCommand.Text) void,
+    fnDrawImage: *const fn (*anyopaque, *const GURenderCommand.Image) void,
+    fnSetClip: *const fn (*anyopaque, *const GURenderCommand.Clip) void,
     fnBeginRendering: *const fn (*anyopaque) void,
     fnEndRendering: *const fn (*anyopaque) void,
 
@@ -95,21 +103,21 @@ pub const GUBackend = struct {
         return self.fnGetSurfaceDimensions(self.ptr);
     }
 
-    pub fn DrawRect(self: *GUBackend, rect: *const GURect, color: u32) void {
-        self.fnDrawRect(self.ptr, rect, color);
+    pub fn DrawRect(self: *GUBackend, cmd: *const GURenderCommand.Rect) void {
+        self.fnDrawRect(self.ptr, cmd);
     }
 
-    pub fn DrawString(self: *GUBackend, tex: *GUFontAtlas, pos: *const GUPos, str: []const u8, color: u32) void {
-        self.fnDrawString(self.ptr, tex, pos, str, color);
+    pub fn DrawString(self: *GUBackend, cmd: *const GURenderCommand.Text) void {
+        self.fnDrawString(self.ptr, cmd);
     }
 
     // TODO: impl tile drawing, see GURenderCommand->Image
-    pub fn DrawImage(self: *GUBackend, tex: *GUTextureAtlas, pos: *const GUPos, color: u32) void {
-        self.fnDrawImage(self.ptr, tex, pos, color);
+    pub fn DrawImage(self: *GUBackend, cmd: *const GURenderCommand.Image) void {
+        self.fnDrawImage(self.ptr, cmd);
     }
 
-    pub fn SetClip(self: *GUBackend, area: *const GURect) void {
-        self.fnSetClip(self.ptr, area);
+    pub fn SetClip(self: *GUBackend, cmd: *const GURenderCommand.Clip) void {
+        self.fnSetClip(self.ptr, cmd);
     }
 
     /// called as a way to signal to the backend that we are about to render a
@@ -124,26 +132,46 @@ pub const GUBackend = struct {
     }
 };
 
+pub const GUCorner = struct {
+    pub const Style = enum(u32) { None, Round, Custom1, Custom2, Custom3, Custom4, Custom5, Custom6 };
+
+    radius: f32,
+    style: Style,
+};
+
+// FIXME: don't really like having the field types separated, but afaik needed to
+// pass their types to function params (see GUBackend); investigate to confirm
+// that it's actually not possible/practical to reference the field type directly
+// WARN: also, not sure it's necessarily a good idea to obfuscate the field members
+// when calling the GUBackend functions; however, it makes for cleaner fn defs
+// and theoretically cuts down on stack thrashing (to compare/confirm), need to
+// make a final call on which way to do it
 pub const GURenderCommand = union(enum) {
-    Rect: struct {
+    pub const Rect = struct {
         rect: GURect,
+        corner: GUCorner,
         color: u32,
-    },
-    Text: struct {
+    };
+    pub const Text = struct {
         str: []const u8,
         font: *GUFontAtlas,
         pos: GUPos,
         color: u32,
-    },
-    Image: struct {
+    };
+    pub const Image = struct {
         image: *GUTextureAtlas,
         tile: ?u32, // for texture atlases
         pos: GUPos,
         color: u32,
-    },
-    Clip: struct {
+    };
+    pub const Clip = struct {
         area: GURect,
-    },
+    };
+
+    Rect: Rect,
+    Text: Text,
+    Image: Image,
+    Clip: Clip,
 };
 
 // TODO: add CanDrawString to check against supported character range in font impl
@@ -210,6 +238,7 @@ const GUButtonState = enum(u32) { Idle, Hover, Down };
 pub const GUButton = struct {
     const PADDING_VERTICAL: f32 = 2;
     const PADDING_HORIZONTAL: f32 = 8;
+    const CORNER_RADIUS: f32 = 6;
     const COLOR_IDLE: u32 = 0x008000FF;
     const COLOR_HOVER: u32 = 0x00C000FF;
     const COLOR_DOWN: u32 = 0x004000FF;
@@ -394,6 +423,7 @@ pub const GULayout = struct {
     mode_w: GUDimensionMode, // derived from parent 'widths' field if .Auto
     mode_h: GUDimensionMode, // derived from parent 'heights' field if .Auto
     color: u32,
+    corner: GUCorner,
     widths: ?[]const f32,
     heights: ?[]const f32,
     padding: GUSize,
@@ -543,10 +573,10 @@ pub fn EndFrame(self: *GU) void {
 
     for (self.render_commands.items) |command| {
         switch (command) {
-            .Rect => |rect| self.backend.DrawRect(&rect.rect, rect.color),
-            .Text => |text| self.backend.DrawString(text.font, &text.pos, text.str, text.color),
-            .Image => |img| self.backend.DrawImage(img.image, &img.pos, img.color),
-            .Clip => |clip| self.backend.SetClip(&clip.area),
+            .Rect => |*rect| self.backend.DrawRect(rect),
+            .Text => |*text| self.backend.DrawString(text),
+            .Image => |*img| self.backend.DrawImage(img),
+            .Clip => |*clip| self.backend.SetClip(clip),
         }
     }
 
@@ -704,6 +734,7 @@ fn DoElementEmitDrawCommands(self: *GU) void {
         };
 
         if (GUColor.FromInt(e.layout.color).a == 0) continue;
+        if (!e.area.HasNonZeroArea()) continue;
 
         self.render_commands.append(switch (e.mode) {
             .Label => |label| .{ .Text = .{
@@ -720,6 +751,7 @@ fn DoElementEmitDrawCommands(self: *GU) void {
             } },
             .Rect, .Button, .Block => .{ .Rect = .{
                 .rect = e.area,
+                .corner = e.layout.corner,
                 .color = e.layout.color,
             } },
         }) catch |err| std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
@@ -991,6 +1023,7 @@ pub fn DoButton(self: *GU, font: ?GUFontHandle, comptime fmt: []const u8, args: 
         .Down => GUButton.COLOR_DOWN,
     };
     element.layout.padding = .{ .w = GUButton.PADDING_HORIZONTAL, .h = GUButton.PADDING_VERTICAL };
+    element.layout.corner = .{ .radius = GUButton.CORNER_RADIUS, .style = .Round };
 
     self.DoLabel(font, null, fmt, args);
 
@@ -1016,6 +1049,7 @@ pub fn DoToggleButton(self: *GU, active: *bool, font: ?GUFontHandle, comptime fm
         .Down => GUButton.COLOR_DOWN,
     };
     element.layout.padding = .{ .w = GUButton.PADDING_HORIZONTAL, .h = GUButton.PADDING_VERTICAL };
+    element.layout.corner = .{ .radius = GUButton.CORNER_RADIUS, .style = .Round };
 
     self.DoLabel(font, null, fmt, args);
 
