@@ -1,7 +1,7 @@
 .{
     .name = .GU,
     .version = "0.1.0",
-    .minimum_zig_version = "0.13.0",
+    .minimum_zig_version = "0.15.1",
     .fingerprint = 0xe5e06e467d718dbd,
 
     .dependencies = .{
@@ -16,10 +16,10 @@
         "build.zig",
         "build.zig.zon",
         "src",
-        "assets",
+        //"assets",
         "LICENSE",
-        "README.md",
-        "MANUAL.md",
+        //"README.md",
+        //"MANUAL.md",
         //"clean.bat",
     },
 }
