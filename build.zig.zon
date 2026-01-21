@@ -1,20 +1,25 @@
 .{
-    .name = "GU",
-    .version = "0.0.0",
+    .name = .GU,
+    .version = "0.1.0",
     .minimum_zig_version = "0.13.0",
+    .fingerprint = 0xe5e06e467d718dbd,
+
     .dependencies = .{
         .sdl = .{
-            .url = "https://github.com/castholm/SDL/archive/refs/tags/v0.1.3+SDL-3.2.0.tar.gz",
-            .hash = "122046c6dcdcf941e6e5b1e8fa273185d04420e56436d47b906308eaf70208222f59",
+            .url = "git+https://github.com/castholm/SDL/?ref=v0.4.0+3.4.0#ae5deb068787bd71d9aadbc054ff1af54f5d058c",
+            .hash = "sdl-0.4.0+3.4.0-SDL--u6yowGyvoiJ5qkFm_T1-MpmvnHShh2q2mTZf1fo",
             .lazy = true,
         },
     },
+
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
+        "assets",
         "LICENSE",
         "README.md",
         "MANUAL.md",
+        //"clean.bat",
     },
 }
