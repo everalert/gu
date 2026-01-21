@@ -11,14 +11,14 @@ pub const SDLError = error{SDL_ERROR};
 
 // errify SDL return values
 pub inline fn SDLE(value: anytype) SDLError!switch (@typeInfo(@TypeOf(value))) {
-    .Bool => void,
-    .Pointer, .Optional, .Int => @TypeOf(value.?),
+    .bool => void,
+    .pointer, .optional, .int => @TypeOf(value.?),
     else => @compileError("Unerrifiable SDL type: " ++ @typeName(@TypeOf(value))),
 } {
     return switch (@typeInfo(@TypeOf(value))) {
-        .Bool => if (!value) error.SDL_ERROR,
-        .Pointer, .Optional => value orelse error.SDL_ERROR,
-        .Int => |info| switch (info.signedness) {
+        .bool => if (!value) error.SDL_ERROR,
+        .pointer, .optional => value orelse error.SDL_ERROR,
+        .int => |info| switch (info.signedness) {
             .signed => if (value >= 0) @max(0, value) else error.SDL_ERROR,
             .unsigned => if (value != 0) value else error.SDL_ERROR,
         },
@@ -28,8 +28,8 @@ pub inline fn SDLE(value: anytype) SDLError!switch (@typeInfo(@TypeOf(value))) {
 
 // SDLE Panic
 pub inline fn SDLEP(value: anytype) switch (@typeInfo(@TypeOf(value))) {
-    .Bool => void,
-    .Pointer, .Optional, .Int => @TypeOf(value.?),
+    .bool => void,
+    .pointer, .optional, .int => @TypeOf(value.?),
     else => @compileError("Unerrifiable SDL type: " ++ @typeName(@TypeOf(value))),
 } {
     return SDLE(value) catch |err| {

@@ -45,7 +45,7 @@ const AsciiFont = struct {
 
     // TODO: use alpha from input color
     fn SetColor(ptr: *anyopaque, color: u32) void {
-        const self: *AsciiFont = @alignCast(@ptrCast(ptr));
+        const self: *AsciiFont = @ptrCast(@alignCast(ptr));
         const rgba = GUColor.FromInt(color);
         SDLEP(c.SDL_SetTextureColorMod(self.texture, rgba.r, rgba.g, rgba.b));
     }
@@ -67,7 +67,7 @@ const AsciiFont = struct {
     }
 
     fn DrawString(ptr: *anyopaque, str: []const u8, pos: *const GUPos) void {
-        const self: *AsciiFont = @alignCast(@ptrCast(ptr));
+        const self: *AsciiFont = @ptrCast(@alignCast(ptr));
         std.debug.assert(std.mem.min(u8, str) >= ' ');
         std.debug.assert(std.mem.max(u8, str) < 127);
         var rolling_pos = pos.*;
@@ -78,7 +78,7 @@ const AsciiFont = struct {
     }
 
     fn DrawChar(ptr: *anyopaque, char: u8, pos: *const GUPos) void {
-        const self: *AsciiFont = @alignCast(@ptrCast(ptr));
+        const self: *AsciiFont = @ptrCast(@alignCast(ptr));
         std.debug.assert(char >= ' ');
         std.debug.assert(char < 127);
         const size = CharSize(ptr, char);
@@ -107,7 +107,7 @@ const AsciiFont = struct {
     // TEXTURE RELATED
 
     fn Draw(ptr: *anyopaque, pos: *const GUPos) void {
-        const self: *AsciiFont = @alignCast(@ptrCast(ptr));
+        const self: *AsciiFont = @ptrCast(@alignCast(ptr));
         const size = Size(ptr);
         SDLEP(c.SDL_RenderTexture(
             self.renderer,
@@ -123,7 +123,7 @@ const AsciiFont = struct {
     }
 
     fn Size(ptr: *anyopaque) GUSize {
-        const self: *AsciiFont = @alignCast(@ptrCast(ptr));
+        const self: *AsciiFont = @ptrCast(@alignCast(ptr));
         return GUSize{ .w = @floatFromInt(self.texture.w), .h = @floatFromInt(self.texture.h) };
     }
 
@@ -211,7 +211,7 @@ const RenderData = struct {
     // BACKEND
 
     fn GetSurfaceDimensions(ptr: *anyopaque) GUSize {
-        const self: *RenderData = @alignCast(@ptrCast(ptr));
+        const self: *RenderData = @ptrCast(@alignCast(ptr));
         var screen_w: c_int = undefined;
         var screen_h: c_int = undefined;
         SDLEP(c.SDL_GetRenderOutputSize(self.renderer, &screen_w, &screen_h));
@@ -219,7 +219,7 @@ const RenderData = struct {
     }
 
     fn GetClip(ptr: *anyopaque) GURect {
-        const self: *RenderData = @alignCast(@ptrCast(ptr));
+        const self: *RenderData = @ptrCast(@alignCast(ptr));
         if (self.stored_clip) |*clip| {
             return GURect{
                 .x = @as(f32, @floatFromInt(clip.x)),
@@ -233,7 +233,7 @@ const RenderData = struct {
     }
 
     fn DrawRect(ptr: *anyopaque, cmd: *const GURenderCommand.Rect) void {
-        const self: *RenderData = @alignCast(@ptrCast(ptr));
+        const self: *RenderData = @ptrCast(@alignCast(ptr));
         const c1 = GUColor.FromInt(cmd.color);
         SDLEP(c.SDL_SetRenderDrawColor(self.renderer, c1.r, c1.g, c1.b, c1.a));
 
@@ -278,7 +278,7 @@ const RenderData = struct {
     }
 
     fn SetClip(ptr: *anyopaque, cmd: *const GURenderCommand.Clip) void {
-        const self: *RenderData = @alignCast(@ptrCast(ptr));
+        const self: *RenderData = @ptrCast(@alignCast(ptr));
         const rect = c.SDL_Rect{
             .x = @as(c_int, @intFromFloat(cmd.area.x)),
             .y = @as(c_int, @intFromFloat(cmd.area.y)),
@@ -289,7 +289,7 @@ const RenderData = struct {
     }
 
     fn BeginRendering(ptr: *anyopaque) void {
-        const self: *RenderData = @alignCast(@ptrCast(ptr));
+        const self: *RenderData = @ptrCast(@alignCast(ptr));
         std.debug.assert(self.stored_clip == null);
         if (c.SDL_RenderClipEnabled(self.renderer)) {
             var clip: c.SDL_Rect = undefined;
@@ -299,7 +299,7 @@ const RenderData = struct {
     }
 
     fn EndRendering(ptr: *anyopaque) void {
-        const self: *RenderData = @alignCast(@ptrCast(ptr));
+        const self: *RenderData = @ptrCast(@alignCast(ptr));
         SDLEP(c.SDL_SetRenderClipRect(
             self.renderer,
             if (self.stored_clip) |*clip| clip else null,

@@ -147,31 +147,34 @@ pub const GUCorner = struct {
 // and theoretically cuts down on stack thrashing (to compare/confirm), need to
 // make a final call on which way to do it
 pub const GURenderCommand = union(enum) {
+    rect: Rect,
+    text: Text,
+    image: Image,
+    clip: Clip,
+
     pub const Rect = struct {
         rect: GURect,
         corner: GUCorner,
         color: u32,
     };
+
     pub const Text = struct {
         str: []const u8,
         font: *GUFontAtlas,
         pos: GUPos,
         color: u32,
     };
+
     pub const Image = struct {
         image: *GUTextureAtlas,
         tile: ?u32, // for texture atlases
         pos: GUPos,
         color: u32,
     };
+
     pub const Clip = struct {
         area: GURect,
     };
-
-    Rect: Rect,
-    Text: Text,
-    Image: Image,
-    Clip: Clip,
 };
 
 // TODO: add CanDrawString to check against supported character range in font impl
@@ -496,15 +499,15 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
         .allocator = alloc,
         .label_arena = ArenaAllocator.init(alloc),
         .backend = backend,
-        .fonts = ArrayList(GUFontAtlas).init(alloc),
-        .images = ArrayList(GUTextureAtlas).init(alloc),
-        .element_tree = ArrayList(GUElement).init(alloc),
-        .element_stack = ArrayList(usize).init(alloc),
-        .element_line_stack = ArrayList(GULineData).init(alloc),
-        .clip_stack = ArrayList(GURect).init(alloc),
+        .fonts = ArrayList(GUFontAtlas).empty,
+        .images = ArrayList(GUTextureAtlas).empty,
+        .element_tree = ArrayList(GUElement).empty,
+        .element_stack = ArrayList(usize).empty,
+        .element_line_stack = ArrayList(GULineData).empty,
+        .clip_stack = ArrayList(GURect).empty,
         .buttons = StringHashMap(GUButton).init(alloc),
-        .button_delete_queue = ArrayList([]const u8).init(alloc),
-        .render_commands = ArrayList(GURenderCommand).init(alloc),
+        .button_delete_queue = ArrayList([]const u8).empty,
+        .render_commands = ArrayList(GURenderCommand).empty,
         .base_layout = base_layout orelse GULayout.Default,
         .mouse_pt = .{ .x = -1, .y = -1 },
     });
@@ -512,26 +515,26 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
 
 pub fn Deinit(self: *GU) void {
     self.label_arena.deinit();
-    self.render_commands.deinit();
-    self.clip_stack.deinit();
-    self.element_line_stack.deinit();
-    self.element_stack.deinit();
-    self.element_tree.deinit();
-    self.images.deinit();
-    self.fonts.deinit();
+    self.render_commands.deinit(self.allocator);
+    self.clip_stack.deinit(self.allocator);
+    self.element_line_stack.deinit(self.allocator);
+    self.element_stack.deinit(self.allocator);
+    self.element_tree.deinit(self.allocator);
+    self.images.deinit(self.allocator);
+    self.fonts.deinit(self.allocator);
 }
 
 // RESOURCES
 
 // TODO: impl handle-based system
 pub fn AddFont(self: *GU, font: GUFontAtlas) !usize {
-    try self.fonts.append(font);
+    try self.fonts.append(self.allocator, font);
     return self.fonts.items.len - 1;
 }
 
 // TODO: impl handle-based system
 pub fn AddImage(self: *GU, image: GUTextureAtlas) !usize {
-    try self.images.append(image);
+    try self.images.append(self.allocator, image);
     return self.images.items.len - 1;
 }
 
@@ -548,7 +551,7 @@ pub fn BeginFrame(self: *GU) !void {
     self.element_sibling = null;
     self.mouse_left.Update();
 
-    self.element_line_stack.append(zeroInit(GULineData, .{ .line = 1 })) catch unreachable;
+    self.element_line_stack.append(self.allocator, zeroInit(GULineData, .{ .line = 1 })) catch unreachable;
     if (!self.DoElement(&self.base_layout)) unreachable;
     const element = self.GetElement();
     element.layout.mode_w = .Fixed;
@@ -573,10 +576,10 @@ pub fn EndFrame(self: *GU) void {
 
     for (self.render_commands.items) |command| {
         switch (command) {
-            .Rect => |*rect| self.backend.DrawRect(rect),
-            .Text => |*text| self.backend.DrawString(text),
-            .Image => |*img| self.backend.DrawImage(img),
-            .Clip => |*clip| self.backend.SetClip(clip),
+            .rect => |*rect| self.backend.DrawRect(rect),
+            .text => |*text| self.backend.DrawString(text),
+            .image => |*img| self.backend.DrawImage(img),
+            .clip => |*clip| self.backend.SetClip(clip),
         }
     }
 
@@ -707,7 +710,7 @@ fn DoElementEmitDrawCommands(self: *GU) void {
     const stack = &self.clip_stack;
     const sd = self.backend.GetSurfaceDimensions();
     const c_base = GURect{ .x = 0, .y = 0, .w = sd.w, .h = sd.h };
-    self.render_commands.append(.{ .Clip = .{ .area = c_base } }) catch |err|
+    self.render_commands.append(self.allocator, .{ .clip = .{ .area = c_base } }) catch |err|
         std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
     var c: *const GURect = &c_base;
 
@@ -720,36 +723,36 @@ fn DoElementEmitDrawCommands(self: *GU) void {
         if (it_data.relation == .Parent) {
             _ = stack.pop();
             c = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &c_base;
-            self.render_commands.append(.{ .Clip = .{ .area = c.* } }) catch |err|
+            self.render_commands.append(self.allocator, .{ .clip = .{ .area = c.* } }) catch |err|
                 std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
             continue;
         }
 
         defer if (it_data.relation != .Parent and e.first_child != null) {
-            stack.append(e.area.GetIntersection(c)) catch |err|
+            stack.append(self.allocator, e.area.GetIntersection(c)) catch |err|
                 std.log.err("DoElementEmitDrawCommands: Clip Stack ({s})", .{@errorName(err)});
             c = &stack.items[stack.items.len - 1];
-            self.render_commands.append(.{ .Clip = .{ .area = c.* } }) catch |err|
+            self.render_commands.append(self.allocator, .{ .clip = .{ .area = c.* } }) catch |err|
                 std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
         };
 
         if (GUColor.FromInt(e.layout.color).a == 0) continue;
         if (!e.area.HasNonZeroArea()) continue;
 
-        self.render_commands.append(switch (e.mode) {
-            .Label => |label| .{ .Text = .{
+        self.render_commands.append(self.allocator, switch (e.mode) {
+            .Label => |label| .{ .text = .{
                 .pos = GUPos.FromRect(&e.area),
                 .font = &self.fonts.items[label.font],
                 .color = e.layout.color,
                 .str = label.str,
             } },
-            .Image => |img| .{ .Image = .{
+            .Image => |img| .{ .image = .{
                 .pos = GUPos.FromRect(&e.area),
                 .image = &self.images.items[img.image],
                 .color = e.layout.color,
                 .tile = null,
             } },
-            .Rect, .Button, .Block => .{ .Rect = .{
+            .Rect, .Button, .Block => .{ .rect = .{
                 .rect = e.area,
                 .corner = e.layout.corner,
                 .color = e.layout.color,
@@ -776,7 +779,7 @@ fn DoButtonPostProcessing(self: *GU) void {
     while (it.next()) |btn_info| {
         const btn = btn_info.value_ptr;
         if (btn.element == maxInt(usize)) {
-            self.button_delete_queue.append(btn_info.key_ptr.*) catch |err|
+            self.button_delete_queue.append(self.allocator, btn_info.key_ptr.*) catch |err|
                 std.debug.panic("DoButtonPostProcessing ({s})", .{@errorName(err)});
             continue;
         }
@@ -784,7 +787,7 @@ fn DoButtonPostProcessing(self: *GU) void {
         btn.element = maxInt(usize);
     }
 
-    while (self.button_delete_queue.popOrNull()) |item|
+    while (self.button_delete_queue.pop()) |item|
         _ = self.buttons.remove(item);
 }
 
@@ -803,7 +806,7 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
 
     const ld: *GULineData = &self.element_line_stack.items[self.element_line_stack.items.len - 1];
 
-    self.element_tree.append(GUElement{
+    self.element_tree.append(self.allocator, GUElement{
         .area = GURect.Zero,
         .fill = GUSize.Zero,
         .layout = if (layout) |lo| lo.* else GULayout.Default,
@@ -817,7 +820,7 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
         .line_break = false,
     }) catch return false;
 
-    self.element_stack.append(element_i) catch {
+    self.element_stack.append(self.allocator, element_i) catch {
         _ = self.element_tree.pop();
         return false;
     };
@@ -827,7 +830,7 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
 
     if (self.element_queue_line_break or
         (parent != null and parent.?.layout.widths != null and
-        ld.current_items == parent.?.layout.widths.?.len))
+            ld.current_items == parent.?.layout.widths.?.len))
     {
         self.element_queue_line_break = false;
         ld.line += 1;
@@ -854,14 +857,14 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
         self.element_sibling = null;
     }
 
-    self.element_line_stack.append(zeroInit(GULineData, .{ .line = 1 })) catch |err|
+    self.element_line_stack.append(self.allocator, zeroInit(GULineData, .{ .line = 1 })) catch |err|
         std.debug.panic("DoContainer: ({s})", .{@errorName(err)});
     return true;
 }
 
 pub fn EndContainer(self: *GU) void {
     _ = self.element_line_stack.pop();
-    const element_i = self.element_stack.pop();
+    const element_i = self.element_stack.pop().?;
     const element: *GUElement = &self.element_tree.items[element_i];
     const parent: ?*GUElement = if (element.parent) |p| &self.element_tree.items[p] else null;
     self.element_sibling = element_i;
