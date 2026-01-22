@@ -148,8 +148,6 @@ const AsciiFont = struct {
 
 //------------------------------------------------------------------------------
 
-const CORNER_ANGULAR = @embedFile("corner-angular");
-
 const CornerTexture = struct {
     texture: *c.SDL_Texture,
     size: f32,
@@ -190,35 +188,58 @@ const CornerTexture = struct {
 //------------------------------------------------------------------------------
 // FIXME: remove/adapt or whatever; testing impl for sdf-based texture gen
 
+// TODO:
+//  - LOD system for picking the right size of corner texture, given a corner
+//    radius. for the actual selection, `std.math.ceilPowerOfTwoAssert(radius)`
+//    is probably fine.
+//  - superellipse sdf, or some acceptable approximation. should be stable up to
+//    +/- 1px for an 8px radius.
+
 const CORNER_RADIUS: u32 = 8;
-const CORNER_TEX_WIDTH = CORNER_RADIUS * 2;
-const CORNER_TEX_LENGTH = CORNER_TEX_WIDTH * CORNER_TEX_WIDTH;
 
-const CORNER_PIXELS_CIRCLE = generate_corner_pixels(sd_circle);
-const CORNER_PIXELS_QCIRCLE = generate_corner_pixels(sd_quadratic_circle);
-const CORNER_PIXELS_BEVELED = generate_corner_pixels(sd_rhombus);
-const CORNER_PIXELS_CHAMFER = generate_corner_pixels(sd_chamfer_box);
+const CORNER_PIXELS_CIRCLE = generate_corner_pixels_comptime(CORNER_RADIUS, sd_circle);
+const CORNER_PIXELS_QCIRCLE = generate_corner_pixels_comptime(CORNER_RADIUS, sd_quadratic_circle);
+const CORNER_PIXELS_BEVELED = generate_corner_pixels_comptime(CORNER_RADIUS, sd_rhombus);
+const CORNER_PIXELS_CHAMFER = generate_corner_pixels_comptime(CORNER_RADIUS, sd_chamfer_box);
+const CORNER_PIXELS_OCTAGON = generate_corner_pixels_comptime(CORNER_RADIUS, sd_octagon);
 
-fn generate_corner_pixels(fn_sdf: *const fn (x: f32, y: f32, r: f32) f32) [CORNER_TEX_LENGTH]u32 {
+fn generate_corner_pixels_comptime(
+    comptime RADIUS: u32,
+    fn_sdf: *const fn (x: f32, y: f32, r: f32) f32,
+) [RADIUS * RADIUS * 4]u32 {
     assert(@inComptime());
-    var pixels: [CORNER_TEX_LENGTH]u32 = undefined;
-    const MIDDLE = CORNER_RADIUS - 1;
-    for (0..CORNER_RADIUS) |y| {
-        for (0..CORNER_RADIUS) |x| {
+
+    var pixels: [RADIUS * RADIUS * 4]u32 = undefined;
+    generate_corner_pixels(RADIUS, &pixels, fn_sdf);
+    return pixels;
+}
+
+fn generate_corner_pixels(
+    rad: u32,
+    pixels: []u32, // RGBA8888
+    fn_sdf: *const fn (x: f32, y: f32, r: f32) f32,
+) void {
+    assert(std.math.isPowerOfTwo(rad));
+    assert(pixels.len == rad * rad * 4);
+
+    const width = rad * 2;
+    const middle = rad - 1;
+    for (0..rad) |y| {
+        for (0..rad) |x| {
             @setEvalBranchQuota(1000000);
-            const sd = @min(@max(-fn_sdf(x, y, CORNER_RADIUS), 0), 1) * 255;
+            const sd = @min(@max(-fn_sdf(x, y, rad), 0), 1) * 255;
             const val: u32 = @intFromFloat(@max(sd, 0));
-            const px1 = &pixels[MIDDLE - x + (MIDDLE - y) * CORNER_TEX_WIDTH];
-            const px2 = &pixels[x + CORNER_RADIUS + (MIDDLE - y) * CORNER_TEX_WIDTH];
-            const px3 = &pixels[MIDDLE - x + (y + CORNER_RADIUS) * CORNER_TEX_WIDTH];
-            const px4 = &pixels[x + CORNER_RADIUS + (y + CORNER_RADIUS) * CORNER_TEX_WIDTH];
-            px1.* = 0xFFFFFF00 | val;
-            px2.* = 0xFFFFFF00 | val;
-            px3.* = 0xFFFFFF00 | val;
-            px4.* = 0xFFFFFF00 | val;
+
+            const px_tl = &pixels[middle - x + (middle - y) * width];
+            const px_tr = &pixels[x + rad + (middle - y) * width];
+            const px_bl = &pixels[middle - x + (y + rad) * width];
+            const px_br = &pixels[x + rad + (y + rad) * width];
+            px_tl.* = 0xFFFFFF00 | val;
+            px_tr.* = 0xFFFFFF00 | val;
+            px_bl.* = 0xFFFFFF00 | val;
+            px_br.* = 0xFFFFFF00 | val;
         }
     }
-    return pixels;
 }
 
 fn sd_circle(x: f32, y: f32, r: f32) f32 {
@@ -265,8 +286,8 @@ fn sd_rhombus(x: f32, y: f32, r: f32) f32 {
 }
 
 fn sd_chamfer_box(x: f32, y: f32, r: f32) f32 {
-    // fairly arbitrary, based on choosing radius 6 for an 8-size margin with pure bevel
-    const chamfer = r * 0.65;
+    assert(r >= 2);
+    const chamfer: f32 = r - 1; // edge is fuzzy if cutting too much
 
     const ax = @abs(if (y > x) y else x) - r;
     const ay = @abs(if (y > x) x else y) - r + chamfer;
@@ -279,6 +300,34 @@ fn sd_chamfer_box(x: f32, y: f32, r: f32) f32 {
         return (ax + ay) * @sqrt(0.5);
 
     return @sqrt(ax * ax + ay * ay);
+}
+
+// https://www.shadertoy.com/view/3lK3RG
+// octagon with vertices on cardinals
+fn sd_octagon(x: f32, y: f32, r: f32) f32 {
+    const k: [4]f32 = .{
+        -0.9238795325, // sqrt(2+sqrt(2))/2  // COS PI/8
+        0.3826834323, // sqrt(2-sqrt(2))/2  // SIN PI/8
+        0.4142135623, // sqrt(2)-1          // TAN PI/8
+        0.7071067812, // 1/sqrt(2)          // SIN PI/4
+    };
+
+    var ax = @abs(x);
+    var ay = @abs(y);
+
+    const dot1 = ax * k[3] + ay * -k[3];
+    ax -= 2.0 * @min(dot1, 0.0) * k[3]; // Reflect about pi/4 plane
+    ay -= 2.0 * @min(dot1, 0.0) * -k[3];
+
+    const dot2 = ax * -k[1] + ay * -k[0];
+    const dot3 = ax * -k[0] + ay * k[1];
+    ax = dot2; // Rotate by 22.5 degrees
+    ay = dot3;
+
+    ax -= @min(@max(ax, -k[2] * r), k[2] * r); // Collapse the polygon edge to a point
+    ay -= r;
+
+    return @sqrt(ax * ax + ay * ay) * std.math.sign(ay);
 }
 
 //------------------------------------------------------------------------------
@@ -296,9 +345,9 @@ const RenderData = struct {
         var r: ?*c.SDL_Renderer = undefined;
         SDLE(c.SDL_SetHint(c.SDL_HINT_RENDER_VSYNC, "1")) catch {};
         try SDLE(c.SDL_CreateWindowAndRenderer("GU", WINDOW_W, WINDOW_H, 0, &w, &r));
-        const tex_corner_round = try CornerTexture.Init(r, CORNER_TEX_WIDTH, &CORNER_PIXELS_QCIRCLE);
-        const tex_corner_beveled = try CornerTexture.Init(r, CORNER_TEX_WIDTH, &CORNER_PIXELS_CHAMFER);
-        const tex_corner_angular = try CornerTexture.InitBMP(r, CORNER_ANGULAR); // octagon
+        const tex_corner_round = try CornerTexture.Init(r, CORNER_RADIUS * 2, &CORNER_PIXELS_QCIRCLE);
+        const tex_corner_beveled = try CornerTexture.Init(r, CORNER_RADIUS * 2, &CORNER_PIXELS_CHAMFER);
+        const tex_corner_angular = try CornerTexture.Init(r, CORNER_RADIUS * 2, &CORNER_PIXELS_OCTAGON);
         errdefer comptime unreachable;
         SDLEP(c.SDL_SetRenderDrawBlendMode(r, c.SDL_BLENDMODE_BLEND));
         SDLE(c.SDL_SetWindowResizable(w, true)) catch {};

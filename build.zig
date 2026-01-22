@@ -44,7 +44,6 @@ fn bin_example(b: *Build, opts: *const GlobalOptions) *StepCompile {
 
     const assets = [_]struct { []const u8, []const u8 }{
         .{ "ascii-font", "assets/ascii.bmp" },
-        .{ "corner-angular", "assets/corner-angular.bmp" },
     };
     for (assets) |asset|
         bin.root_module.addAnonymousImport(asset[0], .{ .root_source_file = b.path(asset[1]) });
