@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const assert = std.debug.assert;
+
 const c = @import("c.zig").c;
 const SDLE = @import("c.zig").SDLE;
 const SDLEP = @import("c.zig").SDLEP;
@@ -55,8 +57,8 @@ const AsciiFont = struct {
     // TODO: use CharSize
     fn StringSize(_: *anyopaque, str: []const u8) GUSize {
         //const self: *AsciiFont = @alignCast(@ptrCast(ptr));
-        std.debug.assert(std.mem.min(u8, str) >= ' ');
-        std.debug.assert(std.mem.max(u8, str) < 127);
+        assert(std.mem.min(u8, str) >= ' ');
+        assert(std.mem.max(u8, str) < 127);
         return .{ .w = 10 * @as(f32, @floatFromInt(str.len)), .h = 21 };
     }
 
@@ -68,8 +70,8 @@ const AsciiFont = struct {
 
     fn DrawString(ptr: *anyopaque, str: []const u8, pos: *const GUPos) void {
         const self: *AsciiFont = @ptrCast(@alignCast(ptr));
-        std.debug.assert(std.mem.min(u8, str) >= ' ');
-        std.debug.assert(std.mem.max(u8, str) < 127);
+        assert(std.mem.min(u8, str) >= ' ');
+        assert(std.mem.max(u8, str) < 127);
         var rolling_pos = pos.*;
         for (str) |char| {
             DrawChar(ptr, char, &rolling_pos);
@@ -79,8 +81,8 @@ const AsciiFont = struct {
 
     fn DrawChar(ptr: *anyopaque, char: u8, pos: *const GUPos) void {
         const self: *AsciiFont = @ptrCast(@alignCast(ptr));
-        std.debug.assert(char >= ' ');
-        std.debug.assert(char < 127);
+        assert(char >= ' ');
+        assert(char < 127);
         const size = CharSize(ptr, char);
         const n = char - ' ';
         const i: f32 = @as(f32, @floatFromInt(n % 16)) * size.w;
@@ -144,32 +146,142 @@ const AsciiFont = struct {
     }
 };
 
-const CORNER_ROUND = @embedFile("corner-round");
+//------------------------------------------------------------------------------
+
 const CORNER_ANGULAR = @embedFile("corner-angular");
-const CORNER_BEVELED = @embedFile("corner-beveled");
 
 const CornerTexture = struct {
     texture: *c.SDL_Texture,
     size: f32,
 
-    pub fn Init(renderer: ?*c.SDL_Renderer, bmp: []const u8) !CornerTexture {
+    pub fn Init(
+        renderer: ?*c.SDL_Renderer,
+        width: i32,
+        px_data: []const u32, // RGBA8888
+    ) !CornerTexture {
+        assert(std.math.isPowerOfTwo(width));
+        assert(px_data.len == width * width);
+
+        const px_fmt = c.SDL_PIXELFORMAT_RGBA8888;
+        const sfc: *c.SDL_Surface =
+            SDLEP(c.SDL_CreateSurfaceFrom(width, width, px_fmt, @constCast(px_data.ptr), width * 4));
+        defer c.SDL_DestroySurface(sfc);
+        const tex: *c.SDL_Texture = SDLEP(c.SDL_CreateTextureFromSurface(renderer, sfc));
+
+        return CornerTexture{ .texture = tex, .size = @floatFromInt(@divExact(width, 2)) };
+    }
+
+    pub fn InitBMP(renderer: ?*c.SDL_Renderer, bmp: []const u8) !CornerTexture {
         const stream: *c.SDL_IOStream = try SDLE(c.SDL_IOFromConstMem(bmp.ptr, bmp.len));
         const surface: *c.SDL_Surface = try SDLE(c.SDL_LoadBMP_IO(stream, true));
         defer c.SDL_DestroySurface(surface);
         const t: *c.SDL_Texture = try SDLE(c.SDL_CreateTextureFromSurface(renderer, surface));
 
-        std.debug.assert(t.w == t.h);
-        std.debug.assert(@mod(t.w, 2) == 0);
-        return CornerTexture{
-            .texture = t,
-            .size = @floatFromInt(@divExact(t.w, 2)),
-        };
+        assert(t.w == t.h);
+        assert(@mod(t.w, 2) == 0);
+        return CornerTexture{ .texture = t, .size = @floatFromInt(@divExact(t.w, 2)) };
     }
 
     pub fn Deinit(self: *CornerTexture) void {
         c.SDL_DestroyTexture(self.texture);
     }
 };
+
+//------------------------------------------------------------------------------
+// FIXME: remove/adapt or whatever; testing impl for sdf-based texture gen
+
+const CORNER_RADIUS: u32 = 8;
+const CORNER_TEX_WIDTH = CORNER_RADIUS * 2;
+const CORNER_TEX_LENGTH = CORNER_TEX_WIDTH * CORNER_TEX_WIDTH;
+
+const CORNER_PIXELS_CIRCLE = generate_corner_pixels(sd_circle);
+const CORNER_PIXELS_QCIRCLE = generate_corner_pixels(sd_quadratic_circle);
+const CORNER_PIXELS_BEVELED = generate_corner_pixels(sd_rhombus);
+const CORNER_PIXELS_CHAMFER = generate_corner_pixels(sd_chamfer_box);
+
+fn generate_corner_pixels(fn_sdf: *const fn (x: f32, y: f32, r: f32) f32) [CORNER_TEX_LENGTH]u32 {
+    assert(@inComptime());
+    var pixels: [CORNER_TEX_LENGTH]u32 = undefined;
+    const MIDDLE = CORNER_RADIUS - 1;
+    for (0..CORNER_RADIUS) |y| {
+        for (0..CORNER_RADIUS) |x| {
+            @setEvalBranchQuota(1000000);
+            const sd = @min(@max(-fn_sdf(x, y, CORNER_RADIUS), 0), 1) * 255;
+            const val: u32 = @intFromFloat(@max(sd, 0));
+            const px1 = &pixels[MIDDLE - x + (MIDDLE - y) * CORNER_TEX_WIDTH];
+            const px2 = &pixels[x + CORNER_RADIUS + (MIDDLE - y) * CORNER_TEX_WIDTH];
+            const px3 = &pixels[MIDDLE - x + (y + CORNER_RADIUS) * CORNER_TEX_WIDTH];
+            const px4 = &pixels[x + CORNER_RADIUS + (y + CORNER_RADIUS) * CORNER_TEX_WIDTH];
+            px1.* = 0xFFFFFF00 | val;
+            px2.* = 0xFFFFFF00 | val;
+            px3.* = 0xFFFFFF00 | val;
+            px4.* = 0xFFFFFF00 | val;
+        }
+    }
+    return pixels;
+}
+
+fn sd_circle(x: f32, y: f32, r: f32) f32 {
+    return @sqrt(x * x + y * y) - r;
+}
+
+fn sd_quadratic_circle(x: f32, y: f32, r: f32) f32 {
+    const ax = @abs(if (y > x) y else x) / r;
+    const ay = @abs(if (y > x) x else y) / r;
+
+    const a: f32 = ax - ay;
+    const b: f32 = ax + ay;
+    const d: f32 = (2.0 * b - 1.0) / 3.0;
+    var h: f32 = a * a + d * d * d;
+    var t: f32 = 0;
+    if (h >= 0.0) {
+        @setEvalBranchQuota(1000000);
+        h = @sqrt(h);
+        t = std.math.sign(h - a) *
+            std.math.pow(f32, @abs(h - a), 1.0 / 3.0) -
+            std.math.pow(f32, h + a, 1.0 / 3.0);
+    } else {
+        const z = @sqrt(-d);
+        const v = std.math.acos(a / (d * z)) / 3.0;
+        t = -z * (std.math.cos(v) + std.math.sin(v) * 1.732050808);
+    }
+    t *= 0.5;
+    const wx = -t + 0.75 - t * t - ax;
+    const wy = t + 0.75 - t * t - ay;
+    return @sqrt(wx * wx + wy * wy) * std.math.sign(a * a * 0.5 + b - 1.5) * r;
+}
+
+fn sd_rhombus(x: f32, y: f32, r: f32) f32 {
+    const ax = @abs(x);
+    const ay = @abs(y);
+    const rx = r;
+    const ry = -r;
+    const dot_r = rx * rx + ry * ry;
+    const dot_bp = rx * ax + ry * ay;
+    const h: f32 = @min(@max((dot_bp + ry * ry) / dot_r, 0.0), 1.0);
+    const ox = ax - rx * h;
+    const oy = ay - ry * (h - 1);
+    return @sqrt(ox * ox + oy * oy) * std.math.sign(ox);
+}
+
+fn sd_chamfer_box(x: f32, y: f32, r: f32) f32 {
+    // fairly arbitrary, based on choosing radius 6 for an 8-size margin with pure bevel
+    const chamfer = r * 0.65;
+
+    const ax = @abs(if (y > x) y else x) - r;
+    const ay = @abs(if (y > x) x else y) - r + chamfer;
+    const k: f32 = 1.0 - @sqrt(2.0);
+
+    if (ay < 0.0 and ay + ax * k < 0.0)
+        return ax;
+
+    if (ax < ay)
+        return (ax + ay) * @sqrt(0.5);
+
+    return @sqrt(ax * ax + ay * ay);
+}
+
+//------------------------------------------------------------------------------
 
 const RenderData = struct {
     window: ?*c.SDL_Window,
@@ -184,9 +296,9 @@ const RenderData = struct {
         var r: ?*c.SDL_Renderer = undefined;
         SDLE(c.SDL_SetHint(c.SDL_HINT_RENDER_VSYNC, "1")) catch {};
         try SDLE(c.SDL_CreateWindowAndRenderer("GU", WINDOW_W, WINDOW_H, 0, &w, &r));
-        const tex_corner_round = try CornerTexture.Init(r, CORNER_ROUND);
-        const tex_corner_angular = try CornerTexture.Init(r, CORNER_ANGULAR);
-        const tex_corner_beveled = try CornerTexture.Init(r, CORNER_BEVELED);
+        const tex_corner_round = try CornerTexture.Init(r, CORNER_TEX_WIDTH, &CORNER_PIXELS_QCIRCLE);
+        const tex_corner_beveled = try CornerTexture.Init(r, CORNER_TEX_WIDTH, &CORNER_PIXELS_CHAMFER);
+        const tex_corner_angular = try CornerTexture.InitBMP(r, CORNER_ANGULAR); // octagon
         errdefer comptime unreachable;
         SDLEP(c.SDL_SetRenderDrawBlendMode(r, c.SDL_BLENDMODE_BLEND));
         SDLE(c.SDL_SetWindowResizable(w, true)) catch {};
@@ -290,7 +402,7 @@ const RenderData = struct {
 
     fn BeginRendering(ptr: *anyopaque) void {
         const self: *RenderData = @ptrCast(@alignCast(ptr));
-        std.debug.assert(self.stored_clip == null);
+        assert(self.stored_clip == null);
         if (c.SDL_RenderClipEnabled(self.renderer)) {
             var clip: c.SDL_Rect = undefined;
             SDLEP(c.SDL_GetRenderClipRect(self.renderer, &clip));
@@ -321,6 +433,8 @@ const RenderData = struct {
     }
 };
 
+//------------------------------------------------------------------------------
+
 const StyleAngular = GUCorner.Style.Custom1;
 const StyleBeveled = GUCorner.Style.Custom2;
 
@@ -343,15 +457,17 @@ const LAYOUT_RED = std.mem.zeroInit(GULayout, .{
 const LAYOUT_WHITE = std.mem.zeroInit(GULayout, .{
     .color = 0xFFFFFF20,
     .padding = GUSize{ .w = 4, .h = 4 },
-    .corner = .{ .style = .Round, .radius = 8 },
+    .corner = .{ .style = .Round, .radius = CORNER_RADIUS },
 });
 
 const LAYOUT_WHITE_BREAK = std.mem.zeroInit(GULayout, .{
     .color = 0xFFFFFF20,
     .auto_line_break = true,
     .padding = GUSize{ .w = 4, .h = 4 },
-    .corner = .{ .style = StyleBeveled, .radius = 6 },
+    .corner = .{ .style = StyleBeveled, .radius = CORNER_RADIUS },
 });
+
+//------------------------------------------------------------------------------
 
 const App = struct {
     gpa: std.heap.GeneralPurposeAllocator(.{}),
