@@ -1,6 +1,8 @@
 const std = @import("std");
 
 const assert = std.debug.assert;
+const clamp = std.math.clamp;
+const log2_int_ceil = std.math.log2_int_ceil;
 
 const c = @import("c.zig").c;
 const SDLE = @import("c.zig").SDLE;
@@ -189,19 +191,27 @@ const CornerTexture = struct {
 // FIXME: remove/adapt or whatever; testing impl for sdf-based texture gen
 
 // TODO:
-//  - LOD system for picking the right size of corner texture, given a corner
-//    radius. for the actual selection, `std.math.ceilPowerOfTwoAssert(radius)`
-//    is probably fine.
 //  - superellipse sdf, or some acceptable approximation. should be stable up to
 //    +/- 1px for an 8px radius.
 
-const CORNER_RADIUS: u32 = 8;
-
-const CORNER_PIXELS_CIRCLE = generate_corner_pixels_comptime(CORNER_RADIUS, sd_circle);
-const CORNER_PIXELS_QCIRCLE = generate_corner_pixels_comptime(CORNER_RADIUS, sd_quadratic_circle);
-const CORNER_PIXELS_BEVELED = generate_corner_pixels_comptime(CORNER_RADIUS, sd_rhombus);
-const CORNER_PIXELS_CHAMFER = generate_corner_pixels_comptime(CORNER_RADIUS, sd_chamfer_box);
-const CORNER_PIXELS_OCTAGON = generate_corner_pixels_comptime(CORNER_RADIUS, sd_octagon);
+const CORNER_PIXELS_QCIRCLE_LOD = [_][]const u32{
+    &generate_corner_pixels_comptime(4, sd_quadratic_circle),
+    &generate_corner_pixels_comptime(8, sd_quadratic_circle),
+    &generate_corner_pixels_comptime(16, sd_quadratic_circle),
+    &generate_corner_pixels_comptime(32, sd_quadratic_circle),
+};
+const CORNER_PIXELS_CHAMFER_LOD = [_][]const u32{
+    &generate_corner_pixels_comptime(4, sd_chamfer_box),
+    &generate_corner_pixels_comptime(8, sd_chamfer_box),
+    &generate_corner_pixels_comptime(16, sd_chamfer_box),
+    &generate_corner_pixels_comptime(32, sd_chamfer_box),
+};
+const CORNER_PIXELS_OCTAGON_LOD = [_][]const u32{
+    &generate_corner_pixels_comptime(4, sd_octagon),
+    &generate_corner_pixels_comptime(8, sd_octagon),
+    &generate_corner_pixels_comptime(16, sd_octagon),
+    &generate_corner_pixels_comptime(32, sd_octagon),
+};
 
 fn generate_corner_pixels_comptime(
     comptime RADIUS: u32,
@@ -227,7 +237,7 @@ fn generate_corner_pixels(
     for (0..rad) |y| {
         for (0..rad) |x| {
             @setEvalBranchQuota(1000000);
-            const sd = @min(@max(-fn_sdf(x, y, rad), 0), 1) * 255;
+            const sd = clamp(-fn_sdf(x, y, rad), 0, 1) * 255;
             const val: u32 = @intFromFloat(@max(sd, 0));
 
             const px_tl = &pixels[middle - x + (middle - y) * width];
@@ -279,7 +289,7 @@ fn sd_rhombus(x: f32, y: f32, r: f32) f32 {
     const ry = -r;
     const dot_r = rx * rx + ry * ry;
     const dot_bp = rx * ax + ry * ay;
-    const h: f32 = @min(@max((dot_bp + ry * ry) / dot_r, 0.0), 1.0);
+    const h: f32 = clamp((dot_bp + ry * ry) / dot_r, 0.0, 1.0);
     const ox = ax - rx * h;
     const oy = ay - ry * (h - 1);
     return @sqrt(ox * ox + oy * oy) * std.math.sign(ox);
@@ -324,7 +334,7 @@ fn sd_octagon(x: f32, y: f32, r: f32) f32 {
     ax = dot2; // Rotate by 22.5 degrees
     ay = dot3;
 
-    ax -= @min(@max(ax, -k[2] * r), k[2] * r); // Collapse the polygon edge to a point
+    ax -= clamp(ax, -k[2] * r, k[2] * r); // Collapse the polygon edge to a point
     ay -= r;
 
     return @sqrt(ax * ax + ay * ay) * std.math.sign(ay);
@@ -336,35 +346,47 @@ const RenderData = struct {
     window: ?*c.SDL_Window,
     renderer: ?*c.SDL_Renderer,
     stored_clip: ?c.SDL_Rect,
-    tex_corner_round: CornerTexture,
-    tex_corner_angular: CornerTexture,
-    tex_corner_beveled: CornerTexture,
+    tex_corner_rnd_lod: [LOD_LEVELS]CornerTexture, // 4, 8, 16 and 32px radii
+    tex_corner_ang_lod: [LOD_LEVELS]CornerTexture,
+    tex_corner_bev_lod: [LOD_LEVELS]CornerTexture,
+
+    pub const empty: RenderData = .{
+        .window = null,
+        .renderer = null,
+        .stored_clip = null,
+        .tex_corner_rnd_lod = undefined,
+        .tex_corner_ang_lod = undefined,
+        .tex_corner_bev_lod = undefined,
+    };
+
+    const LOD_LEVELS = 4;
 
     pub fn Init() !RenderData {
-        var w: ?*c.SDL_Window = undefined;
-        var r: ?*c.SDL_Renderer = undefined;
+        var rd: RenderData = .empty;
+
         SDLE(c.SDL_SetHint(c.SDL_HINT_RENDER_VSYNC, "1")) catch {};
-        try SDLE(c.SDL_CreateWindowAndRenderer("GU", WINDOW_W, WINDOW_H, 0, &w, &r));
-        const tex_corner_round = try CornerTexture.Init(r, CORNER_RADIUS * 2, &CORNER_PIXELS_QCIRCLE);
-        const tex_corner_beveled = try CornerTexture.Init(r, CORNER_RADIUS * 2, &CORNER_PIXELS_CHAMFER);
-        const tex_corner_angular = try CornerTexture.Init(r, CORNER_RADIUS * 2, &CORNER_PIXELS_OCTAGON);
+        try SDLE(c.SDL_CreateWindowAndRenderer("GU", WINDOW_W, WINDOW_H, 0, &rd.window, &rd.renderer));
+
+        for (0..LOD_LEVELS) |i| {
+            const width = std.math.pow(i32, 2, @as(i32, @intCast(i)) + 2) * 2;
+            rd.tex_corner_rnd_lod[i] = try CornerTexture.Init(rd.renderer, width, CORNER_PIXELS_QCIRCLE_LOD[i]);
+            rd.tex_corner_bev_lod[i] = try CornerTexture.Init(rd.renderer, width, CORNER_PIXELS_CHAMFER_LOD[i]);
+            rd.tex_corner_ang_lod[i] = try CornerTexture.Init(rd.renderer, width, CORNER_PIXELS_OCTAGON_LOD[i]);
+        }
+
         errdefer comptime unreachable;
-        SDLEP(c.SDL_SetRenderDrawBlendMode(r, c.SDL_BLENDMODE_BLEND));
-        SDLE(c.SDL_SetWindowResizable(w, true)) catch {};
-        return RenderData{
-            .window = w,
-            .renderer = r,
-            .stored_clip = null,
-            .tex_corner_round = tex_corner_round,
-            .tex_corner_angular = tex_corner_angular,
-            .tex_corner_beveled = tex_corner_beveled,
-        };
+        SDLEP(c.SDL_SetRenderDrawBlendMode(rd.renderer, c.SDL_BLENDMODE_BLEND));
+        SDLE(c.SDL_SetWindowResizable(rd.window, true)) catch {};
+
+        return rd;
     }
 
     pub fn Deinit(self: *RenderData) void {
-        self.tex_corner_round.Deinit();
-        self.tex_corner_angular.Deinit();
-        self.tex_corner_beveled.Deinit();
+        for (0..LOD_LEVELS) |i| {
+            self.tex_corner_rnd_lod[i].Deinit();
+            self.tex_corner_bev_lod[i].Deinit();
+            self.tex_corner_ang_lod[i].Deinit();
+        }
         c.SDL_DestroyWindow(self.window);
         c.SDL_DestroyRenderer(self.renderer);
     }
@@ -399,14 +421,19 @@ const RenderData = struct {
         SDLEP(c.SDL_SetRenderDrawColor(self.renderer, c1.r, c1.g, c1.b, c1.a));
 
         if (cmd.corner.style == .None or cmd.corner.radius <= 0 or cmd.rect.w <= 1 or cmd.rect.h <= 1) {
-            SDLEP(c.SDL_RenderFillRect(self.renderer, &.{ .x = cmd.rect.x, .y = cmd.rect.y, .w = cmd.rect.w, .h = cmd.rect.h }));
+            SDLEP(c.SDL_RenderFillRect(
+                self.renderer,
+                &.{ .x = cmd.rect.x, .y = cmd.rect.y, .w = cmd.rect.w, .h = cmd.rect.h },
+            ));
             return;
         }
 
+        const tex_lod_index: usize =
+            clamp(log2_int_ceil(usize, @intFromFloat(cmd.corner.radius)), 2, 2 + LOD_LEVELS - 1) - 2;
         const tex: *CornerTexture = switch (cmd.corner.style) {
-            .Round => &self.tex_corner_round,
-            .Custom1 => &self.tex_corner_angular,
-            .Custom2 => &self.tex_corner_beveled,
+            .Round => &self.tex_corner_rnd_lod[tex_lod_index],
+            .Custom1 => &self.tex_corner_ang_lod[tex_lod_index],
+            .Custom2 => &self.tex_corner_bev_lod[tex_lod_index],
             else => unreachable,
         };
         SDLEP(c.SDL_SetTextureAlphaMod(tex.texture, c1.a));
@@ -493,8 +520,8 @@ const BASE_LAYOUT = GULayout{
     .color = 0x00000000,
     .widths = &[_]f32{ 200, -400, 200 },
     .heights = &[_]f32{ 100, -100 },
-    .padding = GUSize{ .w = 8, .h = 8 },
-    .gaps = GUSize{ .w = 8, .h = 8 },
+    .padding = GUSize{ .w = 9, .h = 9 },
+    .gaps = GUSize{ .w = 6, .h = 6 },
     .auto_line_break = false,
     .corner = .{ .radius = 0, .style = .None },
 };
@@ -506,14 +533,14 @@ const LAYOUT_RED = std.mem.zeroInit(GULayout, .{
 const LAYOUT_WHITE = std.mem.zeroInit(GULayout, .{
     .color = 0xFFFFFF20,
     .padding = GUSize{ .w = 4, .h = 4 },
-    .corner = .{ .style = .Round, .radius = CORNER_RADIUS },
+    .corner = .{ .style = .Round, .radius = 8 },
 });
 
 const LAYOUT_WHITE_BREAK = std.mem.zeroInit(GULayout, .{
     .color = 0xFFFFFF20,
     .auto_line_break = true,
     .padding = GUSize{ .w = 4, .h = 4 },
-    .corner = .{ .style = StyleBeveled, .radius = CORNER_RADIUS },
+    .corner = .{ .style = StyleBeveled, .radius = 6 },
 });
 
 //------------------------------------------------------------------------------
