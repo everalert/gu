@@ -194,6 +194,12 @@ const CornerTexture = struct {
 //  - superellipse sdf, or some acceptable approximation. should be stable up to
 //    +/- 1px for an 8px radius.
 
+const CORNER_PIXELS_SUPERELLIPSE_LOD = [_][]const u32{
+    &generate_corner_pixels_comptime(4, sd_superellipse),
+    &generate_corner_pixels_comptime(8, sd_superellipse),
+    &generate_corner_pixels_comptime(16, sd_superellipse),
+    &generate_corner_pixels_comptime(32, sd_superellipse),
+};
 const CORNER_PIXELS_QCIRCLE_LOD = [_][]const u32{
     &generate_corner_pixels_comptime(4, sd_quadratic_circle),
     &generate_corner_pixels_comptime(8, sd_quadratic_circle),
@@ -280,6 +286,49 @@ fn sd_quadratic_circle(x: f32, y: f32, r: f32) f32 {
     const wx = -t + 0.75 - t * t - ax;
     const wy = t + 0.75 - t * t - ay;
     return @sqrt(wx * wx + wy * wy) * std.math.sign(a * a * 0.5 + b - 1.5) * r;
+}
+
+// FIXME: doesn't really work well (or at all, for some N values). maybe another
+//  binary search style approach would be to check the dot product between the
+//  curve normal tangent and the curve-to-point vector, otherwise just bite the
+//  bullet and do newtonian iteration
+// binary search-based sdf approximation
+fn sd_superellipse(x: f32, y: f32, r: f32) f32 {
+    @setEvalBranchQuota(2000000);
+    const ax = @max(@abs(x), @abs(y));
+    const ay = @min(@abs(x), @abs(y));
+
+    const N: f32 = 4;
+    const na = 2 / N;
+
+    var st_a: f32 = 0; // angle
+    var st_x = r * std.math.pow(f32, @cos(st_a), na); // * std.math.sign(@cos(st_a));
+    var st_y = r * std.math.pow(f32, @sin(st_a), na); // * std.math.sign(@sin(st_a));
+    var st_d = @sqrt((st_x - ax) * (st_x - ax) + (st_y - ay) * (st_y - ay)); // dist
+
+    var ed_a: f32 = @as(f32, std.math.pi) / 4;
+    var ed_x = r * std.math.pow(f32, @cos(ed_a), na); // * std.math.sign(@cos(ed_a));
+    var ed_y = r * std.math.pow(f32, @sin(ed_a), na); // * std.math.sign(@sin(ed_a));
+    var ed_d = @sqrt((ed_x - ax) * (ed_x - ax) + (ed_y - ay) * (ed_y - ay));
+
+    while (@abs(st_d - ed_d) > 0.01) {
+        const next_a = st_a * 0.5 + ed_a * 0.5;
+        if (st_d > ed_d) {
+            st_a = next_a;
+            st_x = r * std.math.pow(f32, @cos(st_a), na); // * std.math.sign(@cos(st_a));
+            st_y = r * std.math.pow(f32, @sin(st_a), na); // * std.math.sign(@sin(st_a));
+            st_d = @sqrt((st_x - ax) * (st_x - ax) + (st_y - ay) * (st_y - ay));
+        } else {
+            ed_a = next_a;
+            ed_x = r * std.math.pow(f32, @cos(ed_a), na); // * std.math.sign(@cos(ed_a));
+            ed_y = r * std.math.pow(f32, @sin(ed_a), na); // * std.math.sign(@sin(ed_a));
+            ed_d = @sqrt((ed_x - ax) * (ed_x - ax) + (ed_y - ay) * (ed_y - ay));
+        }
+    }
+
+    const pt_d: f32 = @sqrt(ax * ax + ay * ay);
+    const st_0d: f32 = @sqrt(st_x * st_x + st_y * st_y);
+    return if (pt_d < st_0d) -st_d else st_d;
 }
 
 fn sd_rhombus(x: f32, y: f32, r: f32) f32 {
@@ -369,7 +418,7 @@ const RenderData = struct {
 
         for (0..LOD_LEVELS) |i| {
             const width = std.math.pow(i32, 2, @as(i32, @intCast(i)) + 2) * 2;
-            rd.tex_corner_rnd_lod[i] = try CornerTexture.Init(rd.renderer, width, CORNER_PIXELS_QCIRCLE_LOD[i]);
+            rd.tex_corner_rnd_lod[i] = try CornerTexture.Init(rd.renderer, width, CORNER_PIXELS_SUPERELLIPSE_LOD[i]);
             rd.tex_corner_bev_lod[i] = try CornerTexture.Init(rd.renderer, width, CORNER_PIXELS_CHAMFER_LOD[i]);
             rd.tex_corner_ang_lod[i] = try CornerTexture.Init(rd.renderer, width, CORNER_PIXELS_OCTAGON_LOD[i]);
         }
@@ -533,7 +582,7 @@ const LAYOUT_RED = std.mem.zeroInit(GULayout, .{
 const LAYOUT_WHITE = std.mem.zeroInit(GULayout, .{
     .color = 0xFFFFFF20,
     .padding = GUSize{ .w = 4, .h = 4 },
-    .corner = .{ .style = .Round, .radius = 8 },
+    .corner = .{ .style = .Round, .radius = 32 },
 });
 
 const LAYOUT_WHITE_BREAK = std.mem.zeroInit(GULayout, .{
