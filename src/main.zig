@@ -13,16 +13,17 @@ const SDLTryErrorPrint = @import("c.zig").SDLTryErrorPrint;
 
 const GU = @import("gu.zig");
 const GUBackend = GU.GUBackend;
-const GURect = GU.GURect;
 const GUCorner = GU.GUCorner;
-const GUPos = GU.GUPos;
-const GUSize = GU.GUSize;
-const GUColor = GU.GUColor;
 const GUTextureAtlas = GU.GUTextureAtlas;
 const GUFontAtlas = GU.GUFontAtlas;
-const GUButton = GU.GUButton;
 const GULayout = GU.GULayout;
 const GURenderCommand = GU.GURenderCommand;
+
+const GUMath = @import("gu_math.zig");
+const GURect = GUMath.Rect;
+const GUPos = GUMath.Pos;
+const GUSize = GUMath.Size;
+const GUColor = GUMath.Color;
 
 const sdf = @import("sdf.zig");
 

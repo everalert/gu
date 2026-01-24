@@ -10,92 +10,11 @@ const FormatOptions = std.fmt.FormatOptions;
 const maxInt = std.math.maxInt;
 const zeroInit = std.mem.zeroInit;
 
-pub const GURect = struct {
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-
-    pub const Zero = GURect{ .x = 0, .y = 0, .w = 0, .h = 0 };
-
-    pub fn IsCollidingPoint(self: *const GURect, pt: *const GUPos) bool {
-        return (pt.x >= self.x and
-            pt.x < self.x + self.w and
-            pt.y >= self.y and
-            pt.y < self.y + self.h);
-    }
-
-    pub fn IsCollidingRect(self: *const GURect, other: *const GURect) bool {
-        return (self.x + self.w >= other.x and
-            self.x <= other.x + other.w and
-            self.y + self.h >= other.y and
-            self.y <= other.y + other.h);
-    }
-
-    pub inline fn HasNonZeroArea(self: *const GURect) bool {
-        return self.w * self.h > 0;
-    }
-
-    pub inline fn GetSmallestDimension(self: *const GURect) f32 {
-        return @min(self.w, self.h);
-    }
-
-    /// AND operation
-    pub fn GetIntersection(r1: *const GURect, r2: *const GURect) GURect {
-        const x = @max(r1.x, r2.x);
-        const y = @max(r1.y, r2.y);
-        const w = @min(r1.x + r1.w, r2.x + r2.w) - x;
-        const h = @min(r1.y + r1.h, r2.y + r2.h) - y;
-        return GURect{ .x = x, .y = y, .w = w, .h = h };
-    }
-
-    /// compatibility with std.fmt
-    pub fn format(self: *const GURect, comptime _: []const u8, _: FormatOptions, writer: anytype) !void {
-        try writer.print(
-            "GURect(x:{d: <4} y:{d: <4} w:{d: <4} h:{d: <4})",
-            .{ self.x, self.y, self.w, self.h },
-        );
-    }
-};
-
-// TODO: rename to GUPoint?
-pub const GUPos = struct {
-    x: f32,
-    y: f32,
-
-    pub const Zero = GUPos{ .x = 0, .y = 0 };
-
-    pub fn FromRect(rect: *GURect) GUPos {
-        return GUPos{ .x = rect.x, .y = rect.y };
-    }
-};
-
-pub const GUSize = struct {
-    w: f32,
-    h: f32,
-
-    pub const Zero = GUSize{ .w = 0, .h = 0 };
-
-    pub fn FromRect(rect: *const GURect) GUSize {
-        return GUSize{ .w = rect.w, .h = rect.h };
-    }
-
-    pub inline fn HasNonZeroArea(self: *const GUSize) bool {
-        return self.w * self.h > 0;
-    }
-};
-
-pub const GUColor = extern struct {
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-
-    // WARN: assumes big-endian
-    pub fn FromInt(color: u32) GUColor {
-        return @bitCast(@byteSwap(color));
-    }
-};
+const GUMath = @import("gu_math.zig");
+const GURect = GUMath.Rect;
+const GUSize = GUMath.Size;
+const GUPos = GUMath.Pos;
+const GUColor = GUMath.Color;
 
 pub const GUBackend = struct {
     ptr: *anyopaque,
@@ -141,10 +60,10 @@ pub const GUBackend = struct {
 };
 
 pub const GUCorner = struct {
-    pub const Style = enum(u32) { None, Round, Custom1, Custom2, Custom3, Custom4, Custom5, Custom6 };
-
     radius: f32,
     style: Style,
+
+    pub const Style = enum { None, Round, Custom1, Custom2, Custom3, Custom4, Custom5, Custom6 };
 };
 
 // FIXME: don't really like having the field types separated, but afaik needed to
@@ -244,9 +163,15 @@ pub const GUTextureAtlas = struct {
     }
 };
 
-const GUButtonMode = enum(u32) { Press, Release };
-const GUButtonState = enum(u32) { Idle, Hover, Down };
-pub const GUButton = struct {
+pub const Button = struct {
+    mode: Mode = .Press,
+    state: State = .Idle,
+    area: GURect,
+    element: usize,
+
+    pub const Mode = enum { Press, Release };
+    pub const State = enum { Idle, Hover, Down };
+
     const PADDING_VERTICAL: f32 = 2;
     const PADDING_HORIZONTAL: f32 = 8;
     const CORNER_RADIUS: f32 = 6;
@@ -254,13 +179,8 @@ pub const GUButton = struct {
     const COLOR_HOVER: u32 = 0x00C000FF;
     const COLOR_DOWN: u32 = 0x004000FF;
 
-    mode: GUButtonMode = .Press,
-    state: GUButtonState = .Idle,
-    area: GURect,
-    element: usize,
-
     pub fn Update(
-        self: *GUButton,
+        self: *Button,
         pt: *const GUPos,
         btn_just_down: bool,
         btn_just_up: bool,
@@ -292,7 +212,7 @@ pub const GUButton = struct {
 };
 
 // NOTE: keep here, intended as a 'using button api' struct, not part of the button api
-const GUButtonData = struct { button: *GUButton, activated: bool };
+const GUButtonData = struct { button: *Button, activated: bool };
 
 pub const GUKeyState = struct {
     down: bool = false,
@@ -331,10 +251,9 @@ const Element = struct {
     mode: enum {
         Block,
         Rect,
-        // FIXME: stuff based on Image should just be a "use texture" behaviour,
-        //  where the `DoImage` just sets the dimensions of the element to match
-        //  the texture.
-        Image,
+        Image, // FIXME: stuff based on Image should just be a "use texture"
+        //         behaviour, where the `DoImage` just sets the dimensions of
+        //         the element to match the texture.
         Label,
     },
     features: Features,
@@ -345,6 +264,7 @@ const Element = struct {
     label_str: []const u8,
     label_font: GUFontHandle,
     rect_size: GUSize,
+    btn_state: Button.State,
 
     const empty: Element = .{
         .layout = .Default,
@@ -362,6 +282,7 @@ const Element = struct {
         .label_str = &.{},
         .label_font = maxInt(usize),
         .rect_size = .Zero,
+        .btn_state = .Idle,
     };
 
     const Features = packed struct(u32) {
@@ -374,8 +295,9 @@ const Element = struct {
         bClickable: bool,
         bClickDown: bool,
         bClickHover: bool,
+        bClickDepressed: bool, // button visually "idles" in down-state
 
-        _: u26,
+        _: u25,
 
         pub const empty = std.mem.zeroInit(Features, .{});
     };
@@ -445,7 +367,7 @@ const ElementIterator = struct {
     }
 };
 
-const GUDimensionMode = enum(u32) {
+const GUDimensionMode = enum {
     Auto, // Fit when parent does not specify dimension, or 0=Fit, <0=Stretch, >0=Fixed
     Fit, // child dimensions plus any margins, etc.
     Stretch, // usable space of parent dimension minus input value; requires pre-finalizable parent dimension
@@ -510,6 +432,8 @@ const GULineData = struct {
 const GUImageHandle = usize;
 const GUFontHandle = usize;
 
+//------------------------------------------------------------------------------
+
 allocator: Allocator,
 
 backend: GUBackend,
@@ -526,7 +450,7 @@ element_line_stack: ArrayList(GULineData),
 clip_stack: ArrayList(GURect),
 label_arena: ArenaAllocator,
 
-buttons: StringHashMap(GUButton),
+buttons: StringHashMap(Button),
 button_delete_queue: ArrayList([]const u8),
 
 base_layout: GULayout,
@@ -547,7 +471,7 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
         .element_stack = ArrayList(usize).empty,
         .element_line_stack = ArrayList(GULineData).empty,
         .clip_stack = ArrayList(GURect).empty,
-        .buttons = StringHashMap(GUButton).init(alloc),
+        .buttons = StringHashMap(Button).init(alloc),
         .button_delete_queue = ArrayList([]const u8).empty,
         .render_commands = ArrayList(GURenderCommand).empty,
         .base_layout = base_layout orelse GULayout.Default,
@@ -566,6 +490,7 @@ pub fn Deinit(self: *GU) void {
     self.fonts.deinit(self.allocator);
 }
 
+//------------------------------------------------------------------------------
 // RESOURCES
 
 // TODO: impl handle-based system
@@ -580,6 +505,7 @@ pub fn AddImage(self: *GU, image: GUTextureAtlas) !usize {
     return self.images.items.len - 1;
 }
 
+//------------------------------------------------------------------------------
 // FRAME
 
 pub fn BeginFrame(self: *GU) !void {
@@ -627,6 +553,9 @@ pub fn EndFrame(self: *GU) void {
 
     self.backend.EndRendering();
 }
+
+//------------------------------------------------------------------------------
+// LAYOUT PASSES
 
 // FIXME: cleanup/streamline, maybe split into multiple passes if that makes sense
 // TODO: rename to DoElementResizeAndParseLineBreaks ??
@@ -842,6 +771,7 @@ fn DoButtonPostProcessing(self: *GU) void {
         _ = self.buttons.remove(item);
 }
 
+//------------------------------------------------------------------------------
 // LAYOUT
 
 /// returns whether creating a new container was successful. guarantees the element
@@ -929,6 +859,18 @@ pub fn EndContainer(self: *GU) void {
         assert(element.area.h < 0);
     }
 
+    // TODO: move button style to a style stack-like setup, not hardcoded
+    // Button
+    if (element.features.bClickable) {
+        element.layout.color = switch (element.btn_state) {
+            .Idle => if (element.features.bClickDepressed) Button.COLOR_DOWN else Button.COLOR_IDLE,
+            .Hover => if (element.features.bClickDepressed) Button.COLOR_IDLE else Button.COLOR_HOVER,
+            .Down => Button.COLOR_DOWN,
+        };
+        element.layout.padding = .{ .w = Button.PADDING_HORIZONTAL, .h = Button.PADDING_VERTICAL };
+        element.layout.corner = .{ .radius = Button.CORNER_RADIUS, .style = .Round };
+    }
+
     switch (element.mode) {
         .Block => {},
         .Rect => {
@@ -993,6 +935,9 @@ const SetElementGaps = SetContainerGaps;
 const SetElementColor = SetContainerColor;
 const SetElementSize = SetContainerSize;
 
+//------------------------------------------------------------------------------
+// "STOCK" WIDGETS
+
 pub fn DoRect(self: *GU, size: GUSize, color: u32) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
@@ -1030,14 +975,18 @@ pub fn DoLabel(self: *GU, font: ?GUFontHandle, color: ?u32, comptime fmt: []cons
     element.layout.mode_h = .Fixed;
 }
 
-/// turns element into a button and executes the button logic. button is identified
-/// internally by hash of the element id concatenated with str
-/// to emulate DoButton behaviour, use mode .Press and return .activated or false if null
-pub fn DoButtonLogic(self: *GU, mode: GUButtonMode, str: []const u8) ?GUButtonData {
+// TODO: more robust hashing strategy that doesn't cause hover state to break on
+//  buttons that change where the button is in the element tree (e.g. by inserting
+//  or removing an element above the button)
+/// Turns the current element into a button and evaluates the input state. To
+/// track state between frames, the button is identified internally by hash of the
+/// element id concatenated with str. To emulate standard button behaviour in a
+/// custom widget, refer to the call to this function in `DoButton`.
+pub fn DoButtonLogic(self: *GU, mode: Button.Mode, str: []const u8) ?GUButtonData {
     const element = self.GetElement();
     element.features.bClickable = true;
 
-    const btn: *GUButton = get_button: {
+    const btn: *Button = get_button: {
         const btn_key = std.fmt.allocPrint(self.allocator, "{X:0>16}{s}", .{ element.id, str }) catch
             return null;
         const btn_info = self.buttons.getOrPut(btn_key) catch
@@ -1045,14 +994,15 @@ pub fn DoButtonLogic(self: *GU, mode: GUButtonMode, str: []const u8) ?GUButtonDa
 
         const btn = btn_info.value_ptr;
         if (!btn_info.found_existing) {
-            btn.* = GUButton{
+            btn.* = Button{
                 .state = .Idle,
                 .mode = mode,
-                .area = GURect.Zero,
+                .area = .Zero,
                 .element = element.id,
             };
         } else btn.element = element.id;
 
+        element.btn_state = btn.state;
         break :get_button btn;
     };
 
@@ -1070,17 +1020,8 @@ pub fn DoButtonLogic(self: *GU, mode: GUButtonMode, str: []const u8) ?GUButtonDa
 pub fn DoButton(self: *GU, font: ?GUFontHandle, comptime fmt: []const u8, args: anytype) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
-    const element = self.GetElement();
 
     const btn = self.DoButtonLogic(.Press, fmt) orelse return false;
-
-    element.layout.color = switch (btn.button.state) {
-        .Idle => GUButton.COLOR_IDLE,
-        .Hover => GUButton.COLOR_HOVER,
-        .Down => GUButton.COLOR_DOWN,
-    };
-    element.layout.padding = .{ .w = GUButton.PADDING_HORIZONTAL, .h = GUButton.PADDING_VERTICAL };
-    element.layout.corner = .{ .radius = GUButton.CORNER_RADIUS, .style = .Round };
 
     self.DoLabel(font, null, fmt, args);
 
@@ -1095,18 +1036,10 @@ pub fn DoButton(self: *GU, font: ?GUFontHandle, comptime fmt: []const u8, args: 
 pub fn DoToggleButton(self: *GU, active: *bool, font: ?GUFontHandle, comptime fmt: []const u8, args: anytype) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
-    const element = self.GetElement();
 
     const btn = self.DoButtonLogic(.Press, fmt) orelse return false;
+    if (active.*) self.GetElement().features.bClickDepressed = true;
     if (btn.activated) active.* = !active.*;
-
-    element.layout.color = switch (btn.button.state) {
-        .Idle => if (active.*) GUButton.COLOR_DOWN else GUButton.COLOR_IDLE,
-        .Hover => if (active.*) GUButton.COLOR_IDLE else GUButton.COLOR_HOVER,
-        .Down => GUButton.COLOR_DOWN,
-    };
-    element.layout.padding = .{ .w = GUButton.PADDING_HORIZONTAL, .h = GUButton.PADDING_VERTICAL };
-    element.layout.corner = .{ .radius = GUButton.CORNER_RADIUS, .style = .Round };
 
     self.DoLabel(font, null, fmt, args);
 
