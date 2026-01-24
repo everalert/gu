@@ -3,6 +3,8 @@ const std = @import("std");
 const assert = std.debug.assert;
 const clamp = std.math.clamp;
 const log2_int_ceil = std.math.log2_int_ceil;
+const pow = std.math.pow;
+const sign = std.math.sign;
 
 const c = @import("c.zig").c;
 const SDLE = @import("c.zig").SDLE;
@@ -21,6 +23,8 @@ const GUFontAtlas = GU.GUFontAtlas;
 const GUButton = GU.GUButton;
 const GULayout = GU.GULayout;
 const GURenderCommand = GU.GURenderCommand;
+
+const sdf = @import("sdf.zig");
 
 const WINDOW_W = 800;
 const WINDOW_H = 600;
@@ -188,208 +192,10 @@ const CornerTexture = struct {
 };
 
 //------------------------------------------------------------------------------
-// FIXME: remove/adapt or whatever; testing impl for sdf-based texture gen
 
-// TODO:
-//  - superellipse sdf, or some acceptable approximation. should be stable up to
-//    +/- 1px for an 8px radius.
-
-const CORNER_PIXELS_SUPERELLIPSE_LOD = [_][]const u32{
-    &generate_corner_pixels_comptime(4, sd_superellipse),
-    &generate_corner_pixels_comptime(8, sd_superellipse),
-    &generate_corner_pixels_comptime(16, sd_superellipse),
-    &generate_corner_pixels_comptime(32, sd_superellipse),
-};
-const CORNER_PIXELS_QCIRCLE_LOD = [_][]const u32{
-    &generate_corner_pixels_comptime(4, sd_quadratic_circle),
-    &generate_corner_pixels_comptime(8, sd_quadratic_circle),
-    &generate_corner_pixels_comptime(16, sd_quadratic_circle),
-    &generate_corner_pixels_comptime(32, sd_quadratic_circle),
-};
-const CORNER_PIXELS_CHAMFER_LOD = [_][]const u32{
-    &generate_corner_pixels_comptime(4, sd_chamfer_box),
-    &generate_corner_pixels_comptime(8, sd_chamfer_box),
-    &generate_corner_pixels_comptime(16, sd_chamfer_box),
-    &generate_corner_pixels_comptime(32, sd_chamfer_box),
-};
-const CORNER_PIXELS_OCTAGON_LOD = [_][]const u32{
-    &generate_corner_pixels_comptime(4, sd_octagon),
-    &generate_corner_pixels_comptime(8, sd_octagon),
-    &generate_corner_pixels_comptime(16, sd_octagon),
-    &generate_corner_pixels_comptime(32, sd_octagon),
-};
-
-fn generate_corner_pixels_comptime(
-    comptime RADIUS: u32,
-    fn_sdf: *const fn (x: f32, y: f32, r: f32) f32,
-) [RADIUS * RADIUS * 4]u32 {
-    assert(@inComptime());
-
-    var pixels: [RADIUS * RADIUS * 4]u32 = undefined;
-    generate_corner_pixels(RADIUS, &pixels, fn_sdf);
-    return pixels;
-}
-
-fn generate_corner_pixels(
-    rad: u32,
-    pixels: []u32, // RGBA8888
-    fn_sdf: *const fn (x: f32, y: f32, r: f32) f32,
-) void {
-    assert(std.math.isPowerOfTwo(rad));
-    assert(pixels.len == rad * rad * 4);
-
-    const width = rad * 2;
-    const middle = rad - 1;
-    for (0..rad) |y| {
-        for (0..rad) |x| {
-            @setEvalBranchQuota(1000000);
-            const sd = clamp(-fn_sdf(x, y, rad), 0, 1) * 255;
-            const val: u32 = @intFromFloat(@max(sd, 0));
-
-            const px_tl = &pixels[middle - x + (middle - y) * width];
-            const px_tr = &pixels[x + rad + (middle - y) * width];
-            const px_bl = &pixels[middle - x + (y + rad) * width];
-            const px_br = &pixels[x + rad + (y + rad) * width];
-            px_tl.* = 0xFFFFFF00 | val;
-            px_tr.* = 0xFFFFFF00 | val;
-            px_bl.* = 0xFFFFFF00 | val;
-            px_br.* = 0xFFFFFF00 | val;
-        }
-    }
-}
-
-fn sd_circle(x: f32, y: f32, r: f32) f32 {
-    return @sqrt(x * x + y * y) - r;
-}
-
-fn sd_quadratic_circle(x: f32, y: f32, r: f32) f32 {
-    const ax = @abs(if (y > x) y else x) / r;
-    const ay = @abs(if (y > x) x else y) / r;
-
-    const a: f32 = ax - ay;
-    const b: f32 = ax + ay;
-    const d: f32 = (2.0 * b - 1.0) / 3.0;
-    var h: f32 = a * a + d * d * d;
-    var t: f32 = 0;
-    if (h >= 0.0) {
-        @setEvalBranchQuota(1000000);
-        h = @sqrt(h);
-        t = std.math.sign(h - a) *
-            std.math.pow(f32, @abs(h - a), 1.0 / 3.0) -
-            std.math.pow(f32, h + a, 1.0 / 3.0);
-    } else {
-        const z = @sqrt(-d);
-        const v = std.math.acos(a / (d * z)) / 3.0;
-        t = -z * (std.math.cos(v) + std.math.sin(v) * 1.732050808);
-    }
-    t *= 0.5;
-    const wx = -t + 0.75 - t * t - ax;
-    const wy = t + 0.75 - t * t - ay;
-    return @sqrt(wx * wx + wy * wy) * std.math.sign(a * a * 0.5 + b - 1.5) * r;
-}
-
-// FIXME: doesn't really work well (or at all, for some N values). maybe another
-//  binary search style approach would be to check the dot product between the
-//  curve normal tangent and the curve-to-point vector, otherwise just bite the
-//  bullet and do newtonian iteration
-// binary search-based sdf approximation
-fn sd_superellipse(x: f32, y: f32, r: f32) f32 {
-    @setEvalBranchQuota(2000000);
-    const ax = @max(@abs(x), @abs(y));
-    const ay = @min(@abs(x), @abs(y));
-
-    const N: f32 = 4;
-    const na = 2 / N;
-
-    var st_a: f32 = 0; // angle
-    var st_x = r * std.math.pow(f32, @cos(st_a), na); // * std.math.sign(@cos(st_a));
-    var st_y = r * std.math.pow(f32, @sin(st_a), na); // * std.math.sign(@sin(st_a));
-    var st_d = @sqrt((st_x - ax) * (st_x - ax) + (st_y - ay) * (st_y - ay)); // dist
-
-    var ed_a: f32 = @as(f32, std.math.pi) / 4;
-    var ed_x = r * std.math.pow(f32, @cos(ed_a), na); // * std.math.sign(@cos(ed_a));
-    var ed_y = r * std.math.pow(f32, @sin(ed_a), na); // * std.math.sign(@sin(ed_a));
-    var ed_d = @sqrt((ed_x - ax) * (ed_x - ax) + (ed_y - ay) * (ed_y - ay));
-
-    while (@abs(st_d - ed_d) > 0.01) {
-        const next_a = st_a * 0.5 + ed_a * 0.5;
-        if (st_d > ed_d) {
-            st_a = next_a;
-            st_x = r * std.math.pow(f32, @cos(st_a), na); // * std.math.sign(@cos(st_a));
-            st_y = r * std.math.pow(f32, @sin(st_a), na); // * std.math.sign(@sin(st_a));
-            st_d = @sqrt((st_x - ax) * (st_x - ax) + (st_y - ay) * (st_y - ay));
-        } else {
-            ed_a = next_a;
-            ed_x = r * std.math.pow(f32, @cos(ed_a), na); // * std.math.sign(@cos(ed_a));
-            ed_y = r * std.math.pow(f32, @sin(ed_a), na); // * std.math.sign(@sin(ed_a));
-            ed_d = @sqrt((ed_x - ax) * (ed_x - ax) + (ed_y - ay) * (ed_y - ay));
-        }
-    }
-
-    const pt_d: f32 = @sqrt(ax * ax + ay * ay);
-    const st_0d: f32 = @sqrt(st_x * st_x + st_y * st_y);
-    return if (pt_d < st_0d) -st_d else st_d;
-}
-
-fn sd_rhombus(x: f32, y: f32, r: f32) f32 {
-    const ax = @abs(x);
-    const ay = @abs(y);
-    const rx = r;
-    const ry = -r;
-    const dot_r = rx * rx + ry * ry;
-    const dot_bp = rx * ax + ry * ay;
-    const h: f32 = clamp((dot_bp + ry * ry) / dot_r, 0.0, 1.0);
-    const ox = ax - rx * h;
-    const oy = ay - ry * (h - 1);
-    return @sqrt(ox * ox + oy * oy) * std.math.sign(ox);
-}
-
-fn sd_chamfer_box(x: f32, y: f32, r: f32) f32 {
-    assert(r >= 2);
-    const chamfer: f32 = r - 1; // edge is fuzzy if cutting too much
-
-    const ax = @abs(if (y > x) y else x) - r;
-    const ay = @abs(if (y > x) x else y) - r + chamfer;
-    const k: f32 = 1.0 - @sqrt(2.0);
-
-    if (ay < 0.0 and ay + ax * k < 0.0)
-        return ax;
-
-    if (ax < ay)
-        return (ax + ay) * @sqrt(0.5);
-
-    return @sqrt(ax * ax + ay * ay);
-}
-
-// https://www.shadertoy.com/view/3lK3RG
-// octagon with vertices on cardinals
-fn sd_octagon(x: f32, y: f32, r: f32) f32 {
-    const k: [4]f32 = .{
-        -0.9238795325, // sqrt(2+sqrt(2))/2  // COS PI/8
-        0.3826834323, // sqrt(2-sqrt(2))/2  // SIN PI/8
-        0.4142135623, // sqrt(2)-1          // TAN PI/8
-        0.7071067812, // 1/sqrt(2)          // SIN PI/4
-    };
-
-    var ax = @abs(x);
-    var ay = @abs(y);
-
-    const dot1 = ax * k[3] + ay * -k[3];
-    ax -= 2.0 * @min(dot1, 0.0) * k[3]; // Reflect about pi/4 plane
-    ay -= 2.0 * @min(dot1, 0.0) * -k[3];
-
-    const dot2 = ax * -k[1] + ay * -k[0];
-    const dot3 = ax * -k[0] + ay * k[1];
-    ax = dot2; // Rotate by 22.5 degrees
-    ay = dot3;
-
-    ax -= clamp(ax, -k[2] * r, k[2] * r); // Collapse the polygon edge to a point
-    ay -= r;
-
-    return @sqrt(ax * ax + ay * ay) * std.math.sign(ay);
-}
-
-//------------------------------------------------------------------------------
+const CORNER_PIXELS_CIRCLE_LOD = generate_corner_pixels_lod(2, 4, sdf.sd_circle);
+const CORNER_PIXELS_CHAMFER_LOD = generate_corner_pixels_lod(2, 4, sdf.sd_chamfer_box);
+const CORNER_PIXELS_OCTAGON_LOD = generate_corner_pixels_lod(2, 4, sdf.sd_octagon);
 
 const RenderData = struct {
     window: ?*c.SDL_Window,
@@ -416,9 +222,12 @@ const RenderData = struct {
         SDLE(c.SDL_SetHint(c.SDL_HINT_RENDER_VSYNC, "1")) catch {};
         try SDLE(c.SDL_CreateWindowAndRenderer("GU", WINDOW_W, WINDOW_H, 0, &rd.window, &rd.renderer));
 
+        comptime assert(CORNER_PIXELS_CIRCLE_LOD.len == LOD_LEVELS);
+        comptime assert(CORNER_PIXELS_CHAMFER_LOD.len == LOD_LEVELS);
+        comptime assert(CORNER_PIXELS_OCTAGON_LOD.len == LOD_LEVELS);
         for (0..LOD_LEVELS) |i| {
-            const width = std.math.pow(i32, 2, @as(i32, @intCast(i)) + 2) * 2;
-            rd.tex_corner_rnd_lod[i] = try CornerTexture.Init(rd.renderer, width, CORNER_PIXELS_SUPERELLIPSE_LOD[i]);
+            const width = pow(i32, 2, @as(i32, @intCast(i)) + 2) * 2;
+            rd.tex_corner_rnd_lod[i] = try CornerTexture.Init(rd.renderer, width, CORNER_PIXELS_CIRCLE_LOD[i]);
             rd.tex_corner_bev_lod[i] = try CornerTexture.Init(rd.renderer, width, CORNER_PIXELS_CHAMFER_LOD[i]);
             rd.tex_corner_ang_lod[i] = try CornerTexture.Init(rd.renderer, width, CORNER_PIXELS_OCTAGON_LOD[i]);
         }
@@ -558,6 +367,30 @@ const RenderData = struct {
     }
 };
 
+fn generate_corner_pixels_lod(
+    comptime S: usize,
+    comptime N: usize,
+    fn_sdf: *const fn (x: f32, y: f32, r: f32) f32,
+) [N][]const u32 {
+    var lod: [N][]const u32 = undefined;
+    for (0..N) |i| lod[i] = &generate_corner_pixels(pow(usize, 2, i + S), fn_sdf);
+    return lod;
+}
+
+fn generate_corner_pixels(
+    comptime RADIUS: u32,
+    fn_sdf: *const fn (x: f32, y: f32, r: f32) f32,
+) [RADIUS * RADIUS * 4]u32 {
+    assert(std.math.isPowerOfTwo(RADIUS));
+    assert(@inComptime());
+
+    var field: [RADIUS * RADIUS * 4]f32 = undefined;
+    var pixels: [RADIUS * RADIUS * 4]u32 = undefined;
+    sdf.render_whole_from_quadrant(RADIUS, &field, fn_sdf);
+    for (field, &pixels) |f, *p| p.* = 0xFFFFFF00 | @as(u32, @intFromFloat(clamp(-f, 0, 1) * 255));
+    return pixels;
+}
+
 //------------------------------------------------------------------------------
 
 const StyleAngular = GUCorner.Style.Custom1;
@@ -582,7 +415,7 @@ const LAYOUT_RED = std.mem.zeroInit(GULayout, .{
 const LAYOUT_WHITE = std.mem.zeroInit(GULayout, .{
     .color = 0xFFFFFF20,
     .padding = GUSize{ .w = 4, .h = 4 },
-    .corner = .{ .style = .Round, .radius = 32 },
+    .corner = .{ .style = .Round, .radius = 8 },
 });
 
 const LAYOUT_WHITE_BREAK = std.mem.zeroInit(GULayout, .{
