@@ -1,6 +1,7 @@
 const GU = @This();
 
 const std = @import("std");
+const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const ArrayList = std.ArrayList;
@@ -10,11 +11,12 @@ const maxInt = std.math.maxInt;
 const zeroInit = std.mem.zeroInit;
 
 pub const GURect = struct {
-    pub const Zero = GURect{ .x = 0, .y = 0, .w = 0, .h = 0 };
     x: f32,
     y: f32,
     w: f32,
     h: f32,
+
+    pub const Zero = GURect{ .x = 0, .y = 0, .w = 0, .h = 0 };
 
     pub fn IsCollidingPoint(self: *const GURect, pt: *const GUPos) bool {
         return (pt.x >= self.x and
@@ -31,7 +33,7 @@ pub const GURect = struct {
     }
 
     pub inline fn HasNonZeroArea(self: *const GURect) bool {
-        return self.w > 0 and self.h > 0;
+        return self.w * self.h > 0;
     }
 
     pub inline fn GetSmallestDimension(self: *const GURect) f32 {
@@ -58,9 +60,10 @@ pub const GURect = struct {
 
 // TODO: rename to GUPoint?
 pub const GUPos = struct {
-    pub const Zero = GUPos{ .x = 0, .y = 0 };
     x: f32,
     y: f32,
+
+    pub const Zero = GUPos{ .x = 0, .y = 0 };
 
     pub fn FromRect(rect: *GURect) GUPos {
         return GUPos{ .x = rect.x, .y = rect.y };
@@ -68,12 +71,17 @@ pub const GUPos = struct {
 };
 
 pub const GUSize = struct {
-    pub const Zero = GUSize{ .w = 0, .h = 0 };
     w: f32,
     h: f32,
 
-    pub fn FromRect(rect: *GURect) GUSize {
+    pub const Zero = GUSize{ .w = 0, .h = 0 };
+
+    pub fn FromRect(rect: *const GURect) GUSize {
         return GUSize{ .w = rect.w, .h = rect.h };
+    }
+
+    pub inline fn HasNonZeroArea(self: *const GUSize) bool {
+        return self.w * self.h > 0;
     }
 };
 
@@ -312,33 +320,33 @@ pub const GUKeyState = struct {
 
 // TODO: impl image tilesets
 // TODO: impl absolute/relative positioning
-const GUElement = struct {
-    layout: GULayout,
-    area: GURect,
-    fill: GUSize, // how big the element is for layout calculations
-    mode: union(enum) {
-        Block: void,
-        Rect: GUSize,
-        Image: struct {
-            image: GUImageHandle,
-            //tile: ?u32,
-        },
-        Label: struct {
-            str: []const u8,
-            font: GUFontHandle,
-        },
-        Button: void,
-    },
-
+const Element = struct {
     id: usize,
     parent: ?usize,
     children: usize,
     first_child: ?usize,
     sibling_next: ?usize,
     sibling_prev: ?usize,
-    features: Features,
 
-    const empty: GUElement = .{
+    mode: enum {
+        Block,
+        Rect,
+        // FIXME: stuff based on Image should just be a "use texture" behaviour,
+        //  where the `DoImage` just sets the dimensions of the element to match
+        //  the texture.
+        Image,
+        Label,
+    },
+    features: Features,
+    layout: GULayout,
+    area: GURect,
+    fill: GUSize, // how big the element is for layout calculations
+    image: GUImageHandle,
+    label_str: []const u8,
+    label_font: GUFontHandle,
+    rect_size: GUSize,
+
+    const empty: Element = .{
         .layout = .Default,
         .area = .Zero,
         .fill = .Zero,
@@ -350,6 +358,10 @@ const GUElement = struct {
         .sibling_next = null,
         .sibling_prev = null,
         .features = .empty,
+        .image = maxInt(usize),
+        .label_str = &.{},
+        .label_font = maxInt(usize),
+        .rect_size = .Zero,
     };
 
     const Features = packed struct(u32) {
@@ -374,21 +386,21 @@ const GUElement = struct {
 /// depth-first walk of element tree with pre- and post-order traversal; elements
 /// with children are touched both on the way down and up, i.e. once before then
 /// again after any children are walked
-const GUElementIterator = struct {
-    source: []GUElement,
+const ElementIterator = struct {
+    source: []Element,
     this: ?usize,
     prev: ?usize,
 
-    pub fn Init(source: []GUElement) GUElementIterator {
-        return GUElementIterator{
+    pub fn Init(source: []Element) ElementIterator {
+        return ElementIterator{
             .source = source,
             .this = null,
             .prev = null,
         };
     }
 
-    pub fn Next(self: *GUElementIterator) ?struct {
-        element: *GUElement,
+    pub fn Next(self: *ElementIterator) ?struct {
+        element: *Element,
         relation: enum { Root, Child, Sibling, Parent },
     } {
         if (self.this == null) {
@@ -505,7 +517,7 @@ backend: GUBackend,
 fonts: ArrayList(GUFontAtlas), // TODO: impl with handles, update GUFontHandle
 images: ArrayList(GUTextureAtlas), // TODO: impl with handles, update GUImageHandle
 
-element_tree: ArrayList(GUElement),
+element_tree: ArrayList(Element),
 element_stack: ArrayList(usize),
 element_sibling: ?usize, // most recent sibling
 element_queue_line_break: bool,
@@ -531,7 +543,7 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
         .backend = backend,
         .fonts = ArrayList(GUFontAtlas).empty,
         .images = ArrayList(GUTextureAtlas).empty,
-        .element_tree = ArrayList(GUElement).empty,
+        .element_tree = ArrayList(Element).empty,
         .element_stack = ArrayList(usize).empty,
         .element_line_stack = ArrayList(GULineData).empty,
         .clip_stack = ArrayList(GURect).empty,
@@ -573,8 +585,8 @@ pub fn AddImage(self: *GU, image: GUTextureAtlas) !usize {
 pub fn BeginFrame(self: *GU) !void {
     const surface_size = self.backend.GetSurfaceDimensions();
 
-    std.debug.assert(self.element_stack.items.len == 0);
-    std.debug.assert(self.element_line_stack.items.len == 0);
+    assert(self.element_stack.items.len == 0);
+    assert(self.element_line_stack.items.len == 0);
     _ = self.label_arena.reset(.retain_capacity);
     self.render_commands.clearRetainingCapacity();
     self.element_tree.clearRetainingCapacity();
@@ -623,17 +635,17 @@ pub fn EndFrame(self: *GU) void {
 /// inserts line break markers where needed, and updates parent dimensions in
 /// case of line breaks occurring
 fn DoElementLineBreakParsing(self: *GU) void {
-    std.debug.assert(self.element_line_stack.items.len == 0);
-    defer std.debug.assert(self.element_line_stack.items.len == 0);
+    assert(self.element_line_stack.items.len == 0);
+    defer assert(self.element_line_stack.items.len == 0);
 
     const stack = &self.element_line_stack;
     var ld_base = zeroInit(GULineData, .{ .line = 1 });
     var ld: *GULineData = &ld_base;
 
-    var it = GUElementIterator.Init(self.element_tree.items);
+    var it = ElementIterator.Init(self.element_tree.items);
     while (it.Next()) |it_data| {
         const e = it_data.element;
-        const p: ?*GUElement = if (e.parent) |pa_i| &self.element_tree.items[pa_i] else null;
+        const p: ?*Element = if (e.parent) |pa_i| &self.element_tree.items[pa_i] else null;
 
         if (it_data.relation == .Child) {
             stack.appendAssumeCapacity(zeroInit(GULineData, .{
@@ -683,15 +695,15 @@ fn DoElementLineBreakParsing(self: *GU) void {
 }
 
 fn DoElementPositioning(self: *GU) void {
-    std.debug.assert(self.element_line_stack.items.len == 0);
-    defer std.debug.assert(self.element_line_stack.items.len == 0);
+    assert(self.element_line_stack.items.len == 0);
+    defer assert(self.element_line_stack.items.len == 0);
 
     const stack = &self.element_line_stack;
     var ld_base = zeroInit(GULineData, .{});
     var ld: *GULineData = &ld_base;
-    var p: ?*GUElement = null;
+    var p: ?*Element = null;
 
-    var it = GUElementIterator.Init(self.element_tree.items);
+    var it = ElementIterator.Init(self.element_tree.items);
     while (it.Next()) |it_data| {
         const e = it_data.element;
 
@@ -732,10 +744,10 @@ fn DoElementPositioning(self: *GU) void {
 }
 
 fn DoElementEmitDrawCommands(self: *GU) void {
-    std.debug.assert(self.element_stack.items.len == 0);
-    std.debug.assert(self.clip_stack.items.len == 0);
-    defer std.debug.assert(self.element_stack.items.len == 0);
-    defer std.debug.assert(self.clip_stack.items.len == 0);
+    assert(self.element_stack.items.len == 0);
+    assert(self.clip_stack.items.len == 0);
+    defer assert(self.element_stack.items.len == 0);
+    defer assert(self.clip_stack.items.len == 0);
 
     const stack = &self.clip_stack;
     const sd = self.backend.GetSurfaceDimensions();
@@ -744,7 +756,7 @@ fn DoElementEmitDrawCommands(self: *GU) void {
         std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
     var c: *const GURect = &c_base;
 
-    var it = GUElementIterator.Init(self.element_tree.items);
+    var it = ElementIterator.Init(self.element_tree.items);
     while (it.Next()) |it_data| {
         const e = it_data.element;
 
@@ -770,40 +782,49 @@ fn DoElementEmitDrawCommands(self: *GU) void {
         if (!e.area.HasNonZeroArea()) continue;
 
         self.render_commands.append(self.allocator, switch (e.mode) {
-            .Label => |label| .{ .text = .{
-                .pos = GUPos.FromRect(&e.area),
-                .font = &self.fonts.items[label.font],
-                .color = e.layout.color,
-                .str = label.str,
-            } },
-            .Image => |img| .{ .image = .{
-                .pos = GUPos.FromRect(&e.area),
-                .image = &self.images.items[img.image],
-                .color = e.layout.color,
-                .tile = null,
-            } },
-            .Rect, .Button, .Block => .{ .rect = .{
-                .rect = e.area,
-                .corner = e.layout.corner,
-                .color = e.layout.color,
-            } },
+            .Label => label: {
+                assert(e.label_str.len > 0);
+                assert(e.label_font != maxInt(usize)); // TODO: proper/safe "null font" value
+                break :label GURenderCommand{ .text = .{
+                    .pos = GUPos.FromRect(&e.area),
+                    .font = &self.fonts.items[e.label_font],
+                    .color = e.layout.color,
+                    .str = e.label_str,
+                } };
+            },
+            .Image => image: {
+                assert(e.image != maxInt(usize)); // TODO: proper/safe "null image" value
+                break :image GURenderCommand{ .image = .{
+                    .pos = GUPos.FromRect(&e.area),
+                    .image = &self.images.items[e.image],
+                    .color = e.layout.color,
+                    .tile = null,
+                } };
+            },
+            .Rect, .Block => rect: {
+                break :rect GURenderCommand{ .rect = .{
+                    .rect = e.area,
+                    .corner = e.layout.corner,
+                    .color = e.layout.color,
+                } };
+            },
         }) catch |err| std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
     }
 }
 
 fn DoElementDebugLog(self: *GU) void {
-    var it = GUElementIterator.Init(self.element_tree.items);
+    var it = ElementIterator.Init(self.element_tree.items);
     while (it.Next()) |it_data| {
         const e = it_data.element;
         std.log.debug(
-            "it-element: ({*})  {s: <12}{s: <10}{d}x{d}",
-            .{ e, @tagName(it_data.relation), @tagName(e.mode), e.area.w, e.area.h },
+            "it-element: ({*})  {t: <12}{t: <10}{d}x{d}",
+            .{ e, it_data.relation, e.mode, e.area.w, e.area.h },
         );
     }
 }
 
 fn DoButtonPostProcessing(self: *GU) void {
-    std.debug.assert(self.button_delete_queue.items.len == 0);
+    assert(self.button_delete_queue.items.len == 0);
 
     var it = self.buttons.iterator();
     while (it.next()) |btn_info| {
@@ -827,8 +848,8 @@ fn DoButtonPostProcessing(self: *GU) void {
 /// tree will be in a valid state (i.e. the same as before calling, on failure).
 pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
     if (layout) |lo| {
-        if (lo.widths) |w| std.debug.assert(w.len > 0);
-        if (lo.heights) |h| std.debug.assert(h.len > 0);
+        if (lo.widths) |w| assert(w.len > 0);
+        if (lo.heights) |h| assert(h.len > 0);
     }
 
     const parent_i: ?usize = self.element_stack.getLastOrNull();
@@ -837,7 +858,7 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
     const ld: *GULineData = &self.element_line_stack.items[self.element_line_stack.items.len - 1];
 
     self.element_tree.append(self.allocator, e: {
-        var e: GUElement = .empty;
+        var e: Element = .empty;
         e.layout = if (layout) |lo| lo.* else .Default;
         e.id = element_i;
         e.parent = parent_i;
@@ -850,8 +871,8 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
         return false;
     };
 
-    const parent: ?*GUElement = if (parent_i) |i| &self.element_tree.items[i] else null;
-    const element: *GUElement = &self.element_tree.items[element_i];
+    const parent: ?*Element = if (parent_i) |i| &self.element_tree.items[i] else null;
+    const element: *Element = &self.element_tree.items[element_i];
 
     if (self.element_queue_line_break or
         (parent != null and parent.?.layout.widths != null and
@@ -890,39 +911,43 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
 pub fn EndContainer(self: *GU) void {
     _ = self.element_line_stack.pop();
     const element_i = self.element_stack.pop().?;
-    const element: *GUElement = &self.element_tree.items[element_i];
-    const parent: ?*GUElement = if (element.parent) |p| &self.element_tree.items[p] else null;
+    const element: *Element = &self.element_tree.items[element_i];
+    const parent: ?*Element = if (element.parent) |p| &self.element_tree.items[p] else null;
     self.element_sibling = element_i;
     self.element_queue_line_break = false; // cleanup unused line break
 
     if (element.layout.mode_w == .Stretch) {
-        std.debug.assert(parent != null);
-        std.debug.assert(parent.?.layout.widths != null);
-        std.debug.assert(parent.?.layout.mode_w.IsPreComputable());
-        std.debug.assert(element.area.w < 0);
+        assert(parent != null);
+        assert(parent.?.layout.widths != null);
+        assert(parent.?.layout.mode_w.IsPreComputable());
+        assert(element.area.w < 0);
     }
     if (element.layout.mode_h == .Stretch) {
-        std.debug.assert(parent != null);
-        std.debug.assert(parent.?.layout.heights != null);
-        std.debug.assert(parent.?.layout.mode_h.IsPreComputable());
-        std.debug.assert(element.area.h < 0);
+        assert(parent != null);
+        assert(parent.?.layout.heights != null);
+        assert(parent.?.layout.mode_h.IsPreComputable());
+        assert(element.area.h < 0);
     }
 
     switch (element.mode) {
-        .Block, .Button => {},
-        .Rect => |rect| {
+        .Block => {},
+        .Rect => {
+            assert(element.rect_size.HasNonZeroArea());
             // TODO: stretch-like rect dimensions
-            element.area.w = rect.w;
-            element.area.h = rect.h;
+            element.area.w = element.rect_size.w;
+            element.area.h = element.rect_size.h;
         },
-        .Image => |image| {
-            const image_size = &self.images.items[image.image].Size();
+        .Image => {
+            assert(element.image != maxInt(usize)); // TODO: proper/safe "null font" value
+            const image_size = &self.images.items[element.image].Size();
             element.area.w = image_size.w;
             element.area.h = image_size.h;
         },
-        .Label => |label| {
+        .Label => {
+            assert(element.label_str.len > 0);
+            assert(element.label_font != maxInt(usize)); // TODO: proper/safe "null font" value
             // TODO: account for text wrapping
-            const label_size = &self.fonts.items[label.font].StringSize(label.str);
+            const label_size = &self.fonts.items[element.label_font].StringSize(element.label_str);
             element.area.w = label_size.w;
             element.area.h = label_size.h;
         },
@@ -931,7 +956,7 @@ pub fn EndContainer(self: *GU) void {
 
 /// returns pointer to current element. pointer is only guaranteed to be valid
 /// until the next call to DoContainer
-pub inline fn GetContainer(self: *GU) *GUElement {
+pub inline fn GetContainer(self: *GU) *Element {
     const i = self.element_stack.getLast();
     const element = &self.element_tree.items[i];
     return element;
@@ -972,7 +997,8 @@ pub fn DoRect(self: *GU, size: GUSize, color: u32) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
-    element.mode = .{ .Rect = size };
+    element.mode = .Rect;
+    element.rect_size = size;
     element.layout.color = color;
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
@@ -982,7 +1008,8 @@ pub fn DoImage(self: *GU, image: GUImageHandle, color: ?u32) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
-    element.mode = .{ .Image = .{ .image = image } };
+    element.mode = .Image;
+    element.image = image;
     element.layout.color = color orelse 0xFFFFFFFF;
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
@@ -995,7 +1022,9 @@ pub fn DoLabel(self: *GU, font: ?GUFontHandle, color: ?u32, comptime fmt: []cons
     const element = self.GetElement();
     const str = std.fmt.allocPrint(self.label_arena.allocator(), fmt, args) catch |err|
         std.debug.panic("DoLabel failed to allocate string: ({s})", .{@errorName(err)});
-    element.mode = .{ .Label = .{ .font = font orelse 0, .str = str } };
+    element.mode = .Label;
+    element.label_font = font orelse 0;
+    element.label_str = str;
     element.layout.color = color orelse 0xFFFFFFFF;
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
@@ -1006,7 +1035,7 @@ pub fn DoLabel(self: *GU, font: ?GUFontHandle, color: ?u32, comptime fmt: []cons
 /// to emulate DoButton behaviour, use mode .Press and return .activated or false if null
 pub fn DoButtonLogic(self: *GU, mode: GUButtonMode, str: []const u8) ?GUButtonData {
     const element = self.GetElement();
-    element.mode = .{ .Button = {} };
+    element.features.bClickable = true;
 
     const btn: *GUButton = get_button: {
         const btn_key = std.fmt.allocPrint(self.allocator, "{X:0>16}{s}", .{ element.id, str }) catch
