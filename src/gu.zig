@@ -336,7 +336,37 @@ const GUElement = struct {
     first_child: ?usize,
     sibling_next: ?usize,
     sibling_prev: ?usize,
-    line_break: bool,
+    features: Features,
+
+    const empty: GUElement = .{
+        .layout = .Default,
+        .area = .Zero,
+        .fill = .Zero,
+        .mode = .Block,
+        .id = 0,
+        .parent = null,
+        .children = 0,
+        .first_child = null,
+        .sibling_next = null,
+        .sibling_prev = null,
+        .features = .empty,
+    };
+
+    const Features = packed struct(u32) {
+        // Visual functionality
+        bShowImage: bool, // assert image value set
+        bShowLabel: bool, // assert string and font value set
+        // Layout functionality
+        bLineBreak: bool,
+        // Button functionality
+        bClickable: bool,
+        bClickDown: bool,
+        bClickHover: bool,
+
+        _: u26,
+
+        pub const empty = std.mem.zeroInit(Features, .{});
+    };
 };
 
 // TODO: specify traversal order during Init, as a convenience so that user doesn't
@@ -635,9 +665,9 @@ fn DoElementLineBreakParsing(self: *GU) void {
             p.?.layout.widths == null and
             p.?.layout.mode_w.IsPreComputable() and
             ld.current_w + ld.parent_gaps.w + e.area.w > p.?.area.w - ld.parent_padding.w * 2)
-            e.line_break = true;
+            e.features.bLineBreak = true;
 
-        if (it_data.relation == .Child or e.line_break) {
+        if (it_data.relation == .Child or e.features.bLineBreak) {
             ld.max_w = @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items));
             ld.line += 1;
             ld.current_y += ld.current_h;
@@ -685,7 +715,7 @@ fn DoElementPositioning(self: *GU) void {
 
         const gaps = if (p != null) p.?.layout.gaps else GUSize.Zero;
 
-        if (e.line_break) {
+        if (e.features.bLineBreak) {
             const pos = if (p != null) GUPos.FromRect(&p.?.area) else GUPos.Zero;
             const padding = if (p != null) p.?.layout.padding else GUSize.Zero;
             e.area.x = pos.x + padding.w;
@@ -806,18 +836,13 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
 
     const ld: *GULineData = &self.element_line_stack.items[self.element_line_stack.items.len - 1];
 
-    self.element_tree.append(self.allocator, GUElement{
-        .area = GURect.Zero,
-        .fill = GUSize.Zero,
-        .layout = if (layout) |lo| lo.* else GULayout.Default,
-        .mode = .{ .Block = {} },
-        .id = element_i,
-        .parent = parent_i,
-        .sibling_next = null,
-        .sibling_prev = self.element_sibling,
-        .children = 0,
-        .first_child = null,
-        .line_break = false,
+    self.element_tree.append(self.allocator, e: {
+        var e: GUElement = .empty;
+        e.layout = if (layout) |lo| lo.* else .Default;
+        e.id = element_i;
+        e.parent = parent_i;
+        e.sibling_prev = self.element_sibling;
+        break :e e;
     }) catch return false;
 
     self.element_stack.append(self.allocator, element_i) catch {
@@ -835,7 +860,7 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
         self.element_queue_line_break = false;
         ld.line += 1;
         ld.current_items = 0;
-        element.line_break = true;
+        element.features.bLineBreak = true;
     }
     ld.current_items += 1;
 
