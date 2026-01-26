@@ -17,7 +17,9 @@ const GUCorner = GU.GUCorner;
 const GUTextureAtlas = GU.GUTextureAtlas;
 const GUFontAtlas = GU.GUFontAtlas;
 const GULayout = GU.GULayout;
-const GURenderCommand = GU.GURenderCommand;
+const GURCRect = GU.RCRect;
+const GURCText = GU.RCText;
+const GURCClip = GU.RCClip;
 
 const GUMath = @import("gu_math.zig");
 const GURect = GUMath.Rect;
@@ -274,7 +276,7 @@ const RenderData = struct {
         return GURect{ .x = 0, .y = 0, .w = sd.w, .h = sd.h };
     }
 
-    fn DrawRect(ptr: *anyopaque, cmd: *const GURenderCommand.Rect) void {
+    fn DrawRect(ptr: *anyopaque, cmd: *const GURCRect) void {
         const self: *RenderData = @ptrCast(@alignCast(ptr));
         const c1 = GUColor.FromInt(cmd.color);
         SDLEP(c.SDL_SetRenderDrawColor(self.renderer, c1.r, c1.g, c1.b, c1.a));
@@ -326,13 +328,13 @@ const RenderData = struct {
         ));
     }
 
-    fn DrawString(_: *anyopaque, cmd: *const GURenderCommand.Text) void {
+    fn DrawString(_: *anyopaque, cmd: *const GURCText) void {
         //const self: *RenderData = @alignCast(@ptrCast(ptr));
         cmd.font.SetColor(cmd.color);
         cmd.font.DrawString(cmd.str, &cmd.pos);
     }
 
-    fn SetClip(ptr: *anyopaque, cmd: *const GURenderCommand.Clip) void {
+    fn SetClip(ptr: *anyopaque, cmd: *const GURCClip) void {
         const self: *RenderData = @ptrCast(@alignCast(ptr));
         const rect = c.SDL_Rect{
             .x = @as(c_int, @intFromFloat(cmd.area.x)),

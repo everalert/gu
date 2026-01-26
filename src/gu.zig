@@ -19,9 +19,9 @@ const GUColor = GUMath.Color;
 pub const GUBackend = struct {
     ptr: *anyopaque,
     fnGetSurfaceDimensions: *const fn (*anyopaque) GUSize,
-    fnDrawRect: *const fn (*anyopaque, *const GURenderCommand.Rect) void,
-    fnDrawString: *const fn (*anyopaque, *const GURenderCommand.Text) void,
-    fnSetClip: *const fn (*anyopaque, *const GURenderCommand.Clip) void,
+    fnDrawRect: *const fn (*anyopaque, *const RCRect) void,
+    fnDrawString: *const fn (*anyopaque, *const RCText) void,
+    fnSetClip: *const fn (*anyopaque, *const RCClip) void,
     fnBeginRendering: *const fn (*anyopaque) void,
     fnEndRendering: *const fn (*anyopaque) void,
 
@@ -30,15 +30,15 @@ pub const GUBackend = struct {
     }
 
     // TODO: impl texture tile drawing, see GURenderCommand->Rect
-    pub fn DrawRect(self: *GUBackend, cmd: *const GURenderCommand.Rect) void {
+    pub fn DrawRect(self: *GUBackend, cmd: *const RCRect) void {
         self.fnDrawRect(self.ptr, cmd);
     }
 
-    pub fn DrawString(self: *GUBackend, cmd: *const GURenderCommand.Text) void {
+    pub fn DrawString(self: *GUBackend, cmd: *const RCText) void {
         self.fnDrawString(self.ptr, cmd);
     }
 
-    pub fn SetClip(self: *GUBackend, cmd: *const GURenderCommand.Clip) void {
+    pub fn SetClip(self: *GUBackend, cmd: *const RCClip) void {
         self.fnSetClip(self.ptr, cmd);
     }
 
@@ -54,12 +54,7 @@ pub const GUBackend = struct {
     }
 };
 
-pub const GUCorner = struct {
-    radius: f32,
-    style: Style,
-
-    pub const Style = enum { None, Round, Custom1, Custom2, Custom3, Custom4, Custom5, Custom6 };
-};
+//------------------------------------------------------------------------------
 
 // FIXME: don't really like having the field types separated, but afaik needed to
 // pass their types to function params (see GUBackend); investigate to confirm
@@ -68,39 +63,58 @@ pub const GUCorner = struct {
 // when calling the GUBackend functions; however, it makes for cleaner fn defs
 // and theoretically cuts down on stack thrashing (to compare/confirm), need to
 // make a final call on which way to do it
-pub const GURenderCommand = union(enum) {
-    rect: Rect,
-    text: Text,
-    clip: Clip,
+pub const RenderCommand = struct {
+    kind: Kind,
+    handle: usize, // TODO: actual handle impl
 
-    pub const Rect = struct {
-        rect: GURect,
-        corner: GUCorner,
-        color: u32,
-        texture: ?*GUTextureAtlas,
-        tile: ?u32, // for texture atlases
+    pub const Kind = enum { rect, text, clip };
 
-        pub fn init(rect: GURect, corner: GUCorner, color: u32) Rect {
-            return std.mem.zeroInit(Rect, .{
-                .rect = rect,
-                .corner = corner,
-                .color = color,
-            });
-        }
-    };
-
-    pub const Text = struct {
-        str: []const u8,
-        font: *GUFontAtlas,
-        pos: GUPos,
-        color: u32,
-    };
-
-    pub const Clip = struct {
-        area: GURect,
-    };
+    pub fn init(kind: Kind, handle: usize) RenderCommand {
+        return .{ .handle = handle, .kind = kind };
+    }
 };
 
+pub const RCRect = struct {
+    rect: GURect,
+    corner: GUCorner,
+    color: u32,
+    texture: ?*GUTextureAtlas,
+    tile: ?u32, // for texture atlases
+
+    pub fn init(rect: GURect, corner: GUCorner, color: u32) RCRect {
+        return std.mem.zeroInit(RCRect, .{
+            .rect = rect,
+            .corner = corner,
+            .color = color,
+        });
+    }
+};
+
+pub const RCText = struct {
+    str: []const u8,
+    font: *GUFontAtlas,
+    pos: GUPos,
+    color: u32,
+};
+
+pub const RCClip = struct {
+    area: GURect,
+};
+
+pub const GUCorner = struct {
+    radius: f32,
+    style: Style,
+
+    pub const Style = enum { None, Round, Custom1, Custom2, Custom3, Custom4, Custom5, Custom6 };
+};
+
+//------------------------------------------------------------------------------
+
+const GUFontHandle = usize;
+const GUTextureHandle = usize;
+
+// FIXME: not sure this needs to be in ui core, maybe adding these to backend
+//  vtable is enough? so we only remember handles (provided by backend)
 // TODO: add CanDrawString to check against supported character range in font impl
 pub const GUFontAtlas = struct {
     ptr: *anyopaque,
@@ -131,6 +145,8 @@ pub const GUFontAtlas = struct {
     }
 };
 
+// FIXME: not sure this needs to be in ui core, maybe adding these to backend
+//  vtable is enough? so we only remember handles (provided by backend)
 pub const GUTextureAtlas = struct {
     ptr: *anyopaque,
     fnDraw: *const fn (*anyopaque, *const GUPos) void,
@@ -159,6 +175,8 @@ pub const GUTextureAtlas = struct {
         return self.fnSetColor(self.ptr, color);
     }
 };
+
+//------------------------------------------------------------------------------
 
 pub const Button = struct {
     mode: Mode = .Press,
@@ -218,6 +236,8 @@ pub const GUKeyState = struct {
     accumulator_down: bool = false,
     accumulator_changes: u32 = 0,
 
+    pub const default = zeroInit(GUKeyState, .{});
+
     pub fn Accumulate(self: *GUKeyState, down: bool) void {
         if (self.accumulator_down != down) {
             self.accumulator_down = down;
@@ -234,6 +254,8 @@ pub const GUKeyState = struct {
         self.accumulator_changes = 0;
     }
 };
+
+//------------------------------------------------------------------------------
 
 // TODO: impl texture tilesets
 // TODO: impl absolute/relative positioning
@@ -256,7 +278,7 @@ const Element = struct {
     btn_state: Button.State,
 
     const empty: Element = .{
-        .layout = .Default,
+        .layout = .default,
         .area = .Zero,
         .fill = .Zero,
         .id = 0,
@@ -359,34 +381,7 @@ const ElementIterator = struct {
     }
 };
 
-// FIXME: Auto and Fit are not actually referenced anywhere??? so basically it's
-//  assumed an element is Auto(Fit) if a dimension is not Stretch or Fixed, without
-//  actually checking???
-const GUDimensionMode = enum {
-    /// Select one of the other modes based on input/context; see `ParseAuto`.
-    Auto,
-    /// Reduce to child dimensions plus any margins, etc.
-    Fit,
-    /// Expand to usable space of parent dimension minus input value; requires
-    /// pre-finalizable parent dimension.
-    Stretch,
-    /// Size is pre-determined and not subject to manipulation.
-    Fixed,
-
-    // FIXME: similarly, this function gets used pathologically with the assumption
-    //  that the element is Auto, without checking
-    fn ParseAuto(dimension: f32) GUDimensionMode {
-        const sign = std.math.sign(dimension);
-        if (sign == 1) return .Fixed;
-        if (sign == 0) return .Fit;
-        if (sign == -1) return .Stretch;
-        unreachable;
-    }
-
-    inline fn IsPreComputable(mode: GUDimensionMode) bool {
-        return mode == .Fixed or mode == .Stretch;
-    }
-};
+//------------------------------------------------------------------------------
 
 pub const GULayout = struct {
     mode_w: GUDimensionMode, // derived from parent 'widths' field if .Auto
@@ -400,7 +395,7 @@ pub const GULayout = struct {
     auto_line_break: bool,
     //scroll: ?
 
-    const Default = zeroInit(GULayout, .{
+    const default = zeroInit(GULayout, .{
         .auto_line_break = true,
     });
 };
@@ -431,8 +426,34 @@ const GULineData = struct {
     }
 };
 
-const GUTextureHandle = usize;
-const GUFontHandle = usize;
+// FIXME: Auto and Fit are not actually referenced anywhere??? so basically it's
+//  assumed an element is Auto(Fit) if a dimension is not Stretch or Fixed, without
+//  actually checking???
+const GUDimensionMode = enum {
+    /// Select one of the other modes based on input/context; see `ParseAuto`.
+    Auto,
+    /// Reduce to child dimensions plus any margins, etc.
+    Fit,
+    /// Expand to usable space of parent dimension minus input value; requires
+    /// pre-finalizable parent dimension.
+    Stretch,
+    /// Size is pre-determined and not subject to manipulation.
+    Fixed,
+
+    // FIXME: similarly, this function gets used pathologically with the assumption
+    //  that the element is Auto, without checking
+    fn ParseAuto(dimension: f32) GUDimensionMode {
+        const sign = std.math.sign(dimension);
+        if (sign == 1) return .Fixed;
+        if (sign == 0) return .Fit;
+        if (sign == -1) return .Stretch;
+        unreachable;
+    }
+
+    inline fn IsPreComputable(mode: GUDimensionMode) bool {
+        return mode == .Fixed or mode == .Stretch;
+    }
+};
 
 //------------------------------------------------------------------------------
 
@@ -457,33 +478,45 @@ button_delete_queue: ArrayList([]const u8),
 
 base_layout: GULayout,
 
-render_commands: ArrayList(GURenderCommand),
+render_commands: ArrayList(RenderCommand),
+render_commands_rect: ArrayList(RCRect),
+render_commands_text: ArrayList(RCText),
+render_commands_clip: ArrayList(RCClip),
 
 mouse_pt: GUPos,
 mouse_left: GUKeyState, // LMB
 
 pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
-    return zeroInit(GU, .{
+    return GU{
         .allocator = alloc,
-        .label_arena = ArenaAllocator.init(alloc),
+        .label_arena = .init(alloc),
         .backend = backend,
-        .fonts = ArrayList(GUFontAtlas).empty,
-        .textures = ArrayList(GUTextureAtlas).empty,
-        .element_tree = ArrayList(Element).empty,
-        .element_stack = ArrayList(usize).empty,
-        .element_line_stack = ArrayList(GULineData).empty,
-        .clip_stack = ArrayList(GURect).empty,
-        .buttons = StringHashMap(Button).init(alloc),
-        .button_delete_queue = ArrayList([]const u8).empty,
-        .render_commands = ArrayList(GURenderCommand).empty,
-        .base_layout = base_layout orelse GULayout.Default,
+        .fonts = .empty,
+        .textures = .empty,
+        .element_tree = .empty,
+        .element_stack = .empty,
+        .element_line_stack = .empty,
+        .clip_stack = .empty,
+        .buttons = .init(alloc),
+        .button_delete_queue = .empty,
+        .render_commands = .empty,
+        .render_commands_rect = .empty,
+        .render_commands_text = .empty,
+        .render_commands_clip = .empty,
+        .base_layout = base_layout orelse .default,
         .mouse_pt = .{ .x = -1, .y = -1 },
-    });
+        .element_queue_line_break = false,
+        .element_sibling = null,
+        .mouse_left = .default,
+    };
 }
 
 pub fn Deinit(self: *GU) void {
     self.label_arena.deinit();
     self.render_commands.deinit(self.allocator);
+    self.render_commands_rect.deinit(self.allocator);
+    self.render_commands_text.deinit(self.allocator);
+    self.render_commands_clip.deinit(self.allocator);
     self.clip_stack.deinit(self.allocator);
     self.element_line_stack.deinit(self.allocator);
     self.element_stack.deinit(self.allocator);
@@ -517,6 +550,9 @@ pub fn BeginFrame(self: *GU) !void {
     assert(self.element_line_stack.items.len == 0);
     _ = self.label_arena.reset(.retain_capacity);
     self.render_commands.clearRetainingCapacity();
+    self.render_commands_rect.clearRetainingCapacity();
+    self.render_commands_text.clearRetainingCapacity();
+    self.render_commands_clip.clearRetainingCapacity();
     self.element_tree.clearRetainingCapacity();
     self.element_sibling = null;
     self.mouse_left.Update();
@@ -544,11 +580,11 @@ pub fn EndFrame(self: *GU) void {
     self.DoElementEmitDrawCommands();
     //self.DoElementDebugLog();
 
-    for (self.render_commands.items) |command| {
-        switch (command) {
-            .rect => |*rect| self.backend.DrawRect(rect),
-            .text => |*text| self.backend.DrawString(text),
-            .clip => |*clip| self.backend.SetClip(clip),
+    for (self.render_commands.items) |cmd| {
+        switch (cmd.kind) {
+            .rect => self.backend.DrawRect(&self.render_commands_rect.items[cmd.handle]),
+            .text => self.backend.DrawString(&self.render_commands_text.items[cmd.handle]),
+            .clip => self.backend.SetClip(&self.render_commands_clip.items[cmd.handle]),
         }
     }
 
@@ -682,7 +718,10 @@ fn DoElementEmitDrawCommands(self: *GU) void {
     const stack = &self.clip_stack;
     const sd = self.backend.GetSurfaceDimensions();
     const c_base = GURect{ .x = 0, .y = 0, .w = sd.w, .h = sd.h };
-    self.render_commands.append(self.allocator, .{ .clip = .{ .area = c_base } }) catch |err|
+    var next_clip = self.render_commands_clip.items.len;
+    self.render_commands.append(self.allocator, .init(.clip, next_clip)) catch |err|
+        std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+    self.render_commands_clip.append(self.allocator, .{ .area = c_base }) catch |err|
         std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
     var c: *const GURect = &c_base;
 
@@ -695,7 +734,10 @@ fn DoElementEmitDrawCommands(self: *GU) void {
         if (it_data.relation == .Parent) {
             _ = stack.pop();
             c = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &c_base;
-            self.render_commands.append(self.allocator, .{ .clip = .{ .area = c.* } }) catch |err|
+            next_clip = self.render_commands_clip.items.len;
+            self.render_commands.append(self.allocator, .init(.clip, next_clip)) catch |err|
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+            self.render_commands_clip.append(self.allocator, .{ .area = c.* }) catch |err|
                 std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
             continue;
         }
@@ -705,7 +747,11 @@ fn DoElementEmitDrawCommands(self: *GU) void {
             stack.append(self.allocator, e.area.GetIntersection(c)) catch |err|
                 std.log.err("DoElementEmitDrawCommands: Clip Stack ({s})", .{@errorName(err)});
             c = &stack.items[stack.items.len - 1];
-            self.render_commands.append(self.allocator, .{ .clip = .{ .area = c.* } }) catch |err|
+
+            next_clip = self.render_commands_clip.items.len;
+            self.render_commands.append(self.allocator, .init(.clip, next_clip)) catch |err|
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+            self.render_commands_clip.append(self.allocator, .{ .area = c.* }) catch |err|
                 std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
         };
 
@@ -715,17 +761,18 @@ fn DoElementEmitDrawCommands(self: *GU) void {
 
         // replacement for Rect/Block paths
         if (e.features.bShowRect) {
-            var cmd: GURenderCommand.Rect = .init(e.area, e.layout.corner, e.layout.color);
+            var cmd: RCRect = .init(e.area, e.layout.corner, e.layout.color);
 
             if (e.features.bShowTexture) {
                 assert(e.texture != maxInt(usize)); // TODO: proper/safe "null texture" value
                 cmd.texture = &self.textures.items[e.texture];
             }
 
-            self.render_commands.append(self.allocator, .{ .rect = cmd }) catch |err| std.log.err(
-                "DoElementEmitDrawCommands: Draw Command ({s})",
-                .{@errorName(err)},
-            );
+            const next_rect = self.render_commands_rect.items.len;
+            self.render_commands.append(self.allocator, .init(.rect, next_rect)) catch |err|
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+            self.render_commands_rect.append(self.allocator, cmd) catch |err|
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
         }
 
         if (e.features.bShowLabel) {
@@ -738,15 +785,19 @@ fn DoElementEmitDrawCommands(self: *GU) void {
             //  a half-value extra so that they are intereted as upper layer.
             assert(e.label_str.len > 0);
             assert(e.label_font != maxInt(usize)); // TODO: proper/safe "null font" value
-            self.render_commands.append(self.allocator, GURenderCommand{ .text = .{
+
+            const cmd: RCText = .{
                 .pos = GUPos.FromRect(&e.area),
                 .font = &self.fonts.items[e.label_font],
                 .color = e.layout.color,
                 .str = e.label_str,
-            } }) catch |err| std.log.err(
-                "DoElementEmitDrawCommands: Draw Command ({s})",
-                .{@errorName(err)},
-            );
+            };
+
+            const next_text = self.render_commands_text.items.len;
+            self.render_commands.append(self.allocator, .init(.text, next_text)) catch |err|
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+            self.render_commands_text.append(self.allocator, cmd) catch |err|
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
         }
     }
 }
@@ -799,7 +850,7 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
 
     self.element_tree.append(self.allocator, e: {
         var e: Element = .empty;
-        e.layout = if (layout) |lo| lo.* else .Default;
+        e.layout = if (layout) |lo| lo.* else .default;
         e.id = element_i;
         e.parent = parent_i;
         e.sibling_prev = self.element_sibling;
