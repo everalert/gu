@@ -286,16 +286,24 @@ const Element = struct {
         .btn_state = .Idle,
     };
 
+    // TODO: ?? rename bShowRect -> bShowBody or bShowBackground
+    // TODO: body shadow
+    // TODO: body outline
     // TODO: texture tiling
     // TODO: texture scaling
     // TODO: texture stretch to rect size
     // TODO: texture treated as 9grid
     // TODO: text wrapping
+    // TODO: text shadow
+    // TODO: text outline
+    // TODO: text wrapping (dynamic multiline text)
+    // TODO: button uses visual button styling (or is left unstyled)
+    // TODO: enable clipping (i.e. "allow/disallow visual overflow")
     const Features = packed struct(u32) {
         // Visual functionality
-        bShowRect: bool,
-        bShowTexture: bool, // assert texture value set and bShowRect true
-        bShowLabel: bool, // assert string and font value set
+        bShowRect: bool, // render the body of the element
+        bShowTexture: bool, // use a texture on the element body
+        bShowLabel: bool,
 
         // Layout functionality
         bLineBreak: bool,
@@ -446,6 +454,8 @@ const GUDimensionMode = enum {
         unreachable;
     }
 
+    /// Whether the dimension can be finalized before evaluating the size of any
+    /// child elements.
     inline fn IsPreComputable(mode: GUDimensionMode) bool {
         return mode == .Fixed or mode == .Stretch;
     }
@@ -738,7 +748,6 @@ fn DoElementEmitDrawCommands(self: *GU) void {
             continue;
         }
 
-        // FIXME: add bEnableClipping element feature and refer to it here
         defer if (it_data.relation != .Parent and e.first_child != null) {
             stack.append(self.allocator, e.area.GetIntersection(c)) catch |err|
                 std.log.err("DoElementEmitDrawCommands: Clip Stack ({s})", .{@errorName(err)});
@@ -755,14 +764,10 @@ fn DoElementEmitDrawCommands(self: *GU) void {
         if (GUColor.FromInt(e.layout.color).a == 0) continue;
         if (!e.area.HasNonZeroArea()) continue;
 
-        // replacement for Rect/Block paths
         if (e.features.bShowRect) {
             var cmd: RCRect = .init(e.area, e.layout.corner, e.layout.color);
 
-            if (e.features.bShowTexture) {
-                assert(e.texture != maxInt(usize)); // TODO: proper/safe "null texture" value
-                cmd.texture = &self.textures.items[e.texture];
-            }
+            if (e.features.bShowTexture) cmd.texture = &self.textures.items[e.texture];
 
             const next_rect = self.render_commands_rect.items.len;
             self.render_commands.append(self.allocator, .init(.rect, next_rect)) catch |err|
@@ -771,17 +776,12 @@ fn DoElementEmitDrawCommands(self: *GU) void {
                 std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
         }
 
-        if (e.features.bShowLabel) {
-            // FIXME: make distinct values for rect and label where appropriate
-            //  so that they aren't unnecessarily conflated
+        if (e.features.bShowLabel and e.label_str.len > 0) {
             // FIXME: need a way to ensure that the text gets drawn after (i.e.
             //  on top), because they will both be emitted at the same time
             //  and the renderer may not respect the call order if batching;
             //  maybe add a "batch layer" value to draw cmd, and give labels
             //  a half-value extra so that they are intereted as upper layer.
-            assert(e.label_str.len > 0);
-            assert(e.label_font != maxInt(usize)); // TODO: proper/safe "null font" value
-
             const cmd: RCText = .{
                 .pos = GUPos.FromRect(&e.area),
                 .font = &self.fonts.items[e.label_font],
@@ -896,6 +896,9 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
     return true;
 }
 
+/// Finalize the current element. Element validation happens at this point, so
+/// any references to the element (e.g. from `GetContainer`) must not be used
+/// after this is called.
 pub fn EndContainer(self: *GU) void {
     _ = self.element_line_stack.pop();
     const element_i = self.element_stack.pop().?;
@@ -917,8 +920,8 @@ pub fn EndContainer(self: *GU) void {
         assert(element.area.h < 0);
     }
 
-    // Button
     // TODO: move button style to a style stack-like setup, not hardcoded
+    // Button
     if (element.features.bClickable) {
         element.layout.color = switch (element.btn_state) {
             .Idle => if (element.features.bClickDepressed) Button.COLOR_DOWN else Button.COLOR_IDLE,
@@ -929,24 +932,25 @@ pub fn EndContainer(self: *GU) void {
         element.layout.corner = .{ .radius = Button.CORNER_RADIUS, .style = .Round };
     }
 
-    // Textures
-    // behaviour of sizing the element with relation to the texture (e.g. "draw
-    // image = match texture size with fixed sizing") is left to the widget impl
+    // Texture: behaviour of sizing the element with relation to the texture (e.g.
+    // "draw image = match texture size with fixed sizing") is left to the widget impl
     if (element.features.bShowTexture) {
         assert(element.features.bShowRect == true);
-        assert(element.texture != maxInt(usize)); // TODO: proper/safe "null font" value
+        assert(element.texture != maxInt(usize)); // TODO: proper/safe "null texture" value
     }
 
     // Text
-    // FIXME: now that these are not gated by element mode, the area size can
-    //  have conflicts; need to figure out size resolution for combination cases
+    //  - if the user wants text with a background then they are forced to wrap
+    //    the text in an element, as this usage naturally covers normal aesthetic
+    //    background needs without us needing to add complexity to the backend passes
+    //  - 0-len string is allowed in order to accommodate dynamic text, but the
+    //    rest is asserted regardless under the assumption that it is
+    //  - behaviour of sizing the element with relation to string size is left
+    //    to the widget impl
     if (element.features.bShowLabel) {
-        assert(element.label_str.len > 0);
+        assert(element.features.bShowRect == false);
         assert(element.label_font != maxInt(usize)); // TODO: proper/safe "null font" value
-        // TODO: account for text wrapping
-        const label_size = &self.fonts.items[element.label_font].StringSize(element.label_str);
-        element.area.w = label_size.w;
-        element.area.h = label_size.h;
+        //assert(element.label_str.len > 0);
     }
 }
 
@@ -979,6 +983,9 @@ pub fn SetContainerSize(self: *GU, w: f32, h: f32) void {
     element.area.h = h;
 }
 
+// TODO: ?? on second thought, maybe do away with this and just rename user stuff
+//  with Element; this is probably fine user-facing nomenclature, and it would
+//  clean up the api surface. tbd
 // as far as we're concerned, what the user sees as a generic layout container
 // is just a 'null' element to us, so we use these internally for clarity
 const DoElement = DoContainer;
@@ -1033,6 +1040,9 @@ pub fn DoLabel(self: *GU, font: ?FontHandle, color: ?u32, comptime fmt: []const 
     element.layout.color = color orelse 0xFFFFFFFF;
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
+    const label_size = &self.fonts.items[element.label_font].StringSize(element.label_str);
+    element.area.w = label_size.w;
+    element.area.h = label_size.h;
 }
 
 // TODO: more robust hashing strategy that doesn't cause hover state to break on
