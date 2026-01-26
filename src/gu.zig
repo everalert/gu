@@ -245,11 +245,6 @@ const Element = struct {
     sibling_next: ?usize,
     sibling_prev: ?usize,
 
-    mode: enum {
-        /// don't do any special behaviours
-        Block,
-        Label,
-    },
     features: Features,
     layout: GULayout,
     area: GURect,
@@ -264,7 +259,6 @@ const Element = struct {
         .layout = .Default,
         .area = .Zero,
         .fill = .Zero,
-        .mode = .Block,
         .id = 0,
         .parent = null,
         .children = 0,
@@ -567,7 +561,7 @@ pub fn EndFrame(self: *GU) void {
 // FIXME: cleanup/streamline, maybe split into multiple passes if that makes sense
 // TODO: rename to DoElementResizeAndParseLineBreaks ??
 // TODO: update for text wrapping; will need to assert no padding/gaps, and remove
-// .Fixed assertion for .Label in EndContainer
+// .Fixed assertion for labels in EndContainer
 /// inserts line break markers where needed, and updates parent dimensions in
 /// case of line breaks occurring
 fn DoElementLineBreakParsing(self: *GU) void {
@@ -719,33 +713,6 @@ fn DoElementEmitDrawCommands(self: *GU) void {
         if (GUColor.FromInt(e.layout.color).a == 0) continue;
         if (!e.area.HasNonZeroArea()) continue;
 
-        switch (e.mode) {
-            .Label => {
-                // WARN: currently, the background is simply ignored because
-                //  elements are modal, but this will not be true once the mode
-                //  refactor is done. need to make a call on whether to ignore
-                //  bg in presence of label, or stop conflating their values.
-                // WARN: once this is fully separated from the background logic,
-                //  will need a way to ensure that the text gets drawn after (i.e.
-                //  on top), because they will both be emitted at the same time
-                //  and the renderer may not respect the call order if batching;
-                //  maybe add a "batch layer" value to draw cmd, and give labels
-                //  a half-value extra so that they are intereted as upper layer.
-                assert(e.label_str.len > 0);
-                assert(e.label_font != maxInt(usize)); // TODO: proper/safe "null font" value
-                self.render_commands.append(self.allocator, GURenderCommand{ .text = .{
-                    .pos = GUPos.FromRect(&e.area),
-                    .font = &self.fonts.items[e.label_font],
-                    .color = e.layout.color,
-                    .str = e.label_str,
-                } }) catch |err| std.log.err(
-                    "DoElementEmitDrawCommands: Draw Command ({s})",
-                    .{@errorName(err)},
-                );
-            },
-            .Block => {},
-        }
-
         // replacement for Rect/Block paths
         if (e.features.bShowRect) {
             var cmd: GURenderCommand.Rect = .init(e.area, e.layout.corner, e.layout.color);
@@ -760,6 +727,27 @@ fn DoElementEmitDrawCommands(self: *GU) void {
                 .{@errorName(err)},
             );
         }
+
+        if (e.features.bShowLabel) {
+            // FIXME: make distinct values for rect and label where appropriate
+            //  so that they aren't unnecessarily conflated
+            // FIXME: need a way to ensure that the text gets drawn after (i.e.
+            //  on top), because they will both be emitted at the same time
+            //  and the renderer may not respect the call order if batching;
+            //  maybe add a "batch layer" value to draw cmd, and give labels
+            //  a half-value extra so that they are intereted as upper layer.
+            assert(e.label_str.len > 0);
+            assert(e.label_font != maxInt(usize)); // TODO: proper/safe "null font" value
+            self.render_commands.append(self.allocator, GURenderCommand{ .text = .{
+                .pos = GUPos.FromRect(&e.area),
+                .font = &self.fonts.items[e.label_font],
+                .color = e.layout.color,
+                .str = e.label_str,
+            } }) catch |err| std.log.err(
+                "DoElementEmitDrawCommands: Draw Command ({s})",
+                .{@errorName(err)},
+            );
+        }
     }
 }
 
@@ -768,8 +756,8 @@ fn DoElementDebugLog(self: *GU) void {
     while (it.Next()) |it_data| {
         const e = it_data.element;
         std.log.debug(
-            "it-element: ({*})  {t: <12}{t: <10}{d}x{d}",
-            .{ e, it_data.relation, e.mode, e.area.w, e.area.h },
+            "it-element: ({*})  {t: <12}{d}x{d}",
+            .{ e, it_data.relation, e.area.w, e.area.h },
         );
     }
 }
@@ -902,16 +890,15 @@ pub fn EndContainer(self: *GU) void {
         element.area.h = texture_size.h;
     }
 
-    switch (element.mode) {
-        .Block => {},
-        .Label => {
-            assert(element.label_str.len > 0);
-            assert(element.label_font != maxInt(usize)); // TODO: proper/safe "null font" value
-            // TODO: account for text wrapping
-            const label_size = &self.fonts.items[element.label_font].StringSize(element.label_str);
-            element.area.w = label_size.w;
-            element.area.h = label_size.h;
-        },
+    // FIXME: now that these are not gated by element mode, the area size can
+    //  have conflicts; need to figure out size resolution for combination cases
+    if (element.features.bShowLabel) {
+        assert(element.label_str.len > 0);
+        assert(element.label_font != maxInt(usize)); // TODO: proper/safe "null font" value
+        // TODO: account for text wrapping
+        const label_size = &self.fonts.items[element.label_font].StringSize(element.label_str);
+        element.area.w = label_size.w;
+        element.area.h = label_size.h;
     }
 }
 
@@ -962,24 +949,24 @@ pub fn DoRect(self: *GU, size: GUSize, color: u32) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
+    element.features.bShowRect = true;
     element.area.w = size.w;
     element.area.h = size.h;
     element.layout.color = color;
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
-    element.features.bShowRect = true;
 }
 
 pub fn DoImage(self: *GU, texture: GUTextureHandle, color: ?u32) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
+    element.features.bShowTexture = true;
+    element.features.bShowRect = true;
     element.texture = texture;
     element.layout.color = color orelse 0xFFFFFFFF;
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
-    element.features.bShowRect = true;
-    element.features.bShowTexture = true;
 }
 
 // TODO: add formatting, like standard string formatting functions
@@ -989,7 +976,7 @@ pub fn DoLabel(self: *GU, font: ?GUFontHandle, color: ?u32, comptime fmt: []cons
     const element = self.GetElement();
     const str = std.fmt.allocPrint(self.label_arena.allocator(), fmt, args) catch |err|
         std.debug.panic("DoLabel failed to allocate string: ({s})", .{@errorName(err)});
-    element.mode = .Label;
+    element.features.bShowLabel = true;
     element.label_font = font orelse 0;
     element.label_str = str;
     element.layout.color = color orelse 0xFFFFFFFF;
@@ -1064,7 +1051,7 @@ pub fn DoToggleButton(self: *GU, active: *bool, font: ?GUFontHandle, comptime fm
     element.features.bShowRect = true;
 
     const btn = self.DoButtonLogic(.Press, fmt) orelse return false;
-    if (active.*) self.GetElement().features.bClickDepressed = true;
+    if (active.*) element.features.bClickDepressed = true;
     if (btn.activated) active.* = !active.*;
 
     self.DoLabel(font, null, fmt, args);
