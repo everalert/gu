@@ -1,6 +1,7 @@
 const GU = @This();
 
 const std = @import("std");
+const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const ArrayList = std.ArrayList;
@@ -9,93 +10,18 @@ const FormatOptions = std.fmt.FormatOptions;
 const maxInt = std.math.maxInt;
 const zeroInit = std.mem.zeroInit;
 
-pub const GURect = struct {
-    pub const Zero = GURect{ .x = 0, .y = 0, .w = 0, .h = 0 };
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-
-    pub fn IsCollidingPoint(self: *const GURect, pt: *const GUPos) bool {
-        return (pt.x >= self.x and
-            pt.x < self.x + self.w and
-            pt.y >= self.y and
-            pt.y < self.y + self.h);
-    }
-
-    pub fn IsCollidingRect(self: *const GURect, other: *const GURect) bool {
-        return (self.x + self.w >= other.x and
-            self.x <= other.x + other.w and
-            self.y + self.h >= other.y and
-            self.y <= other.y + other.h);
-    }
-
-    pub inline fn HasNonZeroArea(self: *const GURect) bool {
-        return self.w > 0 and self.h > 0;
-    }
-
-    pub inline fn GetSmallestDimension(self: *const GURect) f32 {
-        return @min(self.w, self.h);
-    }
-
-    /// AND operation
-    pub fn GetIntersection(r1: *const GURect, r2: *const GURect) GURect {
-        const x = @max(r1.x, r2.x);
-        const y = @max(r1.y, r2.y);
-        const w = @min(r1.x + r1.w, r2.x + r2.w) - x;
-        const h = @min(r1.y + r1.h, r2.y + r2.h) - y;
-        return GURect{ .x = x, .y = y, .w = w, .h = h };
-    }
-
-    /// compatibility with std.fmt
-    pub fn format(self: *const GURect, comptime _: []const u8, _: FormatOptions, writer: anytype) !void {
-        try writer.print(
-            "GURect(x:{d: <4} y:{d: <4} w:{d: <4} h:{d: <4})",
-            .{ self.x, self.y, self.w, self.h },
-        );
-    }
-};
-
-// TODO: rename to GUPoint?
-pub const GUPos = struct {
-    pub const Zero = GUPos{ .x = 0, .y = 0 };
-    x: f32,
-    y: f32,
-
-    pub fn FromRect(rect: *GURect) GUPos {
-        return GUPos{ .x = rect.x, .y = rect.y };
-    }
-};
-
-pub const GUSize = struct {
-    pub const Zero = GUSize{ .w = 0, .h = 0 };
-    w: f32,
-    h: f32,
-
-    pub fn FromRect(rect: *GURect) GUSize {
-        return GUSize{ .w = rect.w, .h = rect.h };
-    }
-};
-
-pub const GUColor = extern struct {
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-
-    // WARN: assumes big-endian
-    pub fn FromInt(color: u32) GUColor {
-        return @bitCast(@byteSwap(color));
-    }
-};
+const GUMath = @import("gu_math.zig");
+const GURect = GUMath.Rect;
+const GUSize = GUMath.Size;
+const GUPos = GUMath.Pos;
+const GUColor = GUMath.Color;
 
 pub const GUBackend = struct {
     ptr: *anyopaque,
     fnGetSurfaceDimensions: *const fn (*anyopaque) GUSize,
-    fnDrawRect: *const fn (*anyopaque, *const GURenderCommand.Rect) void,
-    fnDrawString: *const fn (*anyopaque, *const GURenderCommand.Text) void,
-    fnDrawImage: *const fn (*anyopaque, *const GURenderCommand.Image) void,
-    fnSetClip: *const fn (*anyopaque, *const GURenderCommand.Clip) void,
+    fnDrawRect: *const fn (*anyopaque, *const RCRect) void,
+    fnDrawString: *const fn (*anyopaque, *const RCText) void,
+    fnSetClip: *const fn (*anyopaque, *const RCClip) void,
     fnBeginRendering: *const fn (*anyopaque) void,
     fnEndRendering: *const fn (*anyopaque) void,
 
@@ -103,20 +29,16 @@ pub const GUBackend = struct {
         return self.fnGetSurfaceDimensions(self.ptr);
     }
 
-    pub fn DrawRect(self: *GUBackend, cmd: *const GURenderCommand.Rect) void {
+    // TODO: impl texture tile drawing, see GURenderCommand->Rect
+    pub fn DrawRect(self: *GUBackend, cmd: *const RCRect) void {
         self.fnDrawRect(self.ptr, cmd);
     }
 
-    pub fn DrawString(self: *GUBackend, cmd: *const GURenderCommand.Text) void {
+    pub fn DrawString(self: *GUBackend, cmd: *const RCText) void {
         self.fnDrawString(self.ptr, cmd);
     }
 
-    // TODO: impl tile drawing, see GURenderCommand->Image
-    pub fn DrawImage(self: *GUBackend, cmd: *const GURenderCommand.Image) void {
-        self.fnDrawImage(self.ptr, cmd);
-    }
-
-    pub fn SetClip(self: *GUBackend, cmd: *const GURenderCommand.Clip) void {
+    pub fn SetClip(self: *GUBackend, cmd: *const RCClip) void {
         self.fnSetClip(self.ptr, cmd);
     }
 
@@ -132,12 +54,7 @@ pub const GUBackend = struct {
     }
 };
 
-pub const GUCorner = struct {
-    pub const Style = enum(u32) { None, Round, Custom1, Custom2, Custom3, Custom4, Custom5, Custom6 };
-
-    radius: f32,
-    style: Style,
-};
+//------------------------------------------------------------------------------
 
 // FIXME: don't really like having the field types separated, but afaik needed to
 // pass their types to function params (see GUBackend); investigate to confirm
@@ -146,37 +63,58 @@ pub const GUCorner = struct {
 // when calling the GUBackend functions; however, it makes for cleaner fn defs
 // and theoretically cuts down on stack thrashing (to compare/confirm), need to
 // make a final call on which way to do it
-pub const GURenderCommand = union(enum) {
-    rect: Rect,
-    text: Text,
-    image: Image,
-    clip: Clip,
+pub const RenderCommand = struct {
+    kind: Kind,
+    handle: usize, // TODO: actual handle impl
 
-    pub const Rect = struct {
-        rect: GURect,
-        corner: GUCorner,
-        color: u32,
-    };
+    pub const Kind = enum { rect, text, clip };
 
-    pub const Text = struct {
-        str: []const u8,
-        font: *GUFontAtlas,
-        pos: GUPos,
-        color: u32,
-    };
-
-    pub const Image = struct {
-        image: *GUTextureAtlas,
-        tile: ?u32, // for texture atlases
-        pos: GUPos,
-        color: u32,
-    };
-
-    pub const Clip = struct {
-        area: GURect,
-    };
+    pub fn init(kind: Kind, handle: usize) RenderCommand {
+        return .{ .handle = handle, .kind = kind };
+    }
 };
 
+pub const RCRect = struct {
+    rect: GURect,
+    corner: GUCorner,
+    color: u32,
+    texture: ?*GUTextureAtlas,
+    tile: ?u32, // for texture atlases
+
+    pub fn init(rect: GURect, corner: GUCorner, color: u32) RCRect {
+        return std.mem.zeroInit(RCRect, .{
+            .rect = rect,
+            .corner = corner,
+            .color = color,
+        });
+    }
+};
+
+pub const RCText = struct {
+    str: []const u8,
+    font: *GUFontAtlas,
+    pos: GUPos,
+    color: u32,
+};
+
+pub const RCClip = struct {
+    area: GURect,
+};
+
+pub const GUCorner = struct {
+    radius: f32,
+    style: Style,
+
+    pub const Style = enum { None, Round, Custom1, Custom2, Custom3, Custom4, Custom5, Custom6 };
+};
+
+//------------------------------------------------------------------------------
+
+pub const FontHandle = usize;
+pub const TextureHandle = usize;
+
+// FIXME: not sure this needs to be in ui core, maybe adding these to backend
+//  vtable is enough? so we only remember handles (provided by backend)
 // TODO: add CanDrawString to check against supported character range in font impl
 pub const GUFontAtlas = struct {
     ptr: *anyopaque,
@@ -207,28 +145,21 @@ pub const GUFontAtlas = struct {
     }
 };
 
+// TODO: tiling; i.e. actually make it an atlas
+// FIXME: not sure this needs to be in ui core, maybe adding these to backend
+//  vtable is enough? so we only remember handles (provided by backend)
 pub const GUTextureAtlas = struct {
     ptr: *anyopaque,
     fnDraw: *const fn (*anyopaque, *const GUPos) void,
-    fnDrawTile: *const fn (*anyopaque, u32, *const GUPos) void,
     fnSize: *const fn (*anyopaque) GUSize,
-    fnTileSize: *const fn (*anyopaque, u32) GUSize,
     fnSetColor: *const fn (*anyopaque, u32) void,
 
     pub fn Draw(self: *GUTextureAtlas, pos: *const GUPos) void {
         self.fnDraw(self.ptr, pos);
     }
 
-    pub fn DrawTile(self: *GUTextureAtlas, id: u32, pos: *const GUPos) void {
-        self.fnDrawTile(self.ptr, id, pos);
-    }
-
     pub fn Size(self: *GUTextureAtlas) GUSize {
         return self.fnSize(self.ptr);
-    }
-
-    pub fn TileSize(self: *GUTextureAtlas, id: u32) GUSize {
-        return self.fnTileSize(self.ptr, id);
     }
 
     pub fn SetColor(self: *GUTextureAtlas, color: u32) void {
@@ -236,9 +167,17 @@ pub const GUTextureAtlas = struct {
     }
 };
 
-const GUButtonMode = enum(u32) { Press, Release };
-const GUButtonState = enum(u32) { Idle, Hover, Down };
-pub const GUButton = struct {
+//------------------------------------------------------------------------------
+
+pub const Button = struct {
+    mode: Mode = .Press,
+    state: State = .Idle,
+    area: GURect,
+    element: usize,
+
+    pub const Mode = enum { Press, Release };
+    pub const State = enum { Idle, Hover, Down };
+
     const PADDING_VERTICAL: f32 = 2;
     const PADDING_HORIZONTAL: f32 = 8;
     const CORNER_RADIUS: f32 = 6;
@@ -246,13 +185,8 @@ pub const GUButton = struct {
     const COLOR_HOVER: u32 = 0x00C000FF;
     const COLOR_DOWN: u32 = 0x004000FF;
 
-    mode: GUButtonMode = .Press,
-    state: GUButtonState = .Idle,
-    area: GURect,
-    element: usize,
-
     pub fn Update(
-        self: *GUButton,
+        self: *Button,
         pt: *const GUPos,
         btn_just_down: bool,
         btn_just_up: bool,
@@ -284,7 +218,7 @@ pub const GUButton = struct {
 };
 
 // NOTE: keep here, intended as a 'using button api' struct, not part of the button api
-const GUButtonData = struct { button: *GUButton, activated: bool };
+const GUButtonData = struct { button: *Button, activated: bool };
 
 pub const GUKeyState = struct {
     down: bool = false,
@@ -292,6 +226,8 @@ pub const GUKeyState = struct {
     just_down: bool = false,
     accumulator_down: bool = false,
     accumulator_changes: u32 = 0,
+
+    pub const default = zeroInit(GUKeyState, .{});
 
     pub fn Accumulate(self: *GUKeyState, down: bool) void {
         if (self.accumulator_down != down) {
@@ -310,62 +246,78 @@ pub const GUKeyState = struct {
     }
 };
 
-// TODO: impl image tilesets
-// TODO: impl absolute/relative positioning
-const GUElement = struct {
-    layout: GULayout,
-    area: GURect,
-    fill: GUSize, // how big the element is for layout calculations
-    mode: union(enum) {
-        Block: void,
-        Rect: GUSize,
-        Image: struct {
-            image: GUImageHandle,
-            //tile: ?u32,
-        },
-        Label: struct {
-            str: []const u8,
-            font: GUFontHandle,
-        },
-        Button: void,
-    },
+//------------------------------------------------------------------------------
 
+// TODO: impl texture tilesets
+// TODO: impl absolute/relative positioning
+const Element = struct {
     id: usize,
     parent: ?usize,
     children: usize,
     first_child: ?usize,
     sibling_next: ?usize,
     sibling_prev: ?usize,
-    features: Features,
 
-    const empty: GUElement = .{
-        .layout = .Default,
+    features: Features,
+    layout: GULayout,
+    area: GURect,
+    fill: GUSize, // how big the element is for layout calculations
+    texture: TextureHandle,
+    label_str: []const u8,
+    label_font: FontHandle,
+    rect_size: GUSize,
+    btn_state: Button.State,
+
+    const empty: Element = .{
+        .layout = .default,
         .area = .Zero,
         .fill = .Zero,
-        .mode = .Block,
         .id = 0,
         .parent = null,
         .children = 0,
         .first_child = null,
         .sibling_next = null,
         .sibling_prev = null,
-        .features = .empty,
+        .features = .none,
+        .texture = maxInt(usize),
+        .label_str = &.{},
+        .label_font = maxInt(usize),
+        .rect_size = .Zero,
+        .btn_state = .Idle,
     };
 
+    // TODO: ?? rename bShowRect -> bShowBody or bShowBackground
+    // TODO: body shadow
+    // TODO: body outline
+    // TODO: texture tiling
+    // TODO: texture scaling
+    // TODO: texture stretch to rect size
+    // TODO: texture treated as 9grid
+    // TODO: text wrapping
+    // TODO: text shadow
+    // TODO: text outline
+    // TODO: text wrapping (dynamic multiline text)
+    // TODO: button uses visual button styling (or is left unstyled)
+    // TODO: enable clipping (i.e. "allow/disallow visual overflow")
     const Features = packed struct(u32) {
         // Visual functionality
-        bShowImage: bool, // assert image value set
-        bShowLabel: bool, // assert string and font value set
+        bShowRect: bool, // render the body of the element
+        bShowTexture: bool, // use a texture on the element body
+        bShowLabel: bool,
+
         // Layout functionality
         bLineBreak: bool,
+
         // Button functionality
         bClickable: bool,
         bClickDown: bool,
         bClickHover: bool,
+        bClickDepressed: bool, // button visually "idles" in down-state
 
-        _: u26,
+        _: u24,
 
-        pub const empty = std.mem.zeroInit(Features, .{});
+        const none: Features = @bitCast(@as(u32, 0));
+        const all: Features = @bitCast(maxInt(u32));
     };
 };
 
@@ -374,21 +326,21 @@ const GUElement = struct {
 /// depth-first walk of element tree with pre- and post-order traversal; elements
 /// with children are touched both on the way down and up, i.e. once before then
 /// again after any children are walked
-const GUElementIterator = struct {
-    source: []GUElement,
+const ElementIterator = struct {
+    source: []Element,
     this: ?usize,
     prev: ?usize,
 
-    pub fn Init(source: []GUElement) GUElementIterator {
-        return GUElementIterator{
+    pub fn Init(source: []Element) ElementIterator {
+        return ElementIterator{
             .source = source,
             .this = null,
             .prev = null,
         };
     }
 
-    pub fn Next(self: *GUElementIterator) ?struct {
-        element: *GUElement,
+    pub fn Next(self: *ElementIterator) ?struct {
+        element: *Element,
         relation: enum { Root, Child, Sibling, Parent },
     } {
         if (self.this == null) {
@@ -433,38 +385,21 @@ const GUElementIterator = struct {
     }
 };
 
-const GUDimensionMode = enum(u32) {
-    Auto, // Fit when parent does not specify dimension, or 0=Fit, <0=Stretch, >0=Fixed
-    Fit, // child dimensions plus any margins, etc.
-    Stretch, // usable space of parent dimension minus input value; requires pre-finalizable parent dimension
-    Fixed,
-
-    fn ParseAuto(dimension: f32) GUDimensionMode {
-        const sign = std.math.sign(dimension);
-        if (sign == 1) return .Fixed;
-        if (sign == 0) return .Fit;
-        if (sign == -1) return .Stretch;
-        unreachable;
-    }
-
-    inline fn IsPreComputable(mode: GUDimensionMode) bool {
-        return mode == .Fixed or mode == .Stretch;
-    }
-};
+//------------------------------------------------------------------------------
 
 pub const GULayout = struct {
     mode_w: GUDimensionMode, // derived from parent 'widths' field if .Auto
     mode_h: GUDimensionMode, // derived from parent 'heights' field if .Auto
     color: u32,
     corner: GUCorner,
-    widths: ?[]const f32,
-    heights: ?[]const f32,
+    widths: ?[]const f32, // FIXME: doesn't need to be null
+    heights: ?[]const f32, // FIXME: doesn't need to be null
     padding: GUSize,
     gaps: GUSize,
     auto_line_break: bool,
     //scroll: ?
 
-    const Default = zeroInit(GULayout, .{
+    const default = zeroInit(GULayout, .{
         .auto_line_break = true,
     });
 };
@@ -495,17 +430,47 @@ const GULineData = struct {
     }
 };
 
-const GUImageHandle = usize;
-const GUFontHandle = usize;
+// FIXME: Auto and Fit are not actually referenced anywhere??? so basically it's
+//  assumed an element is Auto(Fit) if a dimension is not Stretch or Fixed, without
+//  actually checking???
+const GUDimensionMode = enum {
+    /// Select one of the other modes based on input/context; see `ParseAuto`.
+    Auto,
+    /// Reduce to child dimensions plus any margins, etc.
+    Fit,
+    /// Expand to usable space of parent dimension minus input value; requires
+    /// pre-finalizable parent dimension.
+    Stretch,
+    /// Size is pre-determined and not subject to manipulation.
+    Fixed,
+
+    // FIXME: similarly, this function gets used pathologically with the assumption
+    //  that the element is Auto, without checking
+    fn ParseAuto(dimension: f32) GUDimensionMode {
+        const sign = std.math.sign(dimension);
+        if (sign == 1) return .Fixed;
+        if (sign == 0) return .Fit;
+        if (sign == -1) return .Stretch;
+        unreachable;
+    }
+
+    /// Whether the dimension can be finalized before evaluating the size of any
+    /// child elements.
+    inline fn IsPreComputable(mode: GUDimensionMode) bool {
+        return mode == .Fixed or mode == .Stretch;
+    }
+};
+
+//------------------------------------------------------------------------------
 
 allocator: Allocator,
 
 backend: GUBackend,
 
 fonts: ArrayList(GUFontAtlas), // TODO: impl with handles, update GUFontHandle
-images: ArrayList(GUTextureAtlas), // TODO: impl with handles, update GUImageHandle
+textures: ArrayList(GUTextureAtlas), // TODO: impl with handles, update GUTextureHandle
 
-element_tree: ArrayList(GUElement),
+element_tree: ArrayList(Element),
 element_stack: ArrayList(usize),
 element_sibling: ?usize, // most recent sibling
 element_queue_line_break: bool,
@@ -514,46 +479,59 @@ element_line_stack: ArrayList(GULineData),
 clip_stack: ArrayList(GURect),
 label_arena: ArenaAllocator,
 
-buttons: StringHashMap(GUButton),
+buttons: StringHashMap(Button),
 button_delete_queue: ArrayList([]const u8),
 
 base_layout: GULayout,
 
-render_commands: ArrayList(GURenderCommand),
+render_commands: ArrayList(RenderCommand),
+render_commands_rect: ArrayList(RCRect),
+render_commands_text: ArrayList(RCText),
+render_commands_clip: ArrayList(RCClip),
 
 mouse_pt: GUPos,
 mouse_left: GUKeyState, // LMB
 
 pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
-    return zeroInit(GU, .{
+    return GU{
         .allocator = alloc,
-        .label_arena = ArenaAllocator.init(alloc),
+        .label_arena = .init(alloc),
         .backend = backend,
-        .fonts = ArrayList(GUFontAtlas).empty,
-        .images = ArrayList(GUTextureAtlas).empty,
-        .element_tree = ArrayList(GUElement).empty,
-        .element_stack = ArrayList(usize).empty,
-        .element_line_stack = ArrayList(GULineData).empty,
-        .clip_stack = ArrayList(GURect).empty,
-        .buttons = StringHashMap(GUButton).init(alloc),
-        .button_delete_queue = ArrayList([]const u8).empty,
-        .render_commands = ArrayList(GURenderCommand).empty,
-        .base_layout = base_layout orelse GULayout.Default,
+        .fonts = .empty,
+        .textures = .empty,
+        .element_tree = .empty,
+        .element_stack = .empty,
+        .element_line_stack = .empty,
+        .clip_stack = .empty,
+        .buttons = .init(alloc),
+        .button_delete_queue = .empty,
+        .render_commands = .empty,
+        .render_commands_rect = .empty,
+        .render_commands_text = .empty,
+        .render_commands_clip = .empty,
+        .base_layout = base_layout orelse .default,
         .mouse_pt = .{ .x = -1, .y = -1 },
-    });
+        .element_queue_line_break = false,
+        .element_sibling = null,
+        .mouse_left = .default,
+    };
 }
 
 pub fn Deinit(self: *GU) void {
     self.label_arena.deinit();
     self.render_commands.deinit(self.allocator);
+    self.render_commands_rect.deinit(self.allocator);
+    self.render_commands_text.deinit(self.allocator);
+    self.render_commands_clip.deinit(self.allocator);
     self.clip_stack.deinit(self.allocator);
     self.element_line_stack.deinit(self.allocator);
     self.element_stack.deinit(self.allocator);
     self.element_tree.deinit(self.allocator);
-    self.images.deinit(self.allocator);
+    self.textures.deinit(self.allocator);
     self.fonts.deinit(self.allocator);
 }
 
+//------------------------------------------------------------------------------
 // RESOURCES
 
 // TODO: impl handle-based system
@@ -563,20 +541,24 @@ pub fn AddFont(self: *GU, font: GUFontAtlas) !usize {
 }
 
 // TODO: impl handle-based system
-pub fn AddImage(self: *GU, image: GUTextureAtlas) !usize {
-    try self.images.append(self.allocator, image);
-    return self.images.items.len - 1;
+pub fn AddTexture(self: *GU, texture: GUTextureAtlas) !usize {
+    try self.textures.append(self.allocator, texture);
+    return self.textures.items.len - 1;
 }
 
+//------------------------------------------------------------------------------
 // FRAME
 
 pub fn BeginFrame(self: *GU) !void {
     const surface_size = self.backend.GetSurfaceDimensions();
 
-    std.debug.assert(self.element_stack.items.len == 0);
-    std.debug.assert(self.element_line_stack.items.len == 0);
+    assert(self.element_stack.items.len == 0);
+    assert(self.element_line_stack.items.len == 0);
     _ = self.label_arena.reset(.retain_capacity);
     self.render_commands.clearRetainingCapacity();
+    self.render_commands_rect.clearRetainingCapacity();
+    self.render_commands_text.clearRetainingCapacity();
+    self.render_commands_clip.clearRetainingCapacity();
     self.element_tree.clearRetainingCapacity();
     self.element_sibling = null;
     self.mouse_left.Update();
@@ -604,36 +586,38 @@ pub fn EndFrame(self: *GU) void {
     self.DoElementEmitDrawCommands();
     //self.DoElementDebugLog();
 
-    for (self.render_commands.items) |command| {
-        switch (command) {
-            .rect => |*rect| self.backend.DrawRect(rect),
-            .text => |*text| self.backend.DrawString(text),
-            .image => |*img| self.backend.DrawImage(img),
-            .clip => |*clip| self.backend.SetClip(clip),
+    for (self.render_commands.items) |cmd| {
+        switch (cmd.kind) {
+            .rect => self.backend.DrawRect(&self.render_commands_rect.items[cmd.handle]),
+            .text => self.backend.DrawString(&self.render_commands_text.items[cmd.handle]),
+            .clip => self.backend.SetClip(&self.render_commands_clip.items[cmd.handle]),
         }
     }
 
     self.backend.EndRendering();
 }
 
+//------------------------------------------------------------------------------
+// LAYOUT PASSES
+
 // FIXME: cleanup/streamline, maybe split into multiple passes if that makes sense
 // TODO: rename to DoElementResizeAndParseLineBreaks ??
 // TODO: update for text wrapping; will need to assert no padding/gaps, and remove
-// .Fixed assertion for .Label in EndContainer
+// .Fixed assertion for labels in EndContainer
 /// inserts line break markers where needed, and updates parent dimensions in
 /// case of line breaks occurring
 fn DoElementLineBreakParsing(self: *GU) void {
-    std.debug.assert(self.element_line_stack.items.len == 0);
-    defer std.debug.assert(self.element_line_stack.items.len == 0);
+    assert(self.element_line_stack.items.len == 0);
+    defer assert(self.element_line_stack.items.len == 0);
 
     const stack = &self.element_line_stack;
     var ld_base = zeroInit(GULineData, .{ .line = 1 });
     var ld: *GULineData = &ld_base;
 
-    var it = GUElementIterator.Init(self.element_tree.items);
+    var it = ElementIterator.Init(self.element_tree.items);
     while (it.Next()) |it_data| {
         const e = it_data.element;
-        const p: ?*GUElement = if (e.parent) |pa_i| &self.element_tree.items[pa_i] else null;
+        const p: ?*Element = if (e.parent) |pa_i| &self.element_tree.items[pa_i] else null;
 
         if (it_data.relation == .Child) {
             stack.appendAssumeCapacity(zeroInit(GULineData, .{
@@ -683,15 +667,15 @@ fn DoElementLineBreakParsing(self: *GU) void {
 }
 
 fn DoElementPositioning(self: *GU) void {
-    std.debug.assert(self.element_line_stack.items.len == 0);
-    defer std.debug.assert(self.element_line_stack.items.len == 0);
+    assert(self.element_line_stack.items.len == 0);
+    defer assert(self.element_line_stack.items.len == 0);
 
     const stack = &self.element_line_stack;
     var ld_base = zeroInit(GULineData, .{});
     var ld: *GULineData = &ld_base;
-    var p: ?*GUElement = null;
+    var p: ?*Element = null;
 
-    var it = GUElementIterator.Init(self.element_tree.items);
+    var it = ElementIterator.Init(self.element_tree.items);
     while (it.Next()) |it_data| {
         const e = it_data.element;
 
@@ -732,19 +716,22 @@ fn DoElementPositioning(self: *GU) void {
 }
 
 fn DoElementEmitDrawCommands(self: *GU) void {
-    std.debug.assert(self.element_stack.items.len == 0);
-    std.debug.assert(self.clip_stack.items.len == 0);
-    defer std.debug.assert(self.element_stack.items.len == 0);
-    defer std.debug.assert(self.clip_stack.items.len == 0);
+    assert(self.element_stack.items.len == 0);
+    assert(self.clip_stack.items.len == 0);
+    defer assert(self.element_stack.items.len == 0);
+    defer assert(self.clip_stack.items.len == 0);
 
     const stack = &self.clip_stack;
     const sd = self.backend.GetSurfaceDimensions();
     const c_base = GURect{ .x = 0, .y = 0, .w = sd.w, .h = sd.h };
-    self.render_commands.append(self.allocator, .{ .clip = .{ .area = c_base } }) catch |err|
+    var next_clip = self.render_commands_clip.items.len;
+    self.render_commands.append(self.allocator, .init(.clip, next_clip)) catch |err|
+        std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+    self.render_commands_clip.append(self.allocator, .{ .area = c_base }) catch |err|
         std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
     var c: *const GURect = &c_base;
 
-    var it = GUElementIterator.Init(self.element_tree.items);
+    var it = ElementIterator.Init(self.element_tree.items);
     while (it.Next()) |it_data| {
         const e = it_data.element;
 
@@ -753,7 +740,10 @@ fn DoElementEmitDrawCommands(self: *GU) void {
         if (it_data.relation == .Parent) {
             _ = stack.pop();
             c = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &c_base;
-            self.render_commands.append(self.allocator, .{ .clip = .{ .area = c.* } }) catch |err|
+            next_clip = self.render_commands_clip.items.len;
+            self.render_commands.append(self.allocator, .init(.clip, next_clip)) catch |err|
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+            self.render_commands_clip.append(self.allocator, .{ .area = c.* }) catch |err|
                 std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
             continue;
         }
@@ -762,48 +752,65 @@ fn DoElementEmitDrawCommands(self: *GU) void {
             stack.append(self.allocator, e.area.GetIntersection(c)) catch |err|
                 std.log.err("DoElementEmitDrawCommands: Clip Stack ({s})", .{@errorName(err)});
             c = &stack.items[stack.items.len - 1];
-            self.render_commands.append(self.allocator, .{ .clip = .{ .area = c.* } }) catch |err|
+
+            next_clip = self.render_commands_clip.items.len;
+            self.render_commands.append(self.allocator, .init(.clip, next_clip)) catch |err|
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+            self.render_commands_clip.append(self.allocator, .{ .area = c.* }) catch |err|
                 std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
         };
 
+        // is it actually drawable?
         if (GUColor.FromInt(e.layout.color).a == 0) continue;
         if (!e.area.HasNonZeroArea()) continue;
 
-        self.render_commands.append(self.allocator, switch (e.mode) {
-            .Label => |label| .{ .text = .{
+        if (e.features.bShowRect) {
+            var cmd: RCRect = .init(e.area, e.layout.corner, e.layout.color);
+
+            if (e.features.bShowTexture) cmd.texture = &self.textures.items[e.texture];
+
+            const next_rect = self.render_commands_rect.items.len;
+            self.render_commands.append(self.allocator, .init(.rect, next_rect)) catch |err|
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+            self.render_commands_rect.append(self.allocator, cmd) catch |err|
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+        }
+
+        if (e.features.bShowLabel and e.label_str.len > 0) {
+            // FIXME: need a way to ensure that the text gets drawn after (i.e.
+            //  on top), because they will both be emitted at the same time
+            //  and the renderer may not respect the call order if batching;
+            //  maybe add a "batch layer" value to draw cmd, and give labels
+            //  a half-value extra so that they are intereted as upper layer.
+            const cmd: RCText = .{
                 .pos = GUPos.FromRect(&e.area),
-                .font = &self.fonts.items[label.font],
+                .font = &self.fonts.items[e.label_font],
                 .color = e.layout.color,
-                .str = label.str,
-            } },
-            .Image => |img| .{ .image = .{
-                .pos = GUPos.FromRect(&e.area),
-                .image = &self.images.items[img.image],
-                .color = e.layout.color,
-                .tile = null,
-            } },
-            .Rect, .Button, .Block => .{ .rect = .{
-                .rect = e.area,
-                .corner = e.layout.corner,
-                .color = e.layout.color,
-            } },
-        }) catch |err| std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+                .str = e.label_str,
+            };
+
+            const next_text = self.render_commands_text.items.len;
+            self.render_commands.append(self.allocator, .init(.text, next_text)) catch |err|
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+            self.render_commands_text.append(self.allocator, cmd) catch |err|
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+        }
     }
 }
 
 fn DoElementDebugLog(self: *GU) void {
-    var it = GUElementIterator.Init(self.element_tree.items);
+    var it = ElementIterator.Init(self.element_tree.items);
     while (it.Next()) |it_data| {
         const e = it_data.element;
         std.log.debug(
-            "it-element: ({*})  {s: <12}{s: <10}{d}x{d}",
-            .{ e, @tagName(it_data.relation), @tagName(e.mode), e.area.w, e.area.h },
+            "it-element: ({*})  {t: <12}{d}x{d}",
+            .{ e, it_data.relation, e.area.w, e.area.h },
         );
     }
 }
 
 fn DoButtonPostProcessing(self: *GU) void {
-    std.debug.assert(self.button_delete_queue.items.len == 0);
+    assert(self.button_delete_queue.items.len == 0);
 
     var it = self.buttons.iterator();
     while (it.next()) |btn_info| {
@@ -821,14 +828,15 @@ fn DoButtonPostProcessing(self: *GU) void {
         _ = self.buttons.remove(item);
 }
 
+//------------------------------------------------------------------------------
 // LAYOUT
 
 /// returns whether creating a new container was successful. guarantees the element
 /// tree will be in a valid state (i.e. the same as before calling, on failure).
 pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
     if (layout) |lo| {
-        if (lo.widths) |w| std.debug.assert(w.len > 0);
-        if (lo.heights) |h| std.debug.assert(h.len > 0);
+        if (lo.widths) |w| assert(w.len > 0);
+        if (lo.heights) |h| assert(h.len > 0);
     }
 
     const parent_i: ?usize = self.element_stack.getLastOrNull();
@@ -837,11 +845,12 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
     const ld: *GULineData = &self.element_line_stack.items[self.element_line_stack.items.len - 1];
 
     self.element_tree.append(self.allocator, e: {
-        var e: GUElement = .empty;
-        e.layout = if (layout) |lo| lo.* else .Default;
+        var e: Element = .empty;
+        e.layout = if (layout) |lo| lo.* else .default;
         e.id = element_i;
         e.parent = parent_i;
         e.sibling_prev = self.element_sibling;
+        e.features.bShowRect = e.layout.color & 0xFF > 0; // FIXME: hacky
         break :e e;
     }) catch return false;
 
@@ -850,8 +859,8 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
         return false;
     };
 
-    const parent: ?*GUElement = if (parent_i) |i| &self.element_tree.items[i] else null;
-    const element: *GUElement = &self.element_tree.items[element_i];
+    const parent: ?*Element = if (parent_i) |i| &self.element_tree.items[i] else null;
+    const element: *Element = &self.element_tree.items[element_i];
 
     if (self.element_queue_line_break or
         (parent != null and parent.?.layout.widths != null and
@@ -887,51 +896,67 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
     return true;
 }
 
+/// Finalize the current element. Element validation happens at this point, so
+/// any references to the element (e.g. from `GetContainer`) must not be used
+/// after this is called.
 pub fn EndContainer(self: *GU) void {
     _ = self.element_line_stack.pop();
     const element_i = self.element_stack.pop().?;
-    const element: *GUElement = &self.element_tree.items[element_i];
-    const parent: ?*GUElement = if (element.parent) |p| &self.element_tree.items[p] else null;
+    const element: *Element = &self.element_tree.items[element_i];
+    const parent: ?*Element = if (element.parent) |p| &self.element_tree.items[p] else null;
     self.element_sibling = element_i;
     self.element_queue_line_break = false; // cleanup unused line break
 
     if (element.layout.mode_w == .Stretch) {
-        std.debug.assert(parent != null);
-        std.debug.assert(parent.?.layout.widths != null);
-        std.debug.assert(parent.?.layout.mode_w.IsPreComputable());
-        std.debug.assert(element.area.w < 0);
+        assert(parent != null);
+        assert(parent.?.layout.widths != null);
+        assert(parent.?.layout.mode_w.IsPreComputable());
+        assert(element.area.w < 0);
     }
     if (element.layout.mode_h == .Stretch) {
-        std.debug.assert(parent != null);
-        std.debug.assert(parent.?.layout.heights != null);
-        std.debug.assert(parent.?.layout.mode_h.IsPreComputable());
-        std.debug.assert(element.area.h < 0);
+        assert(parent != null);
+        assert(parent.?.layout.heights != null);
+        assert(parent.?.layout.mode_h.IsPreComputable());
+        assert(element.area.h < 0);
     }
 
-    switch (element.mode) {
-        .Block, .Button => {},
-        .Rect => |rect| {
-            // TODO: stretch-like rect dimensions
-            element.area.w = rect.w;
-            element.area.h = rect.h;
-        },
-        .Image => |image| {
-            const image_size = &self.images.items[image.image].Size();
-            element.area.w = image_size.w;
-            element.area.h = image_size.h;
-        },
-        .Label => |label| {
-            // TODO: account for text wrapping
-            const label_size = &self.fonts.items[label.font].StringSize(label.str);
-            element.area.w = label_size.w;
-            element.area.h = label_size.h;
-        },
+    // TODO: move button style to a style stack-like setup, not hardcoded
+    // Button
+    if (element.features.bClickable) {
+        element.layout.color = switch (element.btn_state) {
+            .Idle => if (element.features.bClickDepressed) Button.COLOR_DOWN else Button.COLOR_IDLE,
+            .Hover => if (element.features.bClickDepressed) Button.COLOR_IDLE else Button.COLOR_HOVER,
+            .Down => Button.COLOR_DOWN,
+        };
+        element.layout.padding = .{ .w = Button.PADDING_HORIZONTAL, .h = Button.PADDING_VERTICAL };
+        element.layout.corner = .{ .radius = Button.CORNER_RADIUS, .style = .Round };
+    }
+
+    // Texture: behaviour of sizing the element with relation to the texture (e.g.
+    // "draw image = match texture size with fixed sizing") is left to the widget impl
+    if (element.features.bShowTexture) {
+        assert(element.features.bShowRect == true);
+        assert(element.texture != maxInt(usize)); // TODO: proper/safe "null texture" value
+    }
+
+    // Text
+    //  - if the user wants text with a background then they are forced to wrap
+    //    the text in an element, as this usage naturally covers normal aesthetic
+    //    background needs without us needing to add complexity to the backend passes
+    //  - 0-len string is allowed in order to accommodate dynamic text, but the
+    //    rest is asserted regardless under the assumption that it is
+    //  - behaviour of sizing the element with relation to string size is left
+    //    to the widget impl
+    if (element.features.bShowLabel) {
+        assert(element.features.bShowRect == false);
+        assert(element.label_font != maxInt(usize)); // TODO: proper/safe "null font" value
+        //assert(element.label_str.len > 0);
     }
 }
 
 /// returns pointer to current element. pointer is only guaranteed to be valid
 /// until the next call to DoContainer
-pub inline fn GetContainer(self: *GU) *GUElement {
+pub inline fn GetContainer(self: *GU) *Element {
     const i = self.element_stack.getLast();
     const element = &self.element_tree.items[i];
     return element;
@@ -958,6 +983,9 @@ pub fn SetContainerSize(self: *GU, w: f32, h: f32) void {
     element.area.h = h;
 }
 
+// TODO: ?? on second thought, maybe do away with this and just rename user stuff
+//  with Element; this is probably fine user-facing nomenclature, and it would
+//  clean up the api surface. tbd
 // as far as we're concerned, what the user sees as a generic layout container
 // is just a 'null' element to us, so we use these internally for clarity
 const DoElement = DoContainer;
@@ -968,47 +996,67 @@ const SetElementGaps = SetContainerGaps;
 const SetElementColor = SetContainerColor;
 const SetElementSize = SetContainerSize;
 
+//------------------------------------------------------------------------------
+// "STOCK" WIDGETS
+
+// TODO: stretch-like rect dimensions
 pub fn DoRect(self: *GU, size: GUSize, color: u32) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
-    element.mode = .{ .Rect = size };
+    element.features.bShowRect = true;
+    element.area.w = size.w;
+    element.area.h = size.h;
     element.layout.color = color;
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
 }
 
-pub fn DoImage(self: *GU, image: GUImageHandle, color: ?u32) void {
+pub fn DoImage(self: *GU, texture: TextureHandle, color: ?u32, scale: f32) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
-    element.mode = .{ .Image = .{ .image = image } };
+    element.features.bShowTexture = true;
+    element.features.bShowRect = true;
+    element.texture = texture;
     element.layout.color = color orelse 0xFFFFFFFF;
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
+    const texture_size = &self.textures.items[element.texture].Size();
+    element.area.w = scale * texture_size.w;
+    element.area.h = scale * texture_size.h;
 }
 
 // TODO: add formatting, like standard string formatting functions
-pub fn DoLabel(self: *GU, font: ?GUFontHandle, color: ?u32, comptime fmt: []const u8, args: anytype) void {
+pub fn DoLabel(self: *GU, font: ?FontHandle, color: ?u32, comptime fmt: []const u8, args: anytype) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
     const str = std.fmt.allocPrint(self.label_arena.allocator(), fmt, args) catch |err|
         std.debug.panic("DoLabel failed to allocate string: ({s})", .{@errorName(err)});
-    element.mode = .{ .Label = .{ .font = font orelse 0, .str = str } };
+    element.features.bShowLabel = true;
+    element.label_font = font orelse 0;
+    element.label_str = str;
     element.layout.color = color orelse 0xFFFFFFFF;
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
+    const label_size = &self.fonts.items[element.label_font].StringSize(element.label_str);
+    element.area.w = label_size.w;
+    element.area.h = label_size.h;
 }
 
-/// turns element into a button and executes the button logic. button is identified
-/// internally by hash of the element id concatenated with str
-/// to emulate DoButton behaviour, use mode .Press and return .activated or false if null
-pub fn DoButtonLogic(self: *GU, mode: GUButtonMode, str: []const u8) ?GUButtonData {
+// TODO: more robust hashing strategy that doesn't cause hover state to break on
+//  buttons that change where the button is in the element tree (e.g. by inserting
+//  or removing an element above the button)
+/// Turns the current element into a button and evaluates the input state. To
+/// track state between frames, the button is identified internally by hash of the
+/// element id concatenated with str. To emulate standard button behaviour in a
+/// custom widget, refer to the call to this function in `DoButton`.
+pub fn DoButtonLogic(self: *GU, mode: Button.Mode, str: []const u8) ?GUButtonData {
     const element = self.GetElement();
-    element.mode = .{ .Button = {} };
+    element.features.bClickable = true;
 
-    const btn: *GUButton = get_button: {
+    const btn: *Button = get_button: {
         const btn_key = std.fmt.allocPrint(self.allocator, "{X:0>16}{s}", .{ element.id, str }) catch
             return null;
         const btn_info = self.buttons.getOrPut(btn_key) catch
@@ -1016,14 +1064,15 @@ pub fn DoButtonLogic(self: *GU, mode: GUButtonMode, str: []const u8) ?GUButtonDa
 
         const btn = btn_info.value_ptr;
         if (!btn_info.found_existing) {
-            btn.* = GUButton{
+            btn.* = Button{
                 .state = .Idle,
                 .mode = mode,
-                .area = GURect.Zero,
+                .area = .Zero,
                 .element = element.id,
             };
         } else btn.element = element.id;
 
+        element.btn_state = btn.state;
         break :get_button btn;
     };
 
@@ -1038,20 +1087,13 @@ pub fn DoButtonLogic(self: *GU, mode: GUButtonMode, str: []const u8) ?GUButtonDa
 
 // NOTE: id hash uses input fmt, not resolved formatted string
 /// returns whether button was 'activated' (pressed)
-pub fn DoButton(self: *GU, font: ?GUFontHandle, comptime fmt: []const u8, args: anytype) bool {
+pub fn DoButton(self: *GU, font: ?FontHandle, comptime fmt: []const u8, args: anytype) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
     const element = self.GetElement();
+    element.features.bShowRect = true;
 
     const btn = self.DoButtonLogic(.Press, fmt) orelse return false;
-
-    element.layout.color = switch (btn.button.state) {
-        .Idle => GUButton.COLOR_IDLE,
-        .Hover => GUButton.COLOR_HOVER,
-        .Down => GUButton.COLOR_DOWN,
-    };
-    element.layout.padding = .{ .w = GUButton.PADDING_HORIZONTAL, .h = GUButton.PADDING_VERTICAL };
-    element.layout.corner = .{ .radius = GUButton.CORNER_RADIUS, .style = .Round };
 
     self.DoLabel(font, null, fmt, args);
 
@@ -1063,21 +1105,15 @@ pub fn DoButton(self: *GU, font: ?GUFontHandle, comptime fmt: []const u8, args: 
 /// if button is culled (due to not rendering, clip culling, etc.), the external
 /// bool will NOT be toggled
 /// returns whether button was 'activated' (pressed and subsequently toggled)
-pub fn DoToggleButton(self: *GU, active: *bool, font: ?GUFontHandle, comptime fmt: []const u8, args: anytype) bool {
+pub fn DoToggleButton(self: *GU, active: *bool, font: ?FontHandle, comptime fmt: []const u8, args: anytype) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
     const element = self.GetElement();
+    element.features.bShowRect = true;
 
     const btn = self.DoButtonLogic(.Press, fmt) orelse return false;
+    if (active.*) element.features.bClickDepressed = true;
     if (btn.activated) active.* = !active.*;
-
-    element.layout.color = switch (btn.button.state) {
-        .Idle => if (active.*) GUButton.COLOR_DOWN else GUButton.COLOR_IDLE,
-        .Hover => if (active.*) GUButton.COLOR_IDLE else GUButton.COLOR_HOVER,
-        .Down => GUButton.COLOR_DOWN,
-    };
-    element.layout.padding = .{ .w = GUButton.PADDING_HORIZONTAL, .h = GUButton.PADDING_VERTICAL };
-    element.layout.corner = .{ .radius = GUButton.CORNER_RADIUS, .style = .Round };
 
     self.DoLabel(font, null, fmt, args);
 
