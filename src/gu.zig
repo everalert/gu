@@ -21,7 +21,6 @@ pub const GUBackend = struct {
     fnGetSurfaceDimensions: *const fn (*anyopaque) GUSize,
     fnDrawRect: *const fn (*anyopaque, *const GURenderCommand.Rect) void,
     fnDrawString: *const fn (*anyopaque, *const GURenderCommand.Text) void,
-    fnDrawImage: *const fn (*anyopaque, *const GURenderCommand.Image) void,
     fnSetClip: *const fn (*anyopaque, *const GURenderCommand.Clip) void,
     fnBeginRendering: *const fn (*anyopaque) void,
     fnEndRendering: *const fn (*anyopaque) void,
@@ -30,17 +29,13 @@ pub const GUBackend = struct {
         return self.fnGetSurfaceDimensions(self.ptr);
     }
 
+    // TODO: impl texture tile drawing, see GURenderCommand->Rect
     pub fn DrawRect(self: *GUBackend, cmd: *const GURenderCommand.Rect) void {
         self.fnDrawRect(self.ptr, cmd);
     }
 
     pub fn DrawString(self: *GUBackend, cmd: *const GURenderCommand.Text) void {
         self.fnDrawString(self.ptr, cmd);
-    }
-
-    // TODO: impl tile drawing, see GURenderCommand->Image
-    pub fn DrawImage(self: *GUBackend, cmd: *const GURenderCommand.Image) void {
-        self.fnDrawImage(self.ptr, cmd);
     }
 
     pub fn SetClip(self: *GUBackend, cmd: *const GURenderCommand.Clip) void {
@@ -76,25 +71,27 @@ pub const GUCorner = struct {
 pub const GURenderCommand = union(enum) {
     rect: Rect,
     text: Text,
-    image: Image,
     clip: Clip,
 
     pub const Rect = struct {
         rect: GURect,
         corner: GUCorner,
         color: u32,
+        texture: ?*GUTextureAtlas,
+        tile: ?u32, // for texture atlases
+
+        pub fn init(rect: GURect, corner: GUCorner, color: u32) Rect {
+            return std.mem.zeroInit(Rect, .{
+                .rect = rect,
+                .corner = corner,
+                .color = color,
+            });
+        }
     };
 
     pub const Text = struct {
         str: []const u8,
         font: *GUFontAtlas,
-        pos: GUPos,
-        color: u32,
-    };
-
-    pub const Image = struct {
-        image: *GUTextureAtlas,
-        tile: ?u32, // for texture atlases
         pos: GUPos,
         color: u32,
     };
@@ -238,7 +235,7 @@ pub const GUKeyState = struct {
     }
 };
 
-// TODO: impl image tilesets
+// TODO: impl texture tilesets
 // TODO: impl absolute/relative positioning
 const Element = struct {
     id: usize,
@@ -251,16 +248,13 @@ const Element = struct {
     mode: enum {
         /// don't do any special behaviours
         Block,
-        Image, // FIXME: stuff based on Image should just be a "use texture"
-        //         behaviour, where the `DoImage` just sets the dimensions of
-        //         the element to match the texture.
         Label,
     },
     features: Features,
     layout: GULayout,
     area: GURect,
     fill: GUSize, // how big the element is for layout calculations
-    image: GUImageHandle,
+    texture: GUTextureHandle,
     label_str: []const u8,
     label_font: GUFontHandle,
     rect_size: GUSize,
@@ -278,7 +272,7 @@ const Element = struct {
         .sibling_next = null,
         .sibling_prev = null,
         .features = .none,
-        .image = maxInt(usize),
+        .texture = maxInt(usize),
         .label_str = &.{},
         .label_font = maxInt(usize),
         .rect_size = .Zero,
@@ -288,10 +282,12 @@ const Element = struct {
     const Features = packed struct(u32) {
         // Visual functionality
         bShowRect: bool,
-        bShowImage: bool, // assert image value set and bShowRect true
+        bShowTexture: bool, // assert texture value set and bShowRect true
         bShowLabel: bool, // assert string and font value set
+
         // Layout functionality
         bLineBreak: bool,
+
         // Button functionality
         bClickable: bool,
         bClickDown: bool,
@@ -300,7 +296,8 @@ const Element = struct {
 
         _: u24,
 
-        pub const none = std.mem.zeroInit(Features, .{});
+        const none: Features = @bitCast(@as(u32, 0));
+        const all: Features = @bitCast(maxInt(u32));
     };
 };
 
@@ -440,7 +437,7 @@ const GULineData = struct {
     }
 };
 
-const GUImageHandle = usize;
+const GUTextureHandle = usize;
 const GUFontHandle = usize;
 
 //------------------------------------------------------------------------------
@@ -450,7 +447,7 @@ allocator: Allocator,
 backend: GUBackend,
 
 fonts: ArrayList(GUFontAtlas), // TODO: impl with handles, update GUFontHandle
-images: ArrayList(GUTextureAtlas), // TODO: impl with handles, update GUImageHandle
+textures: ArrayList(GUTextureAtlas), // TODO: impl with handles, update GUTextureHandle
 
 element_tree: ArrayList(Element),
 element_stack: ArrayList(usize),
@@ -477,7 +474,7 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
         .label_arena = ArenaAllocator.init(alloc),
         .backend = backend,
         .fonts = ArrayList(GUFontAtlas).empty,
-        .images = ArrayList(GUTextureAtlas).empty,
+        .textures = ArrayList(GUTextureAtlas).empty,
         .element_tree = ArrayList(Element).empty,
         .element_stack = ArrayList(usize).empty,
         .element_line_stack = ArrayList(GULineData).empty,
@@ -497,7 +494,7 @@ pub fn Deinit(self: *GU) void {
     self.element_line_stack.deinit(self.allocator);
     self.element_stack.deinit(self.allocator);
     self.element_tree.deinit(self.allocator);
-    self.images.deinit(self.allocator);
+    self.textures.deinit(self.allocator);
     self.fonts.deinit(self.allocator);
 }
 
@@ -511,9 +508,9 @@ pub fn AddFont(self: *GU, font: GUFontAtlas) !usize {
 }
 
 // TODO: impl handle-based system
-pub fn AddImage(self: *GU, image: GUTextureAtlas) !usize {
-    try self.images.append(self.allocator, image);
-    return self.images.items.len - 1;
+pub fn AddTexture(self: *GU, texture: GUTextureAtlas) !usize {
+    try self.textures.append(self.allocator, texture);
+    return self.textures.items.len - 1;
 }
 
 //------------------------------------------------------------------------------
@@ -557,7 +554,6 @@ pub fn EndFrame(self: *GU) void {
         switch (command) {
             .rect => |*rect| self.backend.DrawRect(rect),
             .text => |*text| self.backend.DrawString(text),
-            .image => |*img| self.backend.DrawImage(img),
             .clip => |*clip| self.backend.SetClip(clip),
         }
     }
@@ -747,34 +743,19 @@ fn DoElementEmitDrawCommands(self: *GU) void {
                     .{@errorName(err)},
                 );
             },
-            .Image => {
-                // FIXME: integrate with "ShowRect" path, such that "images" are
-                //  simply textured rects (also: possibly adjust "image" naming
-                //  internally to reflect this)
-                assert(e.image != maxInt(usize)); // TODO: proper/safe "null image" value
-                self.render_commands.append(self.allocator, GURenderCommand{ .image = .{
-                    .pos = GUPos.FromRect(&e.area),
-                    .image = &self.images.items[e.image],
-                    .color = e.layout.color,
-                    .tile = null,
-                } }) catch |err| std.log.err(
-                    "DoElementEmitDrawCommands: Draw Command ({s})",
-                    .{@errorName(err)},
-                );
-            },
             .Block => {},
         }
 
-        // replacement for Rect/Block paths; will also integrate old Image code
-        // at some point
+        // replacement for Rect/Block paths
         if (e.features.bShowRect) {
-            self.render_commands.append(self.allocator, GURenderCommand{
-                .rect = .{
-                    .rect = e.area,
-                    .corner = e.layout.corner,
-                    .color = e.layout.color,
-                },
-            }) catch |err| std.log.err(
+            var cmd: GURenderCommand.Rect = .init(e.area, e.layout.corner, e.layout.color);
+
+            if (e.features.bShowTexture) {
+                assert(e.texture != maxInt(usize)); // TODO: proper/safe "null texture" value
+                cmd.texture = &self.textures.items[e.texture];
+            }
+
+            self.render_commands.append(self.allocator, .{ .rect = cmd }) catch |err| std.log.err(
                 "DoElementEmitDrawCommands: Draw Command ({s})",
                 .{@errorName(err)},
             );
@@ -913,14 +894,16 @@ pub fn EndContainer(self: *GU) void {
         element.layout.corner = .{ .radius = Button.CORNER_RADIUS, .style = .Round };
     }
 
+    if (element.features.bShowTexture) {
+        assert(element.features.bShowRect == true);
+        assert(element.texture != maxInt(usize)); // TODO: proper/safe "null font" value
+        const texture_size = &self.textures.items[element.texture].Size();
+        element.area.w = texture_size.w;
+        element.area.h = texture_size.h;
+    }
+
     switch (element.mode) {
         .Block => {},
-        .Image => {
-            assert(element.image != maxInt(usize)); // TODO: proper/safe "null font" value
-            const image_size = &self.images.items[element.image].Size();
-            element.area.w = image_size.w;
-            element.area.h = image_size.h;
-        },
         .Label => {
             assert(element.label_str.len > 0);
             assert(element.label_font != maxInt(usize)); // TODO: proper/safe "null font" value
@@ -987,15 +970,16 @@ pub fn DoRect(self: *GU, size: GUSize, color: u32) void {
     element.features.bShowRect = true;
 }
 
-pub fn DoImage(self: *GU, image: GUImageHandle, color: ?u32) void {
+pub fn DoImage(self: *GU, texture: GUTextureHandle, color: ?u32) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
-    element.mode = .Image;
-    element.image = image;
+    element.texture = texture;
     element.layout.color = color orelse 0xFFFFFFFF;
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
+    element.features.bShowRect = true;
+    element.features.bShowTexture = true;
 }
 
 // TODO: add formatting, like standard string formatting functions

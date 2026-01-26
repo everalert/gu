@@ -279,6 +279,20 @@ const RenderData = struct {
         const c1 = GUColor.FromInt(cmd.color);
         SDLEP(c.SDL_SetRenderDrawColor(self.renderer, c1.r, c1.g, c1.b, c1.a));
 
+        // FIXME: integrate this in with the rest, so that textured rects can
+        //  take advantage of things like corner rounding
+        if (cmd.texture) |img| {
+            const atlas: *AsciiFont = @ptrCast(@alignCast(img.ptr));
+            SDLEP(c.SDL_SetTextureColorMod(atlas.texture, c1.r, c1.g, c1.b));
+            SDLEP(c.SDL_RenderTexture(
+                atlas.renderer,
+                atlas.texture,
+                null,
+                &.{ .x = cmd.rect.x, .y = cmd.rect.y, .w = cmd.rect.w, .h = cmd.rect.h },
+            ));
+            return;
+        }
+
         if (cmd.corner.style == .None or cmd.corner.radius <= 0 or cmd.rect.w <= 1 or cmd.rect.h <= 1) {
             SDLEP(c.SDL_RenderFillRect(
                 self.renderer,
@@ -318,12 +332,6 @@ const RenderData = struct {
         cmd.font.DrawString(cmd.str, &cmd.pos);
     }
 
-    fn DrawImage(_: *anyopaque, cmd: *const GURenderCommand.Image) void {
-        //const self: *RenderData = @alignCast(@ptrCast(ptr));
-        cmd.image.SetColor(cmd.color);
-        cmd.image.Draw(&cmd.pos);
-    }
-
     fn SetClip(ptr: *anyopaque, cmd: *const GURenderCommand.Clip) void {
         const self: *RenderData = @ptrCast(@alignCast(ptr));
         const rect = c.SDL_Rect{
@@ -359,7 +367,6 @@ const RenderData = struct {
             .ptr = self,
             .fnGetSurfaceDimensions = GetSurfaceDimensions,
             .fnDrawRect = DrawRect,
-            .fnDrawImage = DrawImage,
             .fnDrawString = DrawString,
             .fnSetClip = SetClip,
             .fnBeginRendering = BeginRendering,
@@ -469,8 +476,8 @@ pub export fn SDL_AppInit(app: **App, argc: c_int, argv: [*][:0]u8) c.SDL_AppRes
         std.debug.panic("initializing AsciiFont failed: {s}", .{@errorName(e)});
     app_global.font_id = app_global.gu.AddFont(app_global.font.GetFontAtlas()) catch |e|
         std.debug.panic("AddFont failed: {s}", .{@errorName(e)});
-    app_global.img_id = app_global.gu.AddImage(app_global.font.GetTextureAtlas()) catch |e|
-        std.debug.panic("AddImage failed: {s}", .{@errorName(e)});
+    app_global.img_id = app_global.gu.AddTexture(app_global.font.GetTextureAtlas()) catch |e|
+        std.debug.panic("AddTexture failed: {s}", .{@errorName(e)});
 
     app_global.b2toggle = false;
     app_global.step = true;

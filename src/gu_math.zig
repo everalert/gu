@@ -57,7 +57,7 @@ pub const Pos = struct {
 
     pub const Zero = Pos{ .x = 0, .y = 0 };
 
-    pub fn FromRect(rect: *Rect) Pos {
+    pub fn FromRect(rect: *const Rect) Pos {
         return Pos{ .x = rect.x, .y = rect.y };
     }
 };
