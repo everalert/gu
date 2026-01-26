@@ -110,8 +110,8 @@ pub const GUCorner = struct {
 
 //------------------------------------------------------------------------------
 
-const GUFontHandle = usize;
-const GUTextureHandle = usize;
+pub const FontHandle = usize;
+pub const TextureHandle = usize;
 
 // FIXME: not sure this needs to be in ui core, maybe adding these to backend
 //  vtable is enough? so we only remember handles (provided by backend)
@@ -145,30 +145,21 @@ pub const GUFontAtlas = struct {
     }
 };
 
+// TODO: tiling; i.e. actually make it an atlas
 // FIXME: not sure this needs to be in ui core, maybe adding these to backend
 //  vtable is enough? so we only remember handles (provided by backend)
 pub const GUTextureAtlas = struct {
     ptr: *anyopaque,
     fnDraw: *const fn (*anyopaque, *const GUPos) void,
-    fnDrawTile: *const fn (*anyopaque, u32, *const GUPos) void,
     fnSize: *const fn (*anyopaque) GUSize,
-    fnTileSize: *const fn (*anyopaque, u32) GUSize,
     fnSetColor: *const fn (*anyopaque, u32) void,
 
     pub fn Draw(self: *GUTextureAtlas, pos: *const GUPos) void {
         self.fnDraw(self.ptr, pos);
     }
 
-    pub fn DrawTile(self: *GUTextureAtlas, id: u32, pos: *const GUPos) void {
-        self.fnDrawTile(self.ptr, id, pos);
-    }
-
     pub fn Size(self: *GUTextureAtlas) GUSize {
         return self.fnSize(self.ptr);
-    }
-
-    pub fn TileSize(self: *GUTextureAtlas, id: u32) GUSize {
-        return self.fnTileSize(self.ptr, id);
     }
 
     pub fn SetColor(self: *GUTextureAtlas, color: u32) void {
@@ -271,9 +262,9 @@ const Element = struct {
     layout: GULayout,
     area: GURect,
     fill: GUSize, // how big the element is for layout calculations
-    texture: GUTextureHandle,
+    texture: TextureHandle,
     label_str: []const u8,
-    label_font: GUFontHandle,
+    label_font: FontHandle,
     rect_size: GUSize,
     btn_state: Button.State,
 
@@ -295,6 +286,11 @@ const Element = struct {
         .btn_state = .Idle,
     };
 
+    // TODO: texture tiling
+    // TODO: texture scaling
+    // TODO: texture stretch to rect size
+    // TODO: texture treated as 9grid
+    // TODO: text wrapping
     const Features = packed struct(u32) {
         // Visual functionality
         bShowRect: bool,
@@ -388,8 +384,8 @@ pub const GULayout = struct {
     mode_h: GUDimensionMode, // derived from parent 'heights' field if .Auto
     color: u32,
     corner: GUCorner,
-    widths: ?[]const f32,
-    heights: ?[]const f32,
+    widths: ?[]const f32, // FIXME: doesn't need to be null
+    heights: ?[]const f32, // FIXME: doesn't need to be null
     padding: GUSize,
     gaps: GUSize,
     auto_line_break: bool,
@@ -921,8 +917,8 @@ pub fn EndContainer(self: *GU) void {
         assert(element.area.h < 0);
     }
 
-    // TODO: move button style to a style stack-like setup, not hardcoded
     // Button
+    // TODO: move button style to a style stack-like setup, not hardcoded
     if (element.features.bClickable) {
         element.layout.color = switch (element.btn_state) {
             .Idle => if (element.features.bClickDepressed) Button.COLOR_DOWN else Button.COLOR_IDLE,
@@ -933,14 +929,15 @@ pub fn EndContainer(self: *GU) void {
         element.layout.corner = .{ .radius = Button.CORNER_RADIUS, .style = .Round };
     }
 
+    // Textures
+    // behaviour of sizing the element with relation to the texture (e.g. "draw
+    // image = match texture size with fixed sizing") is left to the widget impl
     if (element.features.bShowTexture) {
         assert(element.features.bShowRect == true);
         assert(element.texture != maxInt(usize)); // TODO: proper/safe "null font" value
-        const texture_size = &self.textures.items[element.texture].Size();
-        element.area.w = texture_size.w;
-        element.area.h = texture_size.h;
     }
 
+    // Text
     // FIXME: now that these are not gated by element mode, the area size can
     //  have conflicts; need to figure out size resolution for combination cases
     if (element.features.bShowLabel) {
@@ -1008,7 +1005,7 @@ pub fn DoRect(self: *GU, size: GUSize, color: u32) void {
     element.layout.mode_h = .Fixed;
 }
 
-pub fn DoImage(self: *GU, texture: GUTextureHandle, color: ?u32) void {
+pub fn DoImage(self: *GU, texture: TextureHandle, color: ?u32, scale: f32) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
@@ -1018,10 +1015,13 @@ pub fn DoImage(self: *GU, texture: GUTextureHandle, color: ?u32) void {
     element.layout.color = color orelse 0xFFFFFFFF;
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
+    const texture_size = &self.textures.items[element.texture].Size();
+    element.area.w = scale * texture_size.w;
+    element.area.h = scale * texture_size.h;
 }
 
 // TODO: add formatting, like standard string formatting functions
-pub fn DoLabel(self: *GU, font: ?GUFontHandle, color: ?u32, comptime fmt: []const u8, args: anytype) void {
+pub fn DoLabel(self: *GU, font: ?FontHandle, color: ?u32, comptime fmt: []const u8, args: anytype) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
@@ -1077,7 +1077,7 @@ pub fn DoButtonLogic(self: *GU, mode: Button.Mode, str: []const u8) ?GUButtonDat
 
 // NOTE: id hash uses input fmt, not resolved formatted string
 /// returns whether button was 'activated' (pressed)
-pub fn DoButton(self: *GU, font: ?GUFontHandle, comptime fmt: []const u8, args: anytype) bool {
+pub fn DoButton(self: *GU, font: ?FontHandle, comptime fmt: []const u8, args: anytype) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
     const element = self.GetElement();
@@ -1095,7 +1095,7 @@ pub fn DoButton(self: *GU, font: ?GUFontHandle, comptime fmt: []const u8, args: 
 /// if button is culled (due to not rendering, clip culling, etc.), the external
 /// bool will NOT be toggled
 /// returns whether button was 'activated' (pressed and subsequently toggled)
-pub fn DoToggleButton(self: *GU, active: *bool, font: ?GUFontHandle, comptime fmt: []const u8, args: anytype) bool {
+pub fn DoToggleButton(self: *GU, active: *bool, font: ?FontHandle, comptime fmt: []const u8, args: anytype) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
     const element = self.GetElement();

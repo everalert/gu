@@ -16,6 +16,8 @@ const GUBackend = GU.GUBackend;
 const GUCorner = GU.GUCorner;
 const GUTextureAtlas = GU.GUTextureAtlas;
 const GUFontAtlas = GU.GUFontAtlas;
+const GUTextureHandle = GU.TextureHandle;
+const GUFontHandle = GU.FontHandle;
 const GULayout = GU.GULayout;
 const GURCRect = GU.RCRect;
 const GURCText = GU.RCText;
@@ -33,6 +35,7 @@ const WINDOW_W = 800;
 const WINDOW_H = 600;
 
 const FONT = @embedFile("ascii-font");
+const TEXTURES: [2][]const u8 = .{ @embedFile("yuriko1"), @embedFile("yuriko2") };
 
 // FIXME: assumes tile size/coordinates for now (implemented as a pure port of test code as stopgap)
 const AsciiFont = struct {
@@ -114,11 +117,36 @@ const AsciiFont = struct {
             .fnSetColor = SetColor,
         };
     }
+};
 
-    // TEXTURE RELATED
+const ImageTexture = struct {
+    texture: *c.SDL_Texture,
+    renderer: ?*c.SDL_Renderer,
+
+    // NOTE: BMP can be transparent; convert from PNG using online converter if
+    // your photo app can't export BMP
+    pub fn Init(renderer: ?*c.SDL_Renderer, bmp: []const u8) !ImageTexture {
+        const stream: *c.SDL_IOStream = try SDLE(c.SDL_IOFromConstMem(bmp.ptr, bmp.len));
+        const surface: *c.SDL_Surface = try SDLE(c.SDL_LoadBMP_IO(stream, true));
+        defer c.SDL_DestroySurface(surface);
+        const texture: *c.SDL_Texture = try SDLE(c.SDL_CreateTextureFromSurface(renderer, surface));
+        errdefer comptime unreachable;
+        return ImageTexture{ .texture = texture, .renderer = renderer };
+    }
+
+    pub fn Deinit(self: *ImageTexture) void {
+        c.SDL_DestroyTexture(self.texture);
+    }
+
+    // TODO: use alpha from input color
+    fn SetColor(ptr: *anyopaque, color: u32) void {
+        const self: *ImageTexture = @ptrCast(@alignCast(ptr));
+        const rgba = GUColor.FromInt(color);
+        SDLEP(c.SDL_SetTextureColorMod(self.texture, rgba.r, rgba.g, rgba.b));
+    }
 
     fn Draw(ptr: *anyopaque, pos: *const GUPos) void {
-        const self: *AsciiFont = @ptrCast(@alignCast(ptr));
+        const self: *ImageTexture = @ptrCast(@alignCast(ptr));
         const size = Size(ptr);
         SDLEP(c.SDL_RenderTexture(
             self.renderer,
@@ -128,28 +156,16 @@ const AsciiFont = struct {
         ));
     }
 
-    fn DrawTile(ptr: *anyopaque, id: u32, pos: *const GUPos) void {
-        //const self: *AsciiFont = @alignCast(@ptrCast(ptr));
-        DrawChar(ptr, @truncate(id), pos);
-    }
-
     fn Size(ptr: *anyopaque) GUSize {
-        const self: *AsciiFont = @ptrCast(@alignCast(ptr));
+        const self: *ImageTexture = @ptrCast(@alignCast(ptr));
         return GUSize{ .w = @floatFromInt(self.texture.w), .h = @floatFromInt(self.texture.h) };
     }
 
-    fn TileSize(ptr: *anyopaque, id: u32) GUSize {
-        //const self: *AsciiFont = @alignCast(@ptrCast(ptr));
-        return CharSize(ptr, @truncate(id));
-    }
-
-    pub fn GetTextureAtlas(self: *AsciiFont) GUTextureAtlas {
+    pub fn GetTextureAtlas(self: *ImageTexture) GUTextureAtlas {
         return GUTextureAtlas{
             .ptr = self,
             .fnDraw = Draw,
-            .fnDrawTile = DrawTile,
             .fnSize = Size,
-            .fnTileSize = TileSize,
             .fnSetColor = SetColor,
         };
     }
@@ -284,7 +300,7 @@ const RenderData = struct {
         // FIXME: integrate this in with the rest, so that textured rects can
         //  take advantage of things like corner rounding
         if (cmd.texture) |img| {
-            const atlas: *AsciiFont = @ptrCast(@alignCast(img.ptr));
+            const atlas: *ImageTexture = @ptrCast(@alignCast(img.ptr));
             SDLEP(c.SDL_SetTextureColorMod(atlas.texture, c1.r, c1.g, c1.b));
             SDLEP(c.SDL_RenderTexture(
                 atlas.renderer,
@@ -443,10 +459,13 @@ const App = struct {
 
     rd: RenderData,
     gu: GU,
-    font: AsciiFont,
 
-    font_id: usize,
-    img_id: usize,
+    font: AsciiFont,
+    font_handle: GUFontHandle,
+
+    textures: [2]ImageTexture,
+    texture_handles: [2]GUTextureHandle,
+
     b2toggle: bool,
     step: bool,
 };
@@ -476,10 +495,16 @@ pub export fn SDL_AppInit(app: **App, argc: c_int, argv: [*][:0]u8) c.SDL_AppRes
 
     app_global.font = AsciiFont.Init(app_global.rd.renderer, FONT) catch |e|
         std.debug.panic("initializing AsciiFont failed: {s}", .{@errorName(e)});
-    app_global.font_id = app_global.gu.AddFont(app_global.font.GetFontAtlas()) catch |e|
+    app_global.font_handle = app_global.gu.AddFont(app_global.font.GetFontAtlas()) catch |e|
         std.debug.panic("AddFont failed: {s}", .{@errorName(e)});
-    app_global.img_id = app_global.gu.AddTexture(app_global.font.GetTextureAtlas()) catch |e|
-        std.debug.panic("AddTexture failed: {s}", .{@errorName(e)});
+    for (0..app_global.textures.len) |ti| {
+        app_global.textures[ti] =
+            ImageTexture.Init(app_global.rd.renderer, TEXTURES[ti]) catch |e|
+                std.debug.panic("initializing AsciiFont failed: {s}", .{@errorName(e)});
+        app_global.texture_handles[ti] =
+            app_global.gu.AddTexture(app_global.textures[ti].GetTextureAtlas()) catch |e|
+                std.debug.panic("AddTexture failed: {s}", .{@errorName(e)});
+    }
 
     app_global.b2toggle = false;
     app_global.step = true;
@@ -517,8 +542,9 @@ pub export fn SDL_AppEvent(app: *App, event: *c.SDL_Event) c.SDL_AppResult {
 pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     const rd = &app.rd;
     const gu = &app.gu;
-    const font_id = app.font_id;
-    const img_id = app.img_id;
+    const font = app.font_handle;
+    const img1 = app.texture_handles[0];
+    const img2 = app.texture_handles[1];
 
     // NOTE: frame advance helper for debugging
     //if (!app.step) return c.SDL_APP_CONTINUE;
@@ -538,39 +564,33 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoLineBreak();
         if (gu.DoContainer(&LAYOUT_RED)) {
             defer gu.EndContainer();
-            if (gu.DoButton(font_id, "Button", .{})) {
+            if (gu.DoButton(font, "Button", .{})) {
                 std.log.debug("b1 activation result!!", .{});
             }
         }
         gu.DoLineBreak();
         if (gu.DoContainer(&LAYOUT_RED)) {
             defer gu.EndContainer();
-            gu.DoImage(img_id, 0x00C000FF);
-        }
-        gu.DoLineBreak();
-        if (gu.DoContainer(&LAYOUT_RED)) {
-            defer gu.EndContainer();
-            gu.DoImage(img_id, null);
+            gu.DoImage(img1, 0x00C000FF, 0.1);
         }
     }
     if (gu.DoContainer(&LAYOUT_WHITE)) {
         defer gu.EndContainer();
         gu.DoLabel(null, 0xC000C0FF, "testblock2", .{});
-        if (gu.DoToggleButton(&app.b2toggle, font_id, "ToggleButton: {any}", .{app.b2toggle})) {
+        if (gu.DoToggleButton(&app.b2toggle, font, "ToggleButton: {any}", .{app.b2toggle})) {
             std.log.debug("b2 toggled!!", .{});
         }
         if (app.b2toggle) {
             gu.DoLabel(null, null, "only visible if b2 is on", .{});
         }
-        gu.DoImage(img_id, 0xC000C0FF);
-        gu.DoImage(img_id, null);
+        gu.DoImage(img2, 0xC000C0FF, 0.25);
+        gu.DoImage(img1, null, 0.25);
     }
     if (gu.DoContainer(&LAYOUT_WHITE)) {
         defer gu.EndContainer();
         gu.DoRect(.{ .w = 64, .h = 64 }, 0x000055FF);
         gu.DoLineBreak();
-        //gu.NextElementOverridePosition(.{ .x = 10, .y = 10 });
-        gu.DoLabel(font_id, 0xC00000FF, "testblock3", .{});
+        gu.DoLabel(font, 0xC00000FF, "testblock3", .{});
         gu.DoLineBreak();
         gu.DoRect(.{ .w = 64, .h = 64 }, 0x2222AAFF); // old outline color
     }
@@ -581,14 +601,15 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     if (gu.DoContainer(&LAYOUT_WHITE_BREAK)) {
         defer gu.EndContainer();
         gu.DoLabel(null, 0x00C0C0FF, "testing... with auto linebreak!!", .{});
-        if (gu.DoToggleButton(&app.b2toggle, font_id, "ToggleButton", .{})) {
+        if (gu.DoToggleButton(&app.b2toggle, font, "ToggleButton", .{})) {
             std.log.debug("b2 toggled!!", .{});
         }
         if (app.b2toggle) {
             gu.DoLabel(null, null, "only visible if b2 is on", .{});
         }
-        gu.DoImage(img_id, null);
-        gu.DoRect(.{ .w = 64, .h = 64 }, 0x2222AAFF); // old outline color
+        gu.DoLineBreak();
+        gu.DoImage(img1, null, 0.5);
+        gu.DoImage(img2, null, 0.5);
     }
     if (gu.DoContainer(&LAYOUT_WHITE)) {
         defer gu.EndContainer();
