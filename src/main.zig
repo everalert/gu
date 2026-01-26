@@ -579,6 +579,7 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
             gu.DoLabel(null, null, "only visible if b2 is on", .{});
         }
         gu.DoImage(img_id, null);
+        gu.DoRect(.{ .w = 64, .h = 64 }, 0x2222AAFF); // old outline color
     }
     if (gu.DoContainer(&LAYOUT_WHITE)) {
         defer gu.EndContainer();

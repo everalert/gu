@@ -249,8 +249,8 @@ const Element = struct {
     sibling_prev: ?usize,
 
     mode: enum {
+        /// don't do any special behaviours
         Block,
-        Rect,
         Image, // FIXME: stuff based on Image should just be a "use texture"
         //         behaviour, where the `DoImage` just sets the dimensions of
         //         the element to match the texture.
@@ -277,7 +277,7 @@ const Element = struct {
         .first_child = null,
         .sibling_next = null,
         .sibling_prev = null,
-        .features = .empty,
+        .features = .none,
         .image = maxInt(usize),
         .label_str = &.{},
         .label_font = maxInt(usize),
@@ -287,7 +287,8 @@ const Element = struct {
 
     const Features = packed struct(u32) {
         // Visual functionality
-        bShowImage: bool, // assert image value set
+        bShowRect: bool,
+        bShowImage: bool, // assert image value set and bShowRect true
         bShowLabel: bool, // assert string and font value set
         // Layout functionality
         bLineBreak: bool,
@@ -297,9 +298,9 @@ const Element = struct {
         bClickHover: bool,
         bClickDepressed: bool, // button visually "idles" in down-state
 
-        _: u25,
+        _: u24,
 
-        pub const empty = std.mem.zeroInit(Features, .{});
+        pub const none = std.mem.zeroInit(Features, .{});
     };
 };
 
@@ -367,12 +368,22 @@ const ElementIterator = struct {
     }
 };
 
+// FIXME: Auto and Fit are not actually referenced anywhere??? so basically it's
+//  assumed an element is Auto(Fit) if a dimension is not Stretch or Fixed, without
+//  actually checking???
 const GUDimensionMode = enum {
-    Auto, // Fit when parent does not specify dimension, or 0=Fit, <0=Stretch, >0=Fixed
-    Fit, // child dimensions plus any margins, etc.
-    Stretch, // usable space of parent dimension minus input value; requires pre-finalizable parent dimension
+    /// Select one of the other modes based on input/context; see `ParseAuto`.
+    Auto,
+    /// Reduce to child dimensions plus any margins, etc.
+    Fit,
+    /// Expand to usable space of parent dimension minus input value; requires
+    /// pre-finalizable parent dimension.
+    Stretch,
+    /// Size is pre-determined and not subject to manipulation.
     Fixed,
 
+    // FIXME: similarly, this function gets used pathologically with the assumption
+    //  that the element is Auto, without checking
     fn ParseAuto(dimension: f32) GUDimensionMode {
         const sign = std.math.sign(dimension);
         if (sign == 1) return .Fixed;
@@ -699,6 +710,7 @@ fn DoElementEmitDrawCommands(self: *GU) void {
             continue;
         }
 
+        // FIXME: add bEnableClipping element feature and refer to it here
         defer if (it_data.relation != .Parent and e.first_child != null) {
             stack.append(self.allocator, e.area.GetIntersection(c)) catch |err|
                 std.log.err("DoElementEmitDrawCommands: Clip Stack ({s})", .{@errorName(err)});
@@ -707,37 +719,66 @@ fn DoElementEmitDrawCommands(self: *GU) void {
                 std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
         };
 
+        // is it actually drawable?
         if (GUColor.FromInt(e.layout.color).a == 0) continue;
         if (!e.area.HasNonZeroArea()) continue;
 
-        self.render_commands.append(self.allocator, switch (e.mode) {
-            .Label => label: {
+        switch (e.mode) {
+            .Label => {
+                // WARN: currently, the background is simply ignored because
+                //  elements are modal, but this will not be true once the mode
+                //  refactor is done. need to make a call on whether to ignore
+                //  bg in presence of label, or stop conflating their values.
+                // WARN: once this is fully separated from the background logic,
+                //  will need a way to ensure that the text gets drawn after (i.e.
+                //  on top), because they will both be emitted at the same time
+                //  and the renderer may not respect the call order if batching;
+                //  maybe add a "batch layer" value to draw cmd, and give labels
+                //  a half-value extra so that they are intereted as upper layer.
                 assert(e.label_str.len > 0);
                 assert(e.label_font != maxInt(usize)); // TODO: proper/safe "null font" value
-                break :label GURenderCommand{ .text = .{
+                self.render_commands.append(self.allocator, GURenderCommand{ .text = .{
                     .pos = GUPos.FromRect(&e.area),
                     .font = &self.fonts.items[e.label_font],
                     .color = e.layout.color,
                     .str = e.label_str,
-                } };
+                } }) catch |err| std.log.err(
+                    "DoElementEmitDrawCommands: Draw Command ({s})",
+                    .{@errorName(err)},
+                );
             },
-            .Image => image: {
+            .Image => {
+                // FIXME: integrate with "ShowRect" path, such that "images" are
+                //  simply textured rects (also: possibly adjust "image" naming
+                //  internally to reflect this)
                 assert(e.image != maxInt(usize)); // TODO: proper/safe "null image" value
-                break :image GURenderCommand{ .image = .{
+                self.render_commands.append(self.allocator, GURenderCommand{ .image = .{
                     .pos = GUPos.FromRect(&e.area),
                     .image = &self.images.items[e.image],
                     .color = e.layout.color,
                     .tile = null,
-                } };
+                } }) catch |err| std.log.err(
+                    "DoElementEmitDrawCommands: Draw Command ({s})",
+                    .{@errorName(err)},
+                );
             },
-            .Rect, .Block => rect: {
-                break :rect GURenderCommand{ .rect = .{
+            .Block => {},
+        }
+
+        // replacement for Rect/Block paths; will also integrate old Image code
+        // at some point
+        if (e.features.bShowRect) {
+            self.render_commands.append(self.allocator, GURenderCommand{
+                .rect = .{
                     .rect = e.area,
                     .corner = e.layout.corner,
                     .color = e.layout.color,
-                } };
-            },
-        }) catch |err| std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+                },
+            }) catch |err| std.log.err(
+                "DoElementEmitDrawCommands: Draw Command ({s})",
+                .{@errorName(err)},
+            );
+        }
     }
 }
 
@@ -793,6 +834,7 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
         e.id = element_i;
         e.parent = parent_i;
         e.sibling_prev = self.element_sibling;
+        e.features.bShowRect = e.layout.color & 0xFF > 0; // FIXME: hacky
         break :e e;
     }) catch return false;
 
@@ -873,12 +915,6 @@ pub fn EndContainer(self: *GU) void {
 
     switch (element.mode) {
         .Block => {},
-        .Rect => {
-            assert(element.rect_size.HasNonZeroArea());
-            // TODO: stretch-like rect dimensions
-            element.area.w = element.rect_size.w;
-            element.area.h = element.rect_size.h;
-        },
         .Image => {
             assert(element.image != maxInt(usize)); // TODO: proper/safe "null font" value
             const image_size = &self.images.items[element.image].Size();
@@ -938,15 +974,17 @@ const SetElementSize = SetContainerSize;
 //------------------------------------------------------------------------------
 // "STOCK" WIDGETS
 
+// TODO: stretch-like rect dimensions
 pub fn DoRect(self: *GU, size: GUSize, color: u32) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
-    element.mode = .Rect;
-    element.rect_size = size;
+    element.area.w = size.w;
+    element.area.h = size.h;
     element.layout.color = color;
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
+    element.features.bShowRect = true;
 }
 
 pub fn DoImage(self: *GU, image: GUImageHandle, color: ?u32) void {
@@ -1020,6 +1058,8 @@ pub fn DoButtonLogic(self: *GU, mode: Button.Mode, str: []const u8) ?GUButtonDat
 pub fn DoButton(self: *GU, font: ?GUFontHandle, comptime fmt: []const u8, args: anytype) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
+    const element = self.GetElement();
+    element.features.bShowRect = true;
 
     const btn = self.DoButtonLogic(.Press, fmt) orelse return false;
 
@@ -1036,6 +1076,8 @@ pub fn DoButton(self: *GU, font: ?GUFontHandle, comptime fmt: []const u8, args: 
 pub fn DoToggleButton(self: *GU, active: *bool, font: ?GUFontHandle, comptime fmt: []const u8, args: anytype) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
+    const element = self.GetElement();
+    element.features.bShowRect = true;
 
     const btn = self.DoButtonLogic(.Press, fmt) orelse return false;
     if (active.*) self.GetElement().features.bClickDepressed = true;
