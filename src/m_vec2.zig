@@ -12,6 +12,10 @@ pub fn vecTo(v1: Vec2, v2: Vec2) Vec2 {
     return Vec2{ .x = v2.x - v1.x, .y = v2.y - v1.y };
 }
 
+pub fn inv(v: Vec2) Vec2 {
+    return Vec2{ .x = -v.x, .y = -v.y };
+}
+
 //------------------------------------------------------------------------------
 // math ops
 
@@ -26,6 +30,10 @@ pub fn SUB(v1: Vec2, v2: Vec2) Vec2 {
 /// multiply scalar
 pub fn MULS(v: Vec2, s: f32) Vec2 {
     return Vec2{ .x = v.x * s, .y = v.y * s };
+}
+
+pub fn EQL(v1: Vec2, v2: Vec2) bool {
+    return v1.x == v2.x and v1.y == v2.y;
 }
 
 //------------------------------------------------------------------------------
@@ -57,14 +65,6 @@ pub inline fn Area(v: Vec2) f32 {
 
 //------------------------------------------------------------------------------
 // advanced math
-
-// FIXME: bad, not integrating well for sdf usage
-//  - based on https://www.shadertoy.com/view/wdBXRW
-pub fn NearestPointOnLine_v2(p: Vec2, v: Vec2, w: Vec2) Vec2 {
-    const vp = v.vecTo(p);
-    const vw = v.vecTo(w);
-    return vp.SUB(vw.MULS(clamp(vp.Dot(vw) / vw.MagSq(), 0, 1)));
-}
 
 pub fn NearestPointOnLine(p: Vec2, v: Vec2, w: Vec2) Vec2 {
     const vp = v.vecTo(p);

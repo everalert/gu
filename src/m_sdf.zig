@@ -12,9 +12,6 @@ const Vec2 = @import("m_vec2.zig");
 // mostly attributable to the classic:
 // https://iquilezles.org/articles/distfunctions2d/
 
-// TODO: finish superellipse sdf, or some acceptable approximation. should be
-//  stable up to +/- 1px for an 8px radius. even if the function is extremely
-//  expensive, having something means it can be used to generate a LUT
 // TODO: SDF LUT sampler. given a grid of pre-calculated distance values, return
 //  an interpolated value when queried with an arbitrary "subpixel" point
 // TODO: SDF interpolating sampler. given two or more sdf samplers, map these
@@ -59,14 +56,6 @@ pub fn sd_quadratic_circle(x: f32, y: f32, r: f32) f32 {
     return @sqrt(wx * wx + wy * wy) * sign(a * a * 0.5 + b - 1.5) * r;
 }
 
-// TODO: fix edge smoothness. algo favours full pixels too readily, causing a
-//  slightly "chunky" look overall, even with a very high resolution. this is
-//  most noticeable at the "straight" parts with a higher N, but even when N=2
-//  the edge smoothness is noticeably lower than sd_circle with the same radius.
-//  for now, using a lower resolution can look a little more appealing, but does
-//  so by introducing minor dithering, so this is not a solution. the ongoing
-//  work on fixing the algo is at `Vec2.NearestPointOnLine_v2`
-// TODO: use resolution=24 once rendering issues fixed
 // TODO: more efficient algorithm, see p5js for notes/ideas
 // see also: https://editor.p5js.org/everalert/sketches/yEGmV6Adg
 /// N=4 A=B superellipse, via geometric search
@@ -76,7 +65,7 @@ pub fn sd_superellipse(x: f32, y: f32, r: f32) f32 {
     const A: f32 = r;
     const B: f32 = r;
 
-    const resolution: f32 = 28; // polygon density per quadrant
+    const resolution: f32 = 24; // polygon density per quadrant
     const increment = @as(f32, PI) / 2 / resolution;
 
     const p = Vec2{
@@ -84,23 +73,32 @@ pub fn sd_superellipse(x: f32, y: f32, r: f32) f32 {
         .y = @min(@abs(x), @abs(y)),
     };
 
-    var prev_a = @as(f32, PI) / 4;
-    var prev_p = get_superellipse_xy(N, A, B, prev_a);
-    var prev_d = (@max(A, B, r * 2)) * (@max(A, B, r * 2)) * (@max(A, B, r * 2));
-    const point: Vec2, const dist_np_sq: f32 =
-        pt: while (prev_a > 0) : (prev_a -= increment) {
+    if (p.EQL(Vec2.zero)) return -r;
+
+    const point: Vec2 = pt: {
+        var prev_d = (@max(A, B, r * 2)) * (@max(A, B, r * 2)) * (@max(A, B, r * 2));
+        var prev_a = @as(f32, PI) / 4;
+        var prev_p = get_superellipse_xy(N, A, B, prev_a);
+        var prev_nearest = Vec2.zero;
+
+        while (prev_a > 0) : (prev_a -= increment) {
             const next_a = @max(0, prev_a - increment);
             const next_p = get_superellipse_xy(N, A, B, next_a);
-            const np = p.NearestPointOnLine(prev_p, next_p);
-            const next_d = p.DistSq(np);
-            if (next_d > prev_d) break :pt .{ prev_p, prev_d };
-            if (next_a <= 0.0) break :pt .{ np, next_d };
+            const nearest = p.NearestPointOnLine(prev_p, next_p);
+            const next_d = p.DistSq(nearest);
+
+            if (next_d > prev_d)
+                break :pt prev_nearest;
+            if (next_a <= 0.0)
+                break :pt nearest;
+
+            prev_nearest = nearest;
             prev_p = next_p;
             prev_d = next_d;
         } else unreachable;
+    };
 
-    const dist_np = @sqrt(dist_np_sq);
-    return if (p.MagSq() > point.MagSq()) dist_np else -dist_np;
+    return point.Dist(p) * sign(point.vecTo(p).Dot(p));
 }
 
 /// @angle      radians

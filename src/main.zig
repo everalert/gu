@@ -463,6 +463,13 @@ const LAYOUT_SUPERELLIPSE_BOX = std.mem.zeroInit(GULayout, .{
     .mode_h = .Fixed,
 });
 
+const LAYOUT_CIRCLE_BOX = std.mem.zeroInit(GULayout, .{
+    .corner = .{ .style = .Round, .radius = 32 },
+    .color = 0x4040C0FF,
+    .mode_w = .Fixed,
+    .mode_h = .Fixed,
+});
+
 //------------------------------------------------------------------------------
 
 const App = struct {
@@ -611,6 +618,13 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoLabel(null, 0x0000C0FF, "testing... !!@$(#!QOIEANSHT)", .{});
         gu.DoLineBreak();
         if (gu.DoContainer(&LAYOUT_SUPERELLIPSE_BOX)) {
+            defer gu.EndContainer();
+            const element = gu.GetContainer();
+            element.features.bShowRect = true;
+            element.area.w = 64;
+            element.area.h = 64;
+        }
+        if (gu.DoContainer(&LAYOUT_CIRCLE_BOX)) {
             defer gu.EndContainer();
             const element = gu.GetContainer();
             element.features.bShowRect = true;
