@@ -23,13 +23,10 @@ const GURCRect = GU.RCRect;
 const GURCText = GU.RCText;
 const GURCClip = GU.RCClip;
 
-const GUMath = @import("gu_math.zig");
-const GURect = GUMath.Rect;
-const GUPos = GUMath.Pos;
-const GUSize = GUMath.Size;
-const GUColor = GUMath.Color;
-
-const sdf = @import("sdf.zig");
+const Vec2 = @import("m_vec2.zig");
+const Rect = @import("m_rect.zig");
+const Color = @import("m_color.zig").Color;
+const sdf = @import("m_sdf.zig");
 
 const WINDOW_W = 800;
 const WINDOW_H = 600;
@@ -60,50 +57,50 @@ const AsciiFont = struct {
     // TODO: use alpha from input color
     fn SetColor(ptr: *anyopaque, color: u32) void {
         const self: *AsciiFont = @ptrCast(@alignCast(ptr));
-        const rgba = GUColor.FromInt(color);
+        const rgba = Color.fromInt(color);
         SDLEP(c.SDL_SetTextureColorMod(self.texture, rgba.r, rgba.g, rgba.b));
     }
 
     // FONT RELATED
 
     // TODO: use CharSize
-    fn StringSize(_: *anyopaque, str: []const u8) GUSize {
+    fn StringSize(_: *anyopaque, str: []const u8) Vec2 {
         //const self: *AsciiFont = @alignCast(@ptrCast(ptr));
         assert(std.mem.min(u8, str) >= ' ');
         assert(std.mem.max(u8, str) < 127);
-        return .{ .w = 10 * @as(f32, @floatFromInt(str.len)), .h = 21 };
+        return .{ .x = 10 * @as(f32, @floatFromInt(str.len)), .y = 21 };
     }
 
     // TODO: use data table/mapping for individual char data
-    fn CharSize(_: *anyopaque, _: u8) GUSize {
+    fn CharSize(_: *anyopaque, _: u8) Vec2 {
         //const self: *AsciiFont = @alignCast(@ptrCast(ptr));
-        return GUSize{ .w = 10, .h = 21 };
+        return Vec2{ .x = 10, .y = 21 };
     }
 
-    fn DrawString(ptr: *anyopaque, str: []const u8, pos: *const GUPos) void {
+    fn DrawString(ptr: *anyopaque, str: []const u8, pos: *const Vec2) void {
         const self: *AsciiFont = @ptrCast(@alignCast(ptr));
         assert(std.mem.min(u8, str) >= ' ');
         assert(std.mem.max(u8, str) < 127);
         var rolling_pos = pos.*;
         for (str) |char| {
             DrawChar(ptr, char, &rolling_pos);
-            rolling_pos.x += CharSize(self, char).w;
+            rolling_pos.x += CharSize(self, char).x;
         }
     }
 
-    fn DrawChar(ptr: *anyopaque, char: u8, pos: *const GUPos) void {
+    fn DrawChar(ptr: *anyopaque, char: u8, pos: *const Vec2) void {
         const self: *AsciiFont = @ptrCast(@alignCast(ptr));
         assert(char >= ' ');
         assert(char < 127);
         const size = CharSize(ptr, char);
         const n = char - ' ';
-        const i: f32 = @as(f32, @floatFromInt(n % 16)) * size.w;
-        const j: f32 = @as(f32, @floatFromInt(n / 16)) * size.h;
+        const i: f32 = @as(f32, @floatFromInt(n % 16)) * size.x;
+        const j: f32 = @as(f32, @floatFromInt(n / 16)) * size.y;
         SDLEP(c.SDL_RenderTexture(
             self.renderer,
             self.texture,
-            &.{ .x = i, .y = j, .w = size.w, .h = size.h },
-            &.{ .x = pos.x, .y = pos.y, .w = size.w, .h = size.h },
+            &.{ .x = i, .y = j, .w = size.x, .h = size.y },
+            &.{ .x = pos.x, .y = pos.y, .w = size.x, .h = size.y },
         ));
     }
 
@@ -141,24 +138,24 @@ const ImageTexture = struct {
     // TODO: use alpha from input color
     fn SetColor(ptr: *anyopaque, color: u32) void {
         const self: *ImageTexture = @ptrCast(@alignCast(ptr));
-        const rgba = GUColor.FromInt(color);
+        const rgba = Color.fromInt(color);
         SDLEP(c.SDL_SetTextureColorMod(self.texture, rgba.r, rgba.g, rgba.b));
     }
 
-    fn Draw(ptr: *anyopaque, pos: *const GUPos) void {
+    fn Draw(ptr: *anyopaque, pos: *const Vec2) void {
         const self: *ImageTexture = @ptrCast(@alignCast(ptr));
         const size = Size(ptr);
         SDLEP(c.SDL_RenderTexture(
             self.renderer,
             self.texture,
             null,
-            &.{ .x = pos.x, .y = pos.y, .w = size.w, .h = size.h },
+            &.{ .x = pos.x, .y = pos.y, .w = size.x, .h = size.y },
         ));
     }
 
-    fn Size(ptr: *anyopaque) GUSize {
+    fn Size(ptr: *anyopaque) Vec2 {
         const self: *ImageTexture = @ptrCast(@alignCast(ptr));
-        return GUSize{ .w = @floatFromInt(self.texture.w), .h = @floatFromInt(self.texture.h) };
+        return Vec2{ .x = @floatFromInt(self.texture.w), .y = @floatFromInt(self.texture.h) };
     }
 
     pub fn GetTextureAtlas(self: *ImageTexture) GUTextureAtlas {
@@ -276,18 +273,18 @@ const RenderData = struct {
 
     // BACKEND
 
-    fn GetSurfaceDimensions(ptr: *anyopaque) GUSize {
+    fn GetSurfaceDimensions(ptr: *anyopaque) Vec2 {
         const self: *RenderData = @ptrCast(@alignCast(ptr));
         var screen_w: c_int = undefined;
         var screen_h: c_int = undefined;
         SDLEP(c.SDL_GetRenderOutputSize(self.renderer, &screen_w, &screen_h));
-        return GUSize{ .w = @floatFromInt(screen_w), .h = @floatFromInt(screen_h) };
+        return Vec2{ .x = @floatFromInt(screen_w), .y = @floatFromInt(screen_h) };
     }
 
-    fn GetClip(ptr: *anyopaque) GURect {
+    fn GetClip(ptr: *anyopaque) Rect {
         const self: *RenderData = @ptrCast(@alignCast(ptr));
         if (self.stored_clip) |*clip| {
-            return GURect{
+            return Rect{
                 .x = @as(f32, @floatFromInt(clip.x)),
                 .y = @as(f32, @floatFromInt(clip.y)),
                 .w = @as(f32, @floatFromInt(clip.w)),
@@ -295,12 +292,12 @@ const RenderData = struct {
             };
         }
         const sd = GetSurfaceDimensions(ptr);
-        return GURect{ .x = 0, .y = 0, .w = sd.w, .h = sd.h };
+        return Rect{ .x = 0, .y = 0, .w = sd.w, .h = sd.h };
     }
 
     fn DrawRect(ptr: *anyopaque, cmd: *const GURCRect) void {
         const self: *RenderData = @ptrCast(@alignCast(ptr));
-        const c1 = GUColor.FromInt(cmd.color);
+        const c1 = Color.fromInt(cmd.color);
         SDLEP(c.SDL_SetRenderDrawColor(self.renderer, c1.r, c1.g, c1.b, c1.a));
 
         // FIXME: integrate this in with the rest, so that textured rects can
@@ -337,7 +334,7 @@ const RenderData = struct {
         SDLEP(c.SDL_SetTextureAlphaMod(tex.texture, c1.a));
         SDLEP(c.SDL_SetTextureColorMod(tex.texture, c1.r, c1.g, c1.b));
 
-        const dst_size: f32 = @min(@floor(cmd.rect.GetSmallestDimension() / 2), cmd.corner.radius);
+        const dst_size: f32 = @min(@floor(@min(cmd.rect.w, cmd.rect.h) / 2), cmd.corner.radius);
         SDLEP(c.SDL_RenderTexture9Grid(
             self.renderer,
             tex.texture,
@@ -436,8 +433,8 @@ const BASE_LAYOUT = GULayout{
     .color = 0x00000000,
     .widths = &[_]f32{ 200, -400, 200 },
     .heights = &[_]f32{ 100, -100 },
-    .padding = GUSize{ .w = 9, .h = 9 },
-    .gaps = GUSize{ .w = 6, .h = 6 },
+    .padding = Vec2{ .x = 9, .y = 9 },
+    .gaps = Vec2{ .x = 6, .y = 6 },
     .auto_line_break = false,
     .corner = .{ .radius = 0, .style = .None },
 };
@@ -448,14 +445,14 @@ const LAYOUT_RED = std.mem.zeroInit(GULayout, .{
 
 const LAYOUT_WHITE = std.mem.zeroInit(GULayout, .{
     .color = 0xFFFFFF20,
-    .padding = GUSize{ .w = 4, .h = 4 },
+    .padding = Vec2{ .x = 4, .y = 4 },
     .corner = .{ .style = .Round, .radius = 8 },
 });
 
 const LAYOUT_WHITE_BREAK = std.mem.zeroInit(GULayout, .{
     .color = 0xFFFFFF20,
     .auto_line_break = true,
-    .padding = GUSize{ .w = 4, .h = 4 },
+    .padding = Vec2{ .x = 4, .y = 4 },
     .corner = .{ .style = StyleSuperellipse, .radius = 18 },
 });
 
@@ -603,11 +600,11 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     }
     if (gu.DoContainer(&LAYOUT_WHITE)) {
         defer gu.EndContainer();
-        gu.DoRect(.{ .w = 64, .h = 64 }, 0x000055FF);
+        gu.DoRect(.{ .x = 64, .y = 64 }, 0x000055FF);
         gu.DoLineBreak();
         gu.DoLabel(font, 0xC00000FF, "testblock3", .{});
         gu.DoLineBreak();
-        gu.DoRect(.{ .w = 64, .h = 64 }, 0x2222AAFF); // old outline color
+        gu.DoRect(.{ .x = 64, .y = 64 }, 0x2222AAFF); // old outline color
     }
     if (gu.DoContainer(&LAYOUT_WHITE)) {
         defer gu.EndContainer();

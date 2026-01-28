@@ -10,22 +10,20 @@ const FormatOptions = std.fmt.FormatOptions;
 const maxInt = std.math.maxInt;
 const zeroInit = std.mem.zeroInit;
 
-const GUMath = @import("gu_math.zig");
-const GURect = GUMath.Rect;
-const GUSize = GUMath.Size;
-const GUPos = GUMath.Pos;
-const GUColor = GUMath.Color;
+const Vec2 = @import("m_vec2.zig");
+const Rect = @import("m_rect.zig");
+const Color = @import("m_color.zig").Color;
 
 pub const GUBackend = struct {
     ptr: *anyopaque,
-    fnGetSurfaceDimensions: *const fn (*anyopaque) GUSize,
+    fnGetSurfaceDimensions: *const fn (*anyopaque) Vec2,
     fnDrawRect: *const fn (*anyopaque, *const RCRect) void,
     fnDrawString: *const fn (*anyopaque, *const RCText) void,
     fnSetClip: *const fn (*anyopaque, *const RCClip) void,
     fnBeginRendering: *const fn (*anyopaque) void,
     fnEndRendering: *const fn (*anyopaque) void,
 
-    pub fn GetSurfaceDimensions(self: *GUBackend) GUSize {
+    pub fn GetSurfaceDimensions(self: *GUBackend) Vec2 {
         return self.fnGetSurfaceDimensions(self.ptr);
     }
 
@@ -75,13 +73,13 @@ pub const RenderCommand = struct {
 };
 
 pub const RCRect = struct {
-    rect: GURect,
+    rect: Rect,
     corner: GUCorner,
     color: u32,
     texture: ?*GUTextureAtlas,
     tile: ?u32, // for texture atlases
 
-    pub fn init(rect: GURect, corner: GUCorner, color: u32) RCRect {
+    pub fn init(rect: Rect, corner: GUCorner, color: u32) RCRect {
         return std.mem.zeroInit(RCRect, .{
             .rect = rect,
             .corner = corner,
@@ -93,12 +91,12 @@ pub const RCRect = struct {
 pub const RCText = struct {
     str: []const u8,
     font: *GUFontAtlas,
-    pos: GUPos,
+    pos: Vec2,
     color: u32,
 };
 
 pub const RCClip = struct {
-    area: GURect,
+    area: Rect,
 };
 
 pub const GUCorner = struct {
@@ -118,25 +116,25 @@ pub const TextureHandle = usize;
 // TODO: add CanDrawString to check against supported character range in font impl
 pub const GUFontAtlas = struct {
     ptr: *anyopaque,
-    fnDrawString: *const fn (*anyopaque, []const u8, *const GUPos) void,
-    fnDrawChar: *const fn (*anyopaque, u8, *const GUPos) void,
-    fnStringSize: *const fn (*anyopaque, []const u8) GUSize,
-    fnCharSize: *const fn (*anyopaque, u8) GUSize,
+    fnDrawString: *const fn (*anyopaque, []const u8, *const Vec2) void,
+    fnDrawChar: *const fn (*anyopaque, u8, *const Vec2) void,
+    fnStringSize: *const fn (*anyopaque, []const u8) Vec2,
+    fnCharSize: *const fn (*anyopaque, u8) Vec2,
     fnSetColor: *const fn (*anyopaque, u32) void,
 
-    pub fn DrawString(self: *GUFontAtlas, str: []const u8, pos: *const GUPos) void {
+    pub fn DrawString(self: *GUFontAtlas, str: []const u8, pos: *const Vec2) void {
         self.fnDrawString(self.ptr, str, pos);
     }
 
-    pub fn DrawChar(self: *GUFontAtlas, char: u8, pos: *const GUPos) void {
+    pub fn DrawChar(self: *GUFontAtlas, char: u8, pos: *const Vec2) void {
         self.fnDrawChar(self.ptr, char, pos);
     }
 
-    pub fn StringSize(self: *GUFontAtlas, str: []const u8) GUSize {
+    pub fn StringSize(self: *GUFontAtlas, str: []const u8) Vec2 {
         return self.fnStringSize(self.ptr, str);
     }
 
-    pub fn CharSize(self: *GUFontAtlas, char: u8) GUSize {
+    pub fn CharSize(self: *GUFontAtlas, char: u8) Vec2 {
         return self.fnCharSize(self.ptr, char);
     }
 
@@ -150,15 +148,15 @@ pub const GUFontAtlas = struct {
 //  vtable is enough? so we only remember handles (provided by backend)
 pub const GUTextureAtlas = struct {
     ptr: *anyopaque,
-    fnDraw: *const fn (*anyopaque, *const GUPos) void,
-    fnSize: *const fn (*anyopaque) GUSize,
+    fnDraw: *const fn (*anyopaque, *const Vec2) void,
+    fnSize: *const fn (*anyopaque) Vec2,
     fnSetColor: *const fn (*anyopaque, u32) void,
 
-    pub fn Draw(self: *GUTextureAtlas, pos: *const GUPos) void {
+    pub fn Draw(self: *GUTextureAtlas, pos: *const Vec2) void {
         self.fnDraw(self.ptr, pos);
     }
 
-    pub fn Size(self: *GUTextureAtlas) GUSize {
+    pub fn Size(self: *GUTextureAtlas) Vec2 {
         return self.fnSize(self.ptr);
     }
 
@@ -172,7 +170,7 @@ pub const GUTextureAtlas = struct {
 pub const Button = struct {
     mode: Mode = .Press,
     state: State = .Idle,
-    area: GURect,
+    area: Rect,
     element: usize,
 
     pub const Mode = enum { Press, Release };
@@ -187,7 +185,7 @@ pub const Button = struct {
 
     pub fn Update(
         self: *Button,
-        pt: *const GUPos,
+        pt: *const Vec2,
         btn_just_down: bool,
         btn_just_up: bool,
     ) bool {
@@ -260,18 +258,18 @@ const Element = struct {
 
     features: Features,
     layout: GULayout,
-    area: GURect,
-    fill: GUSize, // how big the element is for layout calculations
+    area: Rect,
+    fill: Vec2, // how big the element is for layout calculations
     texture: TextureHandle,
     label_str: []const u8,
     label_font: FontHandle,
-    rect_size: GUSize,
+    rect_size: Vec2,
     btn_state: Button.State,
 
     const empty: Element = .{
         .layout = .default,
-        .area = .Zero,
-        .fill = .Zero,
+        .area = .zero,
+        .fill = .zero,
         .id = 0,
         .parent = null,
         .children = 0,
@@ -282,7 +280,7 @@ const Element = struct {
         .texture = maxInt(usize),
         .label_str = &.{},
         .label_font = maxInt(usize),
-        .rect_size = .Zero,
+        .rect_size = .zero,
         .btn_state = .Idle,
     };
 
@@ -394,8 +392,8 @@ pub const GULayout = struct {
     corner: GUCorner,
     widths: ?[]const f32, // FIXME: doesn't need to be null
     heights: ?[]const f32, // FIXME: doesn't need to be null
-    padding: GUSize,
-    gaps: GUSize,
+    padding: Vec2,
+    gaps: Vec2,
     auto_line_break: bool,
     //scroll: ?
 
@@ -405,8 +403,8 @@ pub const GULayout = struct {
 };
 
 const GULineData = struct {
-    parent_padding: GUSize,
-    parent_gaps: GUSize,
+    parent_padding: Vec2,
+    parent_gaps: Vec2,
     line: u32,
     current_y: f32,
     current_h: f32,
@@ -418,12 +416,12 @@ const GULineData = struct {
     pub inline fn AxisSpacing(self: *GULineData, comptime axis: enum { Main, Cross }, items: usize) f32 {
         const padding: f32, const gaps: f32 = switch (axis) {
             .Main => .{ // x-axis
-                self.parent_padding.w * 2,
-                self.parent_gaps.w * @as(f32, @floatFromInt(items -| 1)),
+                self.parent_padding.x * 2,
+                self.parent_gaps.x * @as(f32, @floatFromInt(items -| 1)),
             },
             .Cross => .{ // y-axis
-                self.parent_padding.h * 2,
-                self.parent_gaps.h * @as(f32, @floatFromInt(items -| 1)),
+                self.parent_padding.y * 2,
+                self.parent_gaps.y * @as(f32, @floatFromInt(items -| 1)),
             },
         };
         return padding + gaps;
@@ -476,7 +474,7 @@ element_sibling: ?usize, // most recent sibling
 element_queue_line_break: bool,
 element_line_stack: ArrayList(GULineData),
 
-clip_stack: ArrayList(GURect),
+clip_stack: ArrayList(Rect),
 label_arena: ArenaAllocator,
 
 buttons: StringHashMap(Button),
@@ -489,7 +487,7 @@ render_commands_rect: ArrayList(RCRect),
 render_commands_text: ArrayList(RCText),
 render_commands_clip: ArrayList(RCClip),
 
-mouse_pt: GUPos,
+mouse_pt: Vec2,
 mouse_left: GUKeyState, // LMB
 
 pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
@@ -568,8 +566,8 @@ pub fn BeginFrame(self: *GU) !void {
     const element = self.GetElement();
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
-    element.area.w = surface_size.w;
-    element.area.h = surface_size.h;
+    element.area.w = surface_size.x;
+    element.area.h = surface_size.y;
 }
 
 // TODO: initial element sizing as an explicit pass separate from the initial
@@ -648,7 +646,7 @@ fn DoElementLineBreakParsing(self: *GU) void {
             p.?.layout.auto_line_break and
             p.?.layout.widths == null and
             p.?.layout.mode_w.IsPreComputable() and
-            ld.current_w + ld.parent_gaps.w + e.area.w > p.?.area.w - ld.parent_padding.w * 2)
+            ld.current_w + ld.parent_gaps.x + e.area.w > p.?.area.w - ld.parent_padding.x * 2)
             e.features.bLineBreak = true;
 
         if (it_data.relation == .Child or e.features.bLineBreak) {
@@ -690,25 +688,25 @@ fn DoElementPositioning(self: *GU) void {
             p = &self.element_tree.items[e.parent.?];
             stack.appendAssumeCapacity(zeroInit(GULineData, .{})); // capacity set during initial tree gen
             ld = &stack.items[stack.items.len - 1];
-            e.area.x = p.?.area.x + p.?.layout.padding.w;
-            e.area.y = p.?.area.y + p.?.layout.padding.h;
+            e.area.x = p.?.area.x + p.?.layout.padding.x;
+            e.area.y = p.?.area.y + p.?.layout.padding.y;
             ld.current_y = e.area.y;
             ld.current_h = @max(ld.current_h, e.area.h);
             continue;
         }
 
-        const gaps = if (p != null) p.?.layout.gaps else GUSize.Zero;
+        const gaps = if (p != null) p.?.layout.gaps else Vec2.zero;
 
         if (e.features.bLineBreak) {
-            const pos = if (p != null) GUPos.FromRect(&p.?.area) else GUPos.Zero;
-            const padding = if (p != null) p.?.layout.padding else GUSize.Zero;
-            e.area.x = pos.x + padding.w;
-            e.area.y = ld.current_y + ld.current_h + gaps.h;
+            const pos = if (p != null) p.?.area.toPos() else Vec2.zero;
+            const padding = if (p != null) p.?.layout.padding else Vec2.zero;
+            e.area.x = pos.x + padding.x;
+            e.area.y = ld.current_y + ld.current_h + gaps.y;
             ld.current_y = e.area.y;
             ld.current_h = e.area.h;
         } else {
-            const area = if (e.sibling_prev) |s| self.element_tree.items[s].area else GURect.Zero;
-            e.area.x = area.x + area.w + gaps.w;
+            const area = if (e.sibling_prev) |s| self.element_tree.items[s].area else Rect.zero;
+            e.area.x = area.x + area.w + gaps.x;
             e.area.y = ld.current_y;
             ld.current_h = @max(ld.current_h, e.area.h);
         }
@@ -723,13 +721,13 @@ fn DoElementEmitDrawCommands(self: *GU) void {
 
     const stack = &self.clip_stack;
     const sd = self.backend.GetSurfaceDimensions();
-    const c_base = GURect{ .x = 0, .y = 0, .w = sd.w, .h = sd.h };
+    const c_base = Rect{ .x = 0, .y = 0, .w = sd.x, .h = sd.y };
     var next_clip = self.render_commands_clip.items.len;
     self.render_commands.append(self.allocator, .init(.clip, next_clip)) catch |err|
         std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
     self.render_commands_clip.append(self.allocator, .{ .area = c_base }) catch |err|
         std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
-    var c: *const GURect = &c_base;
+    var c: *const Rect = &c_base;
 
     var it = ElementIterator.Init(self.element_tree.items);
     while (it.Next()) |it_data| {
@@ -761,8 +759,8 @@ fn DoElementEmitDrawCommands(self: *GU) void {
         };
 
         // is it actually drawable?
-        if (GUColor.FromInt(e.layout.color).a == 0) continue;
-        if (!e.area.HasNonZeroArea()) continue;
+        if (Color.fromInt(e.layout.color).a == 0) continue;
+        if (!e.area.AreaIsNonZero()) continue;
 
         if (e.features.bShowRect) {
             var cmd: RCRect = .init(e.area, e.layout.corner, e.layout.color);
@@ -783,7 +781,7 @@ fn DoElementEmitDrawCommands(self: *GU) void {
             //  maybe add a "batch layer" value to draw cmd, and give labels
             //  a half-value extra so that they are intereted as upper layer.
             const cmd: RCText = .{
-                .pos = GUPos.FromRect(&e.area),
+                .pos = e.area.toPos(),
                 .font = &self.fonts.items[e.label_font],
                 .color = e.layout.color,
                 .str = e.label_str,
@@ -928,7 +926,7 @@ pub fn EndContainer(self: *GU) void {
             .Hover => if (element.features.bClickDepressed) Button.COLOR_IDLE else Button.COLOR_HOVER,
             .Down => Button.COLOR_DOWN,
         };
-        element.layout.padding = .{ .w = Button.PADDING_HORIZONTAL, .h = Button.PADDING_VERTICAL };
+        element.layout.padding = .{ .x = Button.PADDING_HORIZONTAL, .y = Button.PADDING_VERTICAL };
         element.layout.corner = .{ .radius = Button.CORNER_RADIUS, .style = .Round };
     }
 
@@ -967,12 +965,12 @@ pub fn SetContainerColor(self: *GU, color: u32) void {
     element.layout.color = color;
 }
 
-pub fn SetContainerPadding(self: *GU, padding: GUSize) void {
+pub fn SetContainerPadding(self: *GU, padding: Vec2) void {
     const element = self.GetContainer();
     element.layout.padding = padding;
 }
 
-pub fn SetContainerGaps(self: *GU, gaps: GUSize) void {
+pub fn SetContainerGaps(self: *GU, gaps: Vec2) void {
     const element = self.GetContainer();
     element.layout.gaps = gaps;
 }
@@ -1000,13 +998,13 @@ const SetElementSize = SetContainerSize;
 // "STOCK" WIDGETS
 
 // TODO: stretch-like rect dimensions
-pub fn DoRect(self: *GU, size: GUSize, color: u32) void {
+pub fn DoRect(self: *GU, size: Vec2, color: u32) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
     element.features.bShowRect = true;
-    element.area.w = size.w;
-    element.area.h = size.h;
+    element.area.w = size.x;
+    element.area.h = size.y;
     element.layout.color = color;
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
@@ -1023,8 +1021,8 @@ pub fn DoImage(self: *GU, texture: TextureHandle, color: ?u32, scale: f32) void 
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
     const texture_size = &self.textures.items[element.texture].Size();
-    element.area.w = scale * texture_size.w;
-    element.area.h = scale * texture_size.h;
+    element.area.w = scale * texture_size.x;
+    element.area.h = scale * texture_size.y;
 }
 
 // TODO: add formatting, like standard string formatting functions
@@ -1041,8 +1039,8 @@ pub fn DoLabel(self: *GU, font: ?FontHandle, color: ?u32, comptime fmt: []const 
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
     const label_size = &self.fonts.items[element.label_font].StringSize(element.label_str);
-    element.area.w = label_size.w;
-    element.area.h = label_size.h;
+    element.area.w = label_size.x;
+    element.area.h = label_size.y;
 }
 
 // TODO: more robust hashing strategy that doesn't cause hover state to break on
@@ -1067,7 +1065,7 @@ pub fn DoButtonLogic(self: *GU, mode: Button.Mode, str: []const u8) ?GUButtonDat
             btn.* = Button{
                 .state = .Idle,
                 .mode = mode,
-                .area = .Zero,
+                .area = .zero,
                 .element = element.id,
             };
         } else btn.element = element.id;
