@@ -8,12 +8,28 @@ y: f32,
 
 pub const zero: Vec2 = .{ .x = 0, .y = 0 };
 
+pub fn init(x: f32, y: f32) Vec2 {
+    return Vec2{ .x = x, .y = y };
+}
+
+pub fn initSquare(r: f32) Vec2 {
+    return Vec2{ .x = r, .y = r };
+}
+
 pub fn vecTo(v1: Vec2, v2: Vec2) Vec2 {
     return Vec2{ .x = v2.x - v1.x, .y = v2.y - v1.y };
 }
 
 pub fn inv(v: Vec2) Vec2 {
     return Vec2{ .x = -v.x, .y = -v.y };
+}
+
+pub fn octant(v: Vec2) Vec2 {
+    return Vec2{ .x = @max(@abs(v.x), @abs(v.y)), .y = @min(@abs(v.x), @abs(v.y)) };
+}
+
+pub fn quadrant(v: Vec2) Vec2 {
+    return Vec2{ .x = @abs(v.x), .y = @abs(v.y) };
 }
 
 //------------------------------------------------------------------------------
@@ -23,13 +39,37 @@ pub fn ADD(v1: Vec2, v2: Vec2) Vec2 {
     return Vec2{ .x = v1.x + v2.x, .y = v1.y + v2.y };
 }
 
+/// add scalar
+pub fn ADDS(v: Vec2, s: f32) Vec2 {
+    return Vec2{ .x = v.x + s, .y = v.y + s };
+}
+
 pub fn SUB(v1: Vec2, v2: Vec2) Vec2 {
     return Vec2{ .x = v1.x - v2.x, .y = v1.y - v2.y };
+}
+
+/// subtract scalar
+pub fn SUBS(v: Vec2, s: f32) Vec2 {
+    return Vec2{ .x = v.x - s, .y = v.y - s };
+}
+
+// TODO: remove, or alias Dot?
+pub fn MUL(v1: Vec2, v2: Vec2) Vec2 {
+    return Vec2{ .x = v1.x * v2.x, .y = v1.y * v2.y };
 }
 
 /// multiply scalar
 pub fn MULS(v: Vec2, s: f32) Vec2 {
     return Vec2{ .x = v.x * s, .y = v.y * s };
+}
+
+pub fn DIV(v1: Vec2, v2: Vec2) Vec2 {
+    return Vec2{ .x = v1.x / v2.x, .y = v1.y / v2.y };
+}
+
+/// divide scalar
+pub fn DIVS(v: Vec2, s: f32) Vec2 {
+    return Vec2{ .x = v.x / s, .y = v.y / s };
 }
 
 pub fn EQL(v1: Vec2, v2: Vec2) bool {

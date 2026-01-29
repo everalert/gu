@@ -210,18 +210,22 @@ const CornerTexture = struct {
 //------------------------------------------------------------------------------
 
 const CNR_PX_LOD_CIRCLE = generate_corner_pixels_lod(2, 4, sdf.sd_circle);
+const CNR_PX_LOD_QCIRCLE = generate_corner_pixels_lod(2, 4, sdf.sd_quadratic_circle);
+const CNR_PX_LOD_SUPERELLIPSE = generate_corner_pixels_lod(2, 4, sdf.sd_superellipse);
+const CNR_PX_LOD_RHOMBUS = generate_corner_pixels_lod(2, 4, sdf.sd_rhombus);
 const CNR_PX_LOD_CHAMFER = generate_corner_pixels_lod(2, 4, sdf.sd_chamfer_box);
 const CNR_PX_LOD_OCTAGON = generate_corner_pixels_lod(2, 4, sdf.sd_octagon);
-const CNR_PX_LOD_SUPERELLIPSE = generate_corner_pixels_lod(2, 4, sdf.sd_superellipse);
 
 const RenderData = struct {
     window: ?*c.SDL_Window,
     renderer: ?*c.SDL_Renderer,
     stored_clip: ?c.SDL_Rect,
     tex_corner_rnd_lod: [LOD_LEVELS]CornerTexture, // 4, 8, 16 and 32px radii
-    tex_corner_ang_lod: [LOD_LEVELS]CornerTexture,
-    tex_corner_bev_lod: [LOD_LEVELS]CornerTexture,
+    tex_corner_ang_lod: [LOD_LEVELS]CornerTexture, // octagon
+    tex_corner_bev_lod: [LOD_LEVELS]CornerTexture, // chamfer
     tex_corner_sel_lod: [LOD_LEVELS]CornerTexture, // superellipse
+    tex_corner_se2_lod: [LOD_LEVELS]CornerTexture, // quadratic circle
+    tex_corner_bv2_lod: [LOD_LEVELS]CornerTexture, // rhombus
 
     pub const empty: RenderData = .{
         .window = null,
@@ -231,6 +235,8 @@ const RenderData = struct {
         .tex_corner_ang_lod = undefined,
         .tex_corner_bev_lod = undefined,
         .tex_corner_sel_lod = undefined,
+        .tex_corner_se2_lod = undefined,
+        .tex_corner_bv2_lod = undefined,
     };
 
     const LOD_LEVELS = 4;
@@ -248,9 +254,11 @@ const RenderData = struct {
         for (0..LOD_LEVELS) |i| {
             const width = pow(i32, 2, @as(i32, @intCast(i)) + 2) * 2;
             rd.tex_corner_rnd_lod[i] = try CornerTexture.Init(rd.renderer, width, CNR_PX_LOD_CIRCLE[i]);
-            rd.tex_corner_bev_lod[i] = try CornerTexture.Init(rd.renderer, width, CNR_PX_LOD_CHAMFER[i]);
             rd.tex_corner_ang_lod[i] = try CornerTexture.Init(rd.renderer, width, CNR_PX_LOD_OCTAGON[i]);
+            rd.tex_corner_bev_lod[i] = try CornerTexture.Init(rd.renderer, width, CNR_PX_LOD_CHAMFER[i]);
             rd.tex_corner_sel_lod[i] = try CornerTexture.Init(rd.renderer, width, CNR_PX_LOD_SUPERELLIPSE[i]);
+            rd.tex_corner_se2_lod[i] = try CornerTexture.Init(rd.renderer, width, CNR_PX_LOD_QCIRCLE[i]);
+            rd.tex_corner_bv2_lod[i] = try CornerTexture.Init(rd.renderer, width, CNR_PX_LOD_RHOMBUS[i]);
         }
 
         errdefer comptime unreachable;
@@ -263,9 +271,11 @@ const RenderData = struct {
     pub fn Deinit(self: *RenderData) void {
         for (0..LOD_LEVELS) |i| {
             self.tex_corner_rnd_lod[i].Deinit();
-            self.tex_corner_bev_lod[i].Deinit();
             self.tex_corner_ang_lod[i].Deinit();
+            self.tex_corner_bev_lod[i].Deinit();
             self.tex_corner_sel_lod[i].Deinit();
+            self.tex_corner_se2_lod[i].Deinit();
+            self.tex_corner_bv2_lod[i].Deinit();
         }
         c.SDL_DestroyWindow(self.window);
         c.SDL_DestroyRenderer(self.renderer);
@@ -326,9 +336,11 @@ const RenderData = struct {
             clamp(log2_int_ceil(usize, @intFromFloat(cmd.corner.radius)), 2, 2 + LOD_LEVELS - 1) - 2;
         const tex: *CornerTexture = switch (cmd.corner.style) {
             .Round => &self.tex_corner_rnd_lod[tex_lod_index],
-            .Custom1 => &self.tex_corner_ang_lod[tex_lod_index],
-            .Custom2 => &self.tex_corner_bev_lod[tex_lod_index],
-            .Custom3 => &self.tex_corner_sel_lod[tex_lod_index],
+            .Custom1 => &self.tex_corner_ang_lod[tex_lod_index], // octagon
+            .Custom2 => &self.tex_corner_bev_lod[tex_lod_index], // chamfer
+            .Custom3 => &self.tex_corner_sel_lod[tex_lod_index], // superellipse
+            .Custom4 => &self.tex_corner_se2_lod[tex_lod_index], // quadratic circle
+            .Custom5 => &self.tex_corner_bv2_lod[tex_lod_index], // rhombus
             else => unreachable,
         };
         SDLEP(c.SDL_SetTextureAlphaMod(tex.texture, c1.a));
@@ -400,7 +412,7 @@ const RenderData = struct {
 fn generate_corner_pixels_lod(
     comptime S: usize,
     comptime N: usize,
-    fn_sdf: *const fn (x: f32, y: f32, r: f32) f32,
+    fn_sdf: *const fn (p: Vec2, r: f32) f32,
 ) [N][]const u32 {
     var lod: [N][]const u32 = undefined;
     for (0..N) |i| lod[i] = &generate_corner_pixels(pow(usize, 2, i + S), fn_sdf);
@@ -409,7 +421,7 @@ fn generate_corner_pixels_lod(
 
 fn generate_corner_pixels(
     comptime RADIUS: u32,
-    fn_sdf: *const fn (x: f32, y: f32, r: f32) f32,
+    fn_sdf: *const fn (p: Vec2, r: f32) f32,
 ) [RADIUS * RADIUS * 4]u32 {
     assert(std.math.isPowerOfTwo(RADIUS));
     assert(@inComptime());
@@ -423,9 +435,11 @@ fn generate_corner_pixels(
 
 //------------------------------------------------------------------------------
 
-const StyleAngular = GUCorner.Style.Custom1;
-const StyleBeveled = GUCorner.Style.Custom2;
+const StyleAngular = GUCorner.Style.Custom1; // octagon
+const StyleBeveled = GUCorner.Style.Custom2; // chamfer
 const StyleSuperellipse = GUCorner.Style.Custom3;
+const StyleQCircle = GUCorner.Style.Custom4;
+const StyleRhombus = GUCorner.Style.Custom5;
 
 const BASE_LAYOUT = GULayout{
     .mode_w = .Auto,
@@ -456,6 +470,20 @@ const LAYOUT_WHITE_BREAK = std.mem.zeroInit(GULayout, .{
     .corner = .{ .style = StyleSuperellipse, .radius = 18 },
 });
 
+const LAYOUT_CIRCLE_BOX = std.mem.zeroInit(GULayout, .{
+    .corner = .{ .style = .Round, .radius = 32 },
+    .color = 0x4040C0FF,
+    .mode_w = .Fixed,
+    .mode_h = .Fixed,
+});
+
+const LAYOUT_QCIRCLE_BOX = std.mem.zeroInit(GULayout, .{
+    .corner = .{ .style = StyleQCircle, .radius = 32 },
+    .color = 0x4040C0FF,
+    .mode_w = .Fixed,
+    .mode_h = .Fixed,
+});
+
 const LAYOUT_SUPERELLIPSE_BOX = std.mem.zeroInit(GULayout, .{
     .corner = .{ .style = StyleSuperellipse, .radius = 32 },
     .color = 0x4040C0FF,
@@ -463,8 +491,22 @@ const LAYOUT_SUPERELLIPSE_BOX = std.mem.zeroInit(GULayout, .{
     .mode_h = .Fixed,
 });
 
-const LAYOUT_CIRCLE_BOX = std.mem.zeroInit(GULayout, .{
-    .corner = .{ .style = .Round, .radius = 32 },
+const LAYOUT_RHOMBUS_BOX = std.mem.zeroInit(GULayout, .{
+    .corner = .{ .style = StyleRhombus, .radius = 32 },
+    .color = 0x4040C0FF,
+    .mode_w = .Fixed,
+    .mode_h = .Fixed,
+});
+
+const LAYOUT_CHAMFER_BOX = std.mem.zeroInit(GULayout, .{
+    .corner = .{ .style = StyleBeveled, .radius = 32 },
+    .color = 0x4040C0FF,
+    .mode_w = .Fixed,
+    .mode_h = .Fixed,
+});
+
+const LAYOUT_OCTAGON_BOX = std.mem.zeroInit(GULayout, .{
+    .corner = .{ .style = StyleAngular, .radius = 32 },
     .color = 0x4040C0FF,
     .mode_w = .Fixed,
     .mode_h = .Fixed,
@@ -617,6 +659,22 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         defer gu.EndContainer();
         gu.DoLabel(null, 0x0000C0FF, "testing... !!@$(#!QOIEANSHT)", .{});
         gu.DoLineBreak();
+        if (gu.DoContainer(&LAYOUT_CIRCLE_BOX)) {
+            defer gu.EndContainer();
+            const element = gu.GetContainer();
+            element.features.bShowRect = true;
+            element.area.w = 64;
+            element.area.h = 64;
+        }
+        gu.DoLineBreak();
+        if (gu.DoContainer(&LAYOUT_QCIRCLE_BOX)) {
+            defer gu.EndContainer();
+            const element = gu.GetContainer();
+            element.features.bShowRect = true;
+            element.area.w = 64;
+            element.area.h = 64;
+        }
+        gu.DoLineBreak();
         if (gu.DoContainer(&LAYOUT_SUPERELLIPSE_BOX)) {
             defer gu.EndContainer();
             const element = gu.GetContainer();
@@ -624,7 +682,24 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
             element.area.w = 64;
             element.area.h = 64;
         }
-        if (gu.DoContainer(&LAYOUT_CIRCLE_BOX)) {
+        gu.DoLineBreak();
+        if (gu.DoContainer(&LAYOUT_RHOMBUS_BOX)) {
+            defer gu.EndContainer();
+            const element = gu.GetContainer();
+            element.features.bShowRect = true;
+            element.area.w = 64;
+            element.area.h = 64;
+        }
+        gu.DoLineBreak();
+        if (gu.DoContainer(&LAYOUT_CHAMFER_BOX)) {
+            defer gu.EndContainer();
+            const element = gu.GetContainer();
+            element.features.bShowRect = true;
+            element.area.w = 64;
+            element.area.h = 64;
+        }
+        gu.DoLineBreak();
+        if (gu.DoContainer(&LAYOUT_OCTAGON_BOX)) {
             defer gu.EndContainer();
             const element = gu.GetContainer();
             element.features.bShowRect = true;
