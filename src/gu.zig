@@ -609,7 +609,7 @@ pub fn EndFrame(self: *GU) void {
 // FIXME: cleanup/streamline, maybe split into multiple passes if that makes sense
 // TODO: rename to DoElementResizeAndParseLineBreaks ??
 // TODO: update for text wrapping; will need to assert no padding/gaps, and remove
-// .Fixed assertion for labels in EndContainer
+// .Fixed assertion for labels in EndElement
 /// inserts line break markers where needed, and updates parent dimensions in
 /// case of line breaks occurring
 fn DoElementLineBreakParsing(self: *GU) void {
@@ -846,7 +846,7 @@ fn DoButtonPostProcessing(self: *GU) void {
 
 /// returns whether creating a new container was successful. guarantees the element
 /// tree will be in a valid state (i.e. the same as before calling, on failure).
-pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
+pub fn DoElement(self: *GU, layout: ?*const GULayout) bool {
     if (layout) |lo| {
         if (lo.widths) |w| assert(w.len > 0);
         if (lo.heights) |h| assert(h.len > 0);
@@ -905,14 +905,14 @@ pub fn DoContainer(self: *GU, layout: ?*const GULayout) bool {
     }
 
     self.element_line_stack.append(self.allocator, zeroInit(GULineData, .{ .line = 1 })) catch |err|
-        std.debug.panic("DoContainer: ({s})", .{@errorName(err)});
+        std.debug.panic("DoElement: ({s})", .{@errorName(err)});
     return true;
 }
 
 /// Finalize the current element. Element validation happens at this point, so
-/// any references to the element (e.g. from `GetContainer`) must not be used
+/// any references to the element (e.g. from `GetElement`) must not be used
 /// after this is called.
-pub fn EndContainer(self: *GU) void {
+pub fn EndElement(self: *GU) void {
     _ = self.element_line_stack.pop();
     const element_i = self.element_stack.pop().?;
     const element: *Element = &self.element_tree.items[element_i];
@@ -981,60 +981,47 @@ pub fn EndContainer(self: *GU) void {
 }
 
 /// returns pointer to current element. pointer is only guaranteed to be valid
-/// until the next call to DoContainer
-pub inline fn GetContainer(self: *GU) *Element {
+/// until the next call to DoElement
+pub inline fn GetElement(self: *GU) *Element {
     const i = self.element_stack.getLast();
     return &self.element_tree.items[i];
 }
 
+// TODO: don't take element directly?
 // TODO: more robust hashing strategy that doesn't cause hover state to break on
 //  buttons that change where the button is in the element tree (e.g. by inserting
 //  or removing an element above the button)
-pub fn GetContainerKey(self: *GU, element: *const Element) []const u8 {
+pub fn GetElementKey(self: *GU, element: *const Element) []const u8 {
     return std.fmt.allocPrint(self.allocator, "{X:0>16}{s}", .{ element.id, element.name }) catch &.{};
 }
 
-pub fn GetContainerClicked(self: *GU, element: *const Element) bool {
+// TODO: don't take element directly?
+pub fn GetElementClicked(self: *GU, element: *const Element) bool {
     const btn_key = self.GetElementKey(element);
     const btn: Button = self.buttons.get(btn_key) orelse .empty;
     return btn.activated;
 }
 
-pub fn SetContainerColor(self: *GU, color: u32) void {
-    const element = self.GetContainer();
+pub fn SetElementColor(self: *GU, color: u32) void {
+    const element = self.GetElement();
     element.layout.color = color;
 }
 
-pub fn SetContainerPadding(self: *GU, padding: Vec2) void {
-    const element = self.GetContainer();
+pub fn SetElementPadding(self: *GU, padding: Vec2) void {
+    const element = self.GetElement();
     element.layout.padding = padding;
 }
 
-pub fn SetContainerGaps(self: *GU, gaps: Vec2) void {
-    const element = self.GetContainer();
+pub fn SetElementGaps(self: *GU, gaps: Vec2) void {
+    const element = self.GetElement();
     element.layout.gaps = gaps;
 }
 
-pub fn SetContainerSize(self: *GU, w: f32, h: f32) void {
-    const element = self.GetContainer();
+pub fn SetElementSize(self: *GU, w: f32, h: f32) void {
+    const element = self.GetElement();
     element.area.w = w;
     element.area.h = h;
 }
-
-// TODO: ?? on second thought, maybe do away with this and just rename user stuff
-//  with Element; this is probably fine user-facing nomenclature, and it would
-//  clean up the api surface. tbd
-// as far as we're concerned, what the user sees as a generic layout container
-// is just a 'null' element to us, so we use these internally for clarity
-const DoElement = DoContainer;
-const EndElement = EndContainer;
-const GetElement = GetContainer;
-const GetElementKey = GetContainerKey;
-const GetElementClicked = GetContainerClicked;
-const SetElementPadding = SetContainerPadding;
-const SetElementGaps = SetContainerGaps;
-const SetElementColor = SetContainerColor;
-const SetElementSize = SetContainerSize;
 
 //------------------------------------------------------------------------------
 // WIDGETS

@@ -616,27 +616,27 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
 
     try gu.BeginFrame();
 
-    if (gu.DoContainer(&LAYOUT_WHITE)) {
-        defer gu.EndContainer();
-        if (gu.DoContainer(&LAYOUT_RED)) {
-            defer gu.EndContainer();
+    if (gu.DoElement(&LAYOUT_WHITE)) {
+        defer gu.EndElement();
+        if (gu.DoElement(&LAYOUT_RED)) {
+            defer gu.EndElement();
             gu.DoLabel(null, 0x00C000FF, "testblock1", .{});
         }
         gu.DoLineBreak();
-        if (gu.DoContainer(&LAYOUT_RED)) {
-            defer gu.EndContainer();
+        if (gu.DoElement(&LAYOUT_RED)) {
+            defer gu.EndElement();
             if (gu.DoButton(font, "Button", .{})) {
                 std.log.debug("b1 activation result!!", .{});
             }
         }
         gu.DoLineBreak();
-        if (gu.DoContainer(&LAYOUT_RED)) {
-            defer gu.EndContainer();
+        if (gu.DoElement(&LAYOUT_RED)) {
+            defer gu.EndElement();
             gu.DoImage(img1, 0x00C000FF, 0.1);
         }
     }
-    if (gu.DoContainer(&LAYOUT_WHITE)) {
-        defer gu.EndContainer();
+    if (gu.DoElement(&LAYOUT_WHITE)) {
+        defer gu.EndElement();
         gu.DoLabel(null, 0xC000C0FF, "testblock2", .{});
         if (gu.DoToggleButton(&app.b2toggle, font, "ToggleButton: {any}", .{app.b2toggle})) {
             std.log.debug("b2 toggled!!", .{});
@@ -647,68 +647,68 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoImage(img2, 0xC000C0FF, 0.25);
         gu.DoImage(img1, null, 0.25);
     }
-    if (gu.DoContainer(&LAYOUT_WHITE)) {
-        defer gu.EndContainer();
+    if (gu.DoElement(&LAYOUT_WHITE)) {
+        defer gu.EndElement();
         gu.DoRect(.{ .x = 64, .y = 64 }, 0x000055FF);
         gu.DoLineBreak();
         gu.DoLabel(font, 0xC00000FF, "testblock3", .{});
         gu.DoLineBreak();
         gu.DoRect(.{ .x = 64, .y = 64 }, 0x2222AAFF); // old outline color
     }
-    if (gu.DoContainer(&LAYOUT_WHITE)) {
-        defer gu.EndContainer();
+    if (gu.DoElement(&LAYOUT_WHITE)) {
+        defer gu.EndElement();
         gu.DoLabel(null, 0x0000C0FF, "testing... !!@$(#!QOIEANSHT)", .{});
         gu.DoLineBreak();
-        if (gu.DoContainer(&LAYOUT_CIRCLE_BOX)) {
-            defer gu.EndContainer();
-            const element = gu.GetContainer();
+        if (gu.DoElement(&LAYOUT_CIRCLE_BOX)) {
+            defer gu.EndElement();
+            const element = gu.GetElement();
             element.features.bShowRect = true;
             element.area.w = 64;
             element.area.h = 64;
         }
         gu.DoLineBreak();
-        if (gu.DoContainer(&LAYOUT_QCIRCLE_BOX)) {
-            defer gu.EndContainer();
-            const element = gu.GetContainer();
+        if (gu.DoElement(&LAYOUT_QCIRCLE_BOX)) {
+            defer gu.EndElement();
+            const element = gu.GetElement();
             element.features.bShowRect = true;
             element.area.w = 64;
             element.area.h = 64;
         }
         gu.DoLineBreak();
-        if (gu.DoContainer(&LAYOUT_SUPERELLIPSE_BOX)) {
-            defer gu.EndContainer();
-            const element = gu.GetContainer();
+        if (gu.DoElement(&LAYOUT_SUPERELLIPSE_BOX)) {
+            defer gu.EndElement();
+            const element = gu.GetElement();
             element.features.bShowRect = true;
             element.area.w = 64;
             element.area.h = 64;
         }
         gu.DoLineBreak();
-        if (gu.DoContainer(&LAYOUT_RHOMBUS_BOX)) {
-            defer gu.EndContainer();
-            const element = gu.GetContainer();
+        if (gu.DoElement(&LAYOUT_RHOMBUS_BOX)) {
+            defer gu.EndElement();
+            const element = gu.GetElement();
             element.features.bShowRect = true;
             element.area.w = 64;
             element.area.h = 64;
         }
         gu.DoLineBreak();
-        if (gu.DoContainer(&LAYOUT_CHAMFER_BOX)) {
-            defer gu.EndContainer();
-            const element = gu.GetContainer();
+        if (gu.DoElement(&LAYOUT_CHAMFER_BOX)) {
+            defer gu.EndElement();
+            const element = gu.GetElement();
             element.features.bShowRect = true;
             element.area.w = 64;
             element.area.h = 64;
         }
         gu.DoLineBreak();
-        if (gu.DoContainer(&LAYOUT_OCTAGON_BOX)) {
-            defer gu.EndContainer();
-            const element = gu.GetContainer();
+        if (gu.DoElement(&LAYOUT_OCTAGON_BOX)) {
+            defer gu.EndElement();
+            const element = gu.GetElement();
             element.features.bShowRect = true;
             element.area.w = 64;
             element.area.h = 64;
         }
     }
-    if (gu.DoContainer(&LAYOUT_WHITE_BREAK)) {
-        defer gu.EndContainer();
+    if (gu.DoElement(&LAYOUT_WHITE_BREAK)) {
+        defer gu.EndElement();
         gu.DoLabel(null, 0x00C0C0FF, "testing... with auto linebreak!!", .{});
         if (gu.DoToggleButton(&app.b2toggle, font, "ToggleButton", .{})) {
             std.log.debug("b2 toggled!!", .{});
@@ -720,8 +720,8 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoImage(img1, null, 0.5);
         gu.DoImage(img2, null, 0.5);
     }
-    if (gu.DoContainer(&LAYOUT_WHITE)) {
-        defer gu.EndContainer();
+    if (gu.DoElement(&LAYOUT_WHITE)) {
+        defer gu.EndElement();
         gu.DoLabel(null, 0xC0C000FF, "testing... !!@$(#!QOIEANSHT)", .{});
     }
 
