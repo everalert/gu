@@ -627,6 +627,8 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoLineBreak();
         if (gu.DoElement(&LAYOUT_RED)) {
             defer gu.EndElement();
+            gu.PushButtonMode(.Release);
+            defer gu.PopButtonMode();
             if (gu.DoButton(font, "Button", .{})) {
                 std.log.debug("b1 activation result!!", .{});
             }

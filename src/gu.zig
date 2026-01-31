@@ -170,22 +170,19 @@ pub const GUTextureAtlas = struct {
 //------------------------------------------------------------------------------
 
 pub const Button = struct {
-    mode: Mode = .Press,
-    state: State = .Idle,
+    mode: ButtonMode = .Press,
+    state: ButtonState = .Idle,
     area: Rect,
     element: usize,
     activated: bool,
 
     pub const empty = Button{
-        .mode = .Press,
+        .mode = .default,
         .state = .Idle,
         .area = .zero,
         .element = maxInt(usize), // FIXME: probably bad that this refers to oob, no?
         .activated = false,
     };
-
-    pub const Mode = enum { Press, Release };
-    pub const State = enum { Idle, Hover, Down };
 
     pub fn Update(
         self: *Button,
@@ -220,6 +217,15 @@ pub const Button = struct {
         }
     }
 };
+
+pub const ButtonMode = enum {
+    Press,
+    Release,
+
+    pub const default: ButtonMode = .Press;
+};
+
+pub const ButtonState = enum { Idle, Hover, Down };
 
 pub const ButtonStyle = struct {
     PaddingVer: f32,
@@ -500,10 +506,11 @@ element_line_stack: ArrayList(GULineData),
 clip_stack: ArrayList(Rect),
 label_arena: ArenaAllocator,
 
+base_layout: GULayout,
+
 buttons: StringHashMap(Button),
 button_delete_queue: ArrayList([]const u8),
-
-base_layout: GULayout,
+btn_mode_stack: ArrayList(ButtonMode),
 
 btn_style_arena: ArrayList(ButtonStyle), // arraylist for the typing/alignment, usage is like arena
 btn_style_stack_padding_ver: ArrayList(f32),
@@ -536,6 +543,7 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
         .clip_stack = .empty,
         .buttons = .init(alloc),
         .button_delete_queue = .empty,
+        .btn_mode_stack = .empty,
         .btn_style_arena = .empty,
         .btn_style_stack_padding_ver = .empty,
         .btn_style_stack_padding_hor = .empty,
@@ -559,6 +567,7 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
 
 pub fn Deinit(self: *GU) void {
     self.label_arena.deinit();
+    self.btn_mode_stack.deinit(self.allocator);
     self.btn_style_arena.deinit(self.allocator);
     self.btn_style_stack_padding_ver.deinit(self.allocator);
     self.btn_style_stack_padding_hor.deinit(self.allocator);
@@ -598,10 +607,12 @@ pub fn AddTexture(self: *GU, texture: GUTextureAtlas) !usize {
 // FRAME
 
 pub fn BeginFrame(self: *GU) !void {
-    const surface_size = self.backend.GetSurfaceDimensions();
-
     assert(self.element_stack.items.len == 0);
     assert(self.element_line_stack.items.len == 0);
+    assert(self.btn_mode_stack.items.len == 0);
+
+    const surface_size = self.backend.GetSurfaceDimensions();
+
     _ = self.label_arena.reset(.retain_capacity);
     self.ResetButtonStyle();
     self.render_commands.clearRetainingCapacity();
@@ -987,6 +998,7 @@ pub fn EndElement(self: *GU) void {
             const btn = btn_info.value_ptr;
             if (!btn_info.found_existing) btn.* = .empty;
             btn.element = element.id;
+            btn.mode = self.btn_mode_stack.getLastOrNull() orelse ButtonMode.default;
             break :btn btn;
         };
 
@@ -1069,8 +1081,8 @@ pub fn SetElementSize(self: *GU, w: f32, h: f32) void {
 //------------------------------------------------------------------------------
 // STACKS
 
-// FIXME: the actual indexing of the arena could behave like a stack, thereby
-//  avoiding unnecessary pushing of redundant styles, no?
+// FIXME: (button styles) the actual indexing of the arena could behave like a
+//  stack, thereby avoiding unnecessary pushing of redundant styles, no?
 
 /// returns `btn_style_arena` index for current button style configuration.
 fn GetButtonStyle(self: *GU) usize {
@@ -1127,6 +1139,18 @@ fn InitButtonStyle(self: *GU) void {
     assert(self.btn_style_stack_color_down.items.len == 0);
     self.PushButtonStyle(.default);
     self.GenerateButtonStyle();
+}
+
+//------------------------------------------------------------------------------
+// BUTTON MODE API
+
+pub fn PushButtonMode(self: *GU, mode: ButtonMode) void {
+    self.btn_mode_stack.append(self.allocator, mode) catch |e|
+        std.log.err("(PushButtonMode) ERROR: {t}", .{e});
+}
+
+pub fn PopButtonMode(self: *GU) void {
+    _ = self.btn_mode_stack.pop();
 }
 
 //------------------------------------------------------------------------------
