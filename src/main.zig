@@ -13,7 +13,8 @@ const SDLTryErrorPrint = @import("c.zig").SDLTryErrorPrint;
 
 const GU = @import("gu.zig");
 const GUBackend = GU.GUBackend;
-const GUCorner = GU.GUCorner;
+const GUCorner = GU.Corner;
+const GUCornerShape = GU.CornerShape;
 const GUTextureAtlas = GU.GUTextureAtlas;
 const GUFontAtlas = GU.GUFontAtlas;
 const GUTextureHandle = GU.TextureHandle;
@@ -436,11 +437,11 @@ fn generate_corner_pixels(
 
 //------------------------------------------------------------------------------
 
-const StyleAngular = GUCorner.Style.Custom1; // octagon
-const StyleBeveled = GUCorner.Style.Custom2; // chamfer
-const StyleSuperellipse = GUCorner.Style.Custom3;
-const StyleQCircle = GUCorner.Style.Custom4;
-const StyleRhombus = GUCorner.Style.Custom5;
+const StyleAngular = GUCornerShape.Custom1; // octagon
+const StyleBeveled = GUCornerShape.Custom2; // chamfer
+const StyleSuperellipse = GUCornerShape.Custom3;
+const StyleQCircle = GUCornerShape.Custom4;
+const StyleRhombus = GUCornerShape.Custom5;
 
 const BASE_LAYOUT = GULayout{
     .mode_w = .Auto,
@@ -639,6 +640,10 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
         gu.DoLabel(null, 0xC000C0FF, "testblock2", .{});
+        gu.PushButtonColor(0x800000FF, 0xC00000FF, 0x400000FF);
+        defer gu.PopButtonColor();
+        gu.PushButtonCorner(32, StyleSuperellipse);
+        defer gu.PopButtonCorner();
         if (gu.DoToggleButton(&app.b2toggle, font, "ToggleButton: {any}", .{app.b2toggle})) {
             std.log.debug("b2 toggled!!", .{});
         }

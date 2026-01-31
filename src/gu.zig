@@ -74,12 +74,12 @@ pub const RenderCommand = struct {
 
 pub const RCRect = struct {
     rect: Rect,
-    corner: GUCorner,
+    corner: Corner,
     color: u32,
     texture: ?*GUTextureAtlas,
     tile: ?u32, // for texture atlases
 
-    pub fn init(rect: Rect, corner: GUCorner, color: u32) RCRect {
+    pub fn init(rect: Rect, corner: Corner, color: u32) RCRect {
         return std.mem.zeroInit(RCRect, .{
             .rect = rect,
             .corner = corner,
@@ -99,12 +99,14 @@ pub const RCClip = struct {
     area: Rect,
 };
 
-pub const GUCorner = struct {
+pub const Corner = struct {
     radius: f32,
-    style: Style,
-
-    pub const Style = enum { None, Round, Custom1, Custom2, Custom3, Custom4, Custom5, Custom6 };
+    style: CornerShape,
 };
+
+// FIXME: does this even need to be an enum, rather than like an id or handle?
+//  the backend has to decide what to implement anyway, so..
+pub const CornerShape = enum { None, Round, Custom1, Custom2, Custom3, Custom4, Custom5, Custom6 };
 
 //------------------------------------------------------------------------------
 
@@ -185,13 +187,6 @@ pub const Button = struct {
     pub const Mode = enum { Press, Release };
     pub const State = enum { Idle, Hover, Down };
 
-    const PADDING_VERTICAL: f32 = 2;
-    const PADDING_HORIZONTAL: f32 = 8;
-    const CORNER_RADIUS: f32 = 6;
-    const COLOR_IDLE: u32 = 0x008000FF;
-    const COLOR_HOVER: u32 = 0x00C000FF;
-    const COLOR_DOWN: u32 = 0x004000FF;
-
     pub fn Update(
         self: *Button,
         pt: *const Vec2,
@@ -224,6 +219,26 @@ pub const Button = struct {
             self.state = .Idle;
         }
     }
+};
+
+pub const ButtonStyle = struct {
+    PaddingVer: f32,
+    PaddingHor: f32,
+    CornerRad: f32,
+    CornerShape: CornerShape,
+    ColorIdle: u32,
+    ColorHover: u32,
+    ColorDown: u32,
+
+    const default: ButtonStyle = .{
+        .PaddingVer = 2,
+        .PaddingHor = 8,
+        .CornerRad = 6,
+        .CornerShape = .Round,
+        .ColorIdle = 0x008000FF,
+        .ColorHover = 0x00C000FF,
+        .ColorDown = 0x004000FF,
+    };
 };
 
 pub const KeyState = struct {
@@ -397,7 +412,7 @@ pub const GULayout = struct {
     mode_w: GUDimensionMode, // derived from parent 'widths' field if .Auto
     mode_h: GUDimensionMode, // derived from parent 'heights' field if .Auto
     color: u32,
-    corner: GUCorner,
+    corner: Corner,
     widths: ?[]const f32, // FIXME: doesn't need to be null
     heights: ?[]const f32, // FIXME: doesn't need to be null
     padding: Vec2,
@@ -490,6 +505,16 @@ button_delete_queue: ArrayList([]const u8),
 
 base_layout: GULayout,
 
+btn_style_arena: ArrayList(ButtonStyle), // arraylist for the typing/alignment, usage is like arena
+btn_style_stack_padding_ver: ArrayList(f32),
+btn_style_stack_padding_hor: ArrayList(f32),
+btn_style_stack_corner_rad: ArrayList(f32),
+btn_style_stack_corner_shape: ArrayList(CornerShape),
+btn_style_stack_color_idle: ArrayList(u32),
+btn_style_stack_color_hover: ArrayList(u32),
+btn_style_stack_color_down: ArrayList(u32),
+btn_style_stack_changed: bool,
+
 render_commands: ArrayList(RenderCommand),
 render_commands_rect: ArrayList(RCRect),
 render_commands_text: ArrayList(RCText),
@@ -511,6 +536,15 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
         .clip_stack = .empty,
         .buttons = .init(alloc),
         .button_delete_queue = .empty,
+        .btn_style_arena = .empty,
+        .btn_style_stack_padding_ver = .empty,
+        .btn_style_stack_padding_hor = .empty,
+        .btn_style_stack_corner_rad = .empty,
+        .btn_style_stack_corner_shape = .empty,
+        .btn_style_stack_color_idle = .empty,
+        .btn_style_stack_color_hover = .empty,
+        .btn_style_stack_color_down = .empty,
+        .btn_style_stack_changed = false,
         .render_commands = .empty,
         .render_commands_rect = .empty,
         .render_commands_text = .empty,
@@ -525,6 +559,14 @@ pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
 
 pub fn Deinit(self: *GU) void {
     self.label_arena.deinit();
+    self.btn_style_arena.deinit(self.allocator);
+    self.btn_style_stack_padding_ver.deinit(self.allocator);
+    self.btn_style_stack_padding_hor.deinit(self.allocator);
+    self.btn_style_stack_corner_rad.deinit(self.allocator);
+    self.btn_style_stack_corner_shape.deinit(self.allocator);
+    self.btn_style_stack_color_idle.deinit(self.allocator);
+    self.btn_style_stack_color_hover.deinit(self.allocator);
+    self.btn_style_stack_color_down.deinit(self.allocator);
     self.render_commands.deinit(self.allocator);
     self.render_commands_rect.deinit(self.allocator);
     self.render_commands_text.deinit(self.allocator);
@@ -561,6 +603,7 @@ pub fn BeginFrame(self: *GU) !void {
     assert(self.element_stack.items.len == 0);
     assert(self.element_line_stack.items.len == 0);
     _ = self.label_arena.reset(.retain_capacity);
+    self.ResetButtonStyle();
     self.render_commands.clearRetainingCapacity();
     self.render_commands_rect.clearRetainingCapacity();
     self.render_commands_text.clearRetainingCapacity();
@@ -948,14 +991,14 @@ pub fn EndElement(self: *GU) void {
         };
 
         // visual updating
-        // TODO: move button style to a style stack-like setup, not hardcoded
+        const btn_style = &self.btn_style_arena.items[self.GetButtonStyle()];
         element.layout.color = switch (btn.state) {
-            .Idle => if (element.features.bClickDepressed) Button.COLOR_DOWN else Button.COLOR_IDLE,
-            .Hover => if (element.features.bClickDepressed) Button.COLOR_IDLE else Button.COLOR_HOVER,
-            .Down => Button.COLOR_DOWN,
+            .Idle => if (element.features.bClickDepressed) btn_style.ColorDown else btn_style.ColorIdle,
+            .Hover => if (element.features.bClickDepressed) btn_style.ColorIdle else btn_style.ColorHover,
+            .Down => btn_style.ColorDown,
         };
-        element.layout.padding = .{ .x = Button.PADDING_HORIZONTAL, .y = Button.PADDING_VERTICAL };
-        element.layout.corner = .{ .radius = Button.CORNER_RADIUS, .style = .Round };
+        element.layout.padding = .{ .x = btn_style.PaddingHor, .y = btn_style.PaddingVer };
+        element.layout.corner = .{ .radius = btn_style.CornerRad, .style = btn_style.CornerShape };
     }
 
     // Texture: behaviour of sizing the element with relation to the texture (e.g.
@@ -1021,6 +1064,223 @@ pub fn SetElementSize(self: *GU, w: f32, h: f32) void {
     const element = self.GetElement();
     element.area.w = w;
     element.area.h = h;
+}
+
+//------------------------------------------------------------------------------
+// STACKS
+
+// FIXME: the actual indexing of the arena could behave like a stack, thereby
+//  avoiding unnecessary pushing of redundant styles, no?
+
+/// returns `btn_style_arena` index for current button style configuration.
+fn GetButtonStyle(self: *GU) usize {
+    assert(self.btn_style_arena.items.len > 0);
+
+    if (self.btn_style_stack_changed)
+        self.GenerateButtonStyle();
+
+    return self.btn_style_arena.items.len - 1;
+}
+
+fn GenerateButtonStyle(self: *GU) void {
+    assert(self.btn_style_stack_changed == true);
+    assert(self.btn_style_stack_padding_ver.items.len > 0);
+    assert(self.btn_style_stack_padding_hor.items.len > 0);
+    assert(self.btn_style_stack_corner_rad.items.len > 0);
+    assert(self.btn_style_stack_corner_shape.items.len > 0);
+    assert(self.btn_style_stack_color_idle.items.len > 0);
+    assert(self.btn_style_stack_color_hover.items.len > 0);
+    assert(self.btn_style_stack_color_down.items.len > 0);
+
+    self.btn_style_stack_changed = false;
+    self.btn_style_arena.append(self.allocator, ButtonStyle{
+        .PaddingVer = self.btn_style_stack_padding_ver.getLast(),
+        .PaddingHor = self.btn_style_stack_padding_hor.getLast(),
+        .CornerRad = self.btn_style_stack_corner_rad.getLast(),
+        .CornerShape = self.btn_style_stack_corner_shape.getLast(),
+        .ColorIdle = self.btn_style_stack_color_idle.getLast(),
+        .ColorHover = self.btn_style_stack_color_hover.getLast(),
+        .ColorDown = self.btn_style_stack_color_down.getLast(),
+    }) catch |e| std.log.err("(GenerateButtonStyle) ERROR: {t}", .{e});
+}
+
+fn ResetButtonStyle(self: *GU) void {
+    self.btn_style_arena.clearRetainingCapacity();
+    self.btn_style_stack_padding_ver.clearRetainingCapacity();
+    self.btn_style_stack_padding_hor.clearRetainingCapacity();
+    self.btn_style_stack_corner_rad.clearRetainingCapacity();
+    self.btn_style_stack_corner_shape.clearRetainingCapacity();
+    self.btn_style_stack_color_idle.clearRetainingCapacity();
+    self.btn_style_stack_color_hover.clearRetainingCapacity();
+    self.btn_style_stack_color_down.clearRetainingCapacity();
+    self.InitButtonStyle();
+}
+
+fn InitButtonStyle(self: *GU) void {
+    assert(self.btn_style_arena.items.len == 0);
+    assert(self.btn_style_stack_padding_ver.items.len == 0);
+    assert(self.btn_style_stack_padding_hor.items.len == 0);
+    assert(self.btn_style_stack_corner_rad.items.len == 0);
+    assert(self.btn_style_stack_corner_shape.items.len == 0);
+    assert(self.btn_style_stack_color_idle.items.len == 0);
+    assert(self.btn_style_stack_color_hover.items.len == 0);
+    assert(self.btn_style_stack_color_down.items.len == 0);
+    self.PushButtonStyle(.default);
+    self.GenerateButtonStyle();
+}
+
+//------------------------------------------------------------------------------
+// BUTTON STYLE API
+
+pub fn PushButtonStyle(self: *GU, style: ButtonStyle) void {
+    self.btn_style_stack_padding_ver.append(self.allocator, style.PaddingVer) catch |e|
+        std.log.err("(PushButtonStyle) ERROR: {t}", .{e});
+    self.btn_style_stack_padding_hor.append(self.allocator, style.PaddingHor) catch |e|
+        std.log.err("(PushButtonStyle) ERROR: {t}", .{e});
+    self.btn_style_stack_corner_rad.append(self.allocator, style.CornerRad) catch |e|
+        std.log.err("(PushButtonStyle) ERROR: {t}", .{e});
+    self.btn_style_stack_corner_shape.append(self.allocator, style.CornerShape) catch |e|
+        std.log.err("(PushButtonStyle) ERROR: {t}", .{e});
+    self.btn_style_stack_color_idle.append(self.allocator, style.ColorIdle) catch |e|
+        std.log.err("(PushButtonStyle) ERROR: {t}", .{e});
+    self.btn_style_stack_color_hover.append(self.allocator, style.ColorHover) catch |e|
+        std.log.err("(PushButtonStyle) ERROR: {t}", .{e});
+    self.btn_style_stack_color_down.append(self.allocator, style.ColorDown) catch |e|
+        std.log.err("(PushButtonStyle) ERROR: {t}", .{e});
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PushButtonPadding(self: *GU, vertical: f32, horizontal: f32) void {
+    self.btn_style_stack_padding_ver.append(self.allocator, vertical) catch |e|
+        std.log.err("(PushButtonPadding) ERROR: {t}", .{e});
+    self.btn_style_stack_padding_hor.append(self.allocator, horizontal) catch |e|
+        std.log.err("(PushButtonPadding) ERROR: {t}", .{e});
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PushButtonCorner(self: *GU, radius: f32, style: CornerShape) void {
+    self.btn_style_stack_corner_rad.append(self.allocator, radius) catch |e|
+        std.log.err("(PushButtonCorner) ERROR: {t}", .{e});
+    self.btn_style_stack_corner_shape.append(self.allocator, style) catch |e|
+        std.log.err("(PushButtonCorner) ERROR: {t}", .{e});
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PushButtonColor(self: *GU, idle: u32, hover: u32, down: u32) void {
+    self.btn_style_stack_color_idle.append(self.allocator, idle) catch |e|
+        std.log.err("(PushButtonColor) ERROR: {t}", .{e});
+    self.btn_style_stack_color_hover.append(self.allocator, hover) catch |e|
+        std.log.err("(PushButtonColor) ERROR: {t}", .{e});
+    self.btn_style_stack_color_down.append(self.allocator, down) catch |e|
+        std.log.err("(PushButtonColor) ERROR: {t}", .{e});
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PushButtonPaddingVertical(self: *GU, value: f32) void {
+    self.btn_style_stack_padding_ver.append(self.allocator, value) catch |e|
+        std.log.err("(PushButtonPaddingVertical) ERROR: {t}", .{e});
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PushButtonPaddingHorizontal(self: *GU, value: f32) void {
+    self.btn_style_stack_padding_hor.append(self.allocator, value) catch |e|
+        std.log.err("(PushButtonPaddingHorizontal) ERROR: {t}", .{e});
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PushButtonCornerRadius(self: *GU, value: f32) void {
+    self.btn_style_stack_corner_rad.append(self.allocator, value) catch |e|
+        std.log.err("(PushButtonCornerRadius) ERROR: {t}", .{e});
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PushButtonCornerShape(self: *GU, value: CornerShape) void {
+    self.btn_style_stack_corner_shape.append(self.allocator, value) catch |e|
+        std.log.err("(PushButtonCornerShape) ERROR: {t}", .{e});
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PushButtonColorIdle(self: *GU, value: u32) void {
+    self.btn_style_stack_color_idle.append(self.allocator, value) catch |e|
+        std.log.err("(PushButtonColorIdle) ERROR: {t}", .{e});
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PushButtonColorHover(self: *GU, value: u32) void {
+    self.btn_style_stack_color_hover.append(self.allocator, value) catch |e|
+        std.log.err("(PushButtonColorHover) ERROR: {t}", .{e});
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PushButtonColorDown(self: *GU, value: u32) void {
+    self.btn_style_stack_color_down.append(self.allocator, value) catch |e|
+        std.log.err("(PushButtonColorDown) ERROR: {t}", .{e});
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PopButtonStyle(self: *GU) void {
+    _ = self.btn_style_stack_padding_ver.pop();
+    _ = self.btn_style_stack_padding_hor.pop();
+    _ = self.btn_style_stack_corner_rad.pop();
+    _ = self.btn_style_stack_corner_shape.pop();
+    _ = self.btn_style_stack_color_idle.pop();
+    _ = self.btn_style_stack_color_hover.pop();
+    _ = self.btn_style_stack_color_down.pop();
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PopButtonPadding(self: *GU) void {
+    _ = self.btn_style_stack_padding_ver.pop();
+    _ = self.btn_style_stack_padding_hor.pop();
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PopButtonCorner(self: *GU) void {
+    _ = self.btn_style_stack_corner_rad.pop();
+    _ = self.btn_style_stack_corner_shape.pop();
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PopButtonColor(self: *GU) void {
+    _ = self.btn_style_stack_color_idle.pop();
+    _ = self.btn_style_stack_color_hover.pop();
+    _ = self.btn_style_stack_color_down.pop();
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PopButtonPaddingVertical(self: *GU) void {
+    _ = self.btn_style_stack_padding_ver.pop();
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PopButtonPaddingHorizontal(self: *GU) void {
+    _ = self.btn_style_stack_padding_hor.pop();
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PopButtonCornerRadius(self: *GU) void {
+    _ = self.btn_style_stack_corner_rad.pop();
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PopButtonCornerShape(self: *GU) void {
+    _ = self.btn_style_stack_corner_shape.pop();
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PopButtonColorIdle(self: *GU) void {
+    _ = self.btn_style_stack_color_idle.pop();
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PopButtonColorHover(self: *GU) void {
+    _ = self.btn_style_stack_color_hover.pop();
+    self.btn_style_stack_changed = true;
+}
+
+pub fn PopButtonColorDown(self: *GU) void {
+    _ = self.btn_style_stack_color_down.pop();
+    self.btn_style_stack_changed = true;
 }
 
 //------------------------------------------------------------------------------
