@@ -332,8 +332,10 @@ const RenderData = struct {
             return;
         }
 
+        const dst_size: f32 = @min(@floor(@min(cmd.rect.w, cmd.rect.h) / 2), cmd.corner.radius);
+
         const tex_lod_index: usize =
-            clamp(log2_int_ceil(usize, @intFromFloat(cmd.corner.radius)), 2, 2 + LOD_LEVELS - 1) - 2;
+            clamp(log2_int_ceil(usize, @intFromFloat(dst_size)), 2, 2 + LOD_LEVELS - 1) - 2;
         const tex: *CornerTexture = switch (cmd.corner.style) {
             .Round => &self.tex_corner_rnd_lod[tex_lod_index],
             .Custom1 => &self.tex_corner_ang_lod[tex_lod_index], // octagon
@@ -346,7 +348,6 @@ const RenderData = struct {
         SDLEP(c.SDL_SetTextureAlphaMod(tex.texture, c1.a));
         SDLEP(c.SDL_SetTextureColorMod(tex.texture, c1.r, c1.g, c1.b));
 
-        const dst_size: f32 = @min(@floor(@min(cmd.rect.w, cmd.rect.h) / 2), cmd.corner.radius);
         SDLEP(c.SDL_RenderTexture9Grid(
             self.renderer,
             tex.texture,
