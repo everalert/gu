@@ -116,7 +116,7 @@ pub fn sd_rhombus(p: Vec2, r: f32) f32 {
 }
 
 pub fn sd_chamfer_box(p: Vec2, r: f32) f32 {
-    const MARGIN: f32 = 0.1;
+    const MARGIN: f32 = 1.0;
     assert(r >= MARGIN * 2 + std.math.floatEpsAt(f32, MARGIN * 2));
 
     const chamfer: f32 = r - MARGIN; // edge is fuzzy if cutting too much
