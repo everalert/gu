@@ -172,6 +172,15 @@ pub const Button = struct {
     state: State = .Idle,
     area: Rect,
     element: usize,
+    activated: bool,
+
+    pub const empty = Button{
+        .mode = .Press,
+        .state = .Idle,
+        .area = .zero,
+        .element = maxInt(usize), // FIXME: probably bad that this refers to oob, no?
+        .activated = false,
+    };
 
     pub const Mode = enum { Press, Release };
     pub const State = enum { Idle, Hover, Down };
@@ -188,7 +197,8 @@ pub const Button = struct {
         pt: *const Vec2,
         btn_just_down: bool,
         btn_just_up: bool,
-    ) bool {
+    ) void {
+        self.activated = false;
         if (self.area.IsCollidingPoint(pt)) {
             if (self.state == .Idle)
                 self.state = .Hover;
@@ -197,7 +207,8 @@ pub const Button = struct {
                 self.state = .Down;
                 if (self.mode == .Press) {
                     std.log.debug("button activated! (press)", .{});
-                    return true;
+                    self.activated = true;
+                    return;
                 }
             }
 
@@ -205,36 +216,33 @@ pub const Button = struct {
                 self.state = .Hover;
                 if (self.mode == .Release) {
                     std.log.debug("button activated! (release)", .{});
-                    return true;
+                    self.activated = true;
+                    return;
                 }
             }
         } else {
             self.state = .Idle;
         }
-        return false;
     }
 };
 
-// NOTE: keep here, intended as a 'using button api' struct, not part of the button api
-const GUButtonData = struct { button: *Button, activated: bool };
-
-pub const GUKeyState = struct {
+pub const KeyState = struct {
     down: bool = false,
     just_up: bool = false,
     just_down: bool = false,
     accumulator_down: bool = false,
     accumulator_changes: u32 = 0,
 
-    pub const default = zeroInit(GUKeyState, .{});
+    pub const default = zeroInit(KeyState, .{});
 
-    pub fn Accumulate(self: *GUKeyState, down: bool) void {
+    pub fn Accumulate(self: *KeyState, down: bool) void {
         if (self.accumulator_down != down) {
             self.accumulator_down = down;
             self.accumulator_changes += 1;
         }
     }
 
-    pub fn Update(self: *GUKeyState) void {
+    pub fn Update(self: *KeyState) void {
         self.just_down = (self.accumulator_down and self.accumulator_down != self.down) or
             self.accumulator_changes > 1;
         self.just_up = (!self.accumulator_down and self.accumulator_down != self.down) or
@@ -261,10 +269,10 @@ const Element = struct {
     area: Rect,
     fill: Vec2, // how big the element is for layout calculations
     texture: TextureHandle,
+    name: []const u8,
     label_str: []const u8,
     label_font: FontHandle,
     rect_size: Vec2,
-    btn_state: Button.State,
 
     const empty: Element = .{
         .layout = .default,
@@ -278,10 +286,10 @@ const Element = struct {
         .sibling_prev = null,
         .features = .none,
         .texture = maxInt(usize),
+        .name = &.{},
         .label_str = &.{},
         .label_font = maxInt(usize),
         .rect_size = .zero,
-        .btn_state = .Idle,
     };
 
     // TODO: ?? rename bShowRect -> bShowBody or bShowBackground
@@ -488,7 +496,7 @@ render_commands_text: ArrayList(RCText),
 render_commands_clip: ArrayList(RCClip),
 
 mouse_pt: Vec2,
-mouse_left: GUKeyState, // LMB
+mouse_left: KeyState, // LMB
 
 pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
     return GU{
@@ -813,6 +821,13 @@ fn DoButtonPostProcessing(self: *GU) void {
     var it = self.buttons.iterator();
     while (it.next()) |btn_info| {
         const btn = btn_info.value_ptr;
+
+        btn.Update(
+            &self.mouse_pt,
+            self.mouse_left.just_down,
+            self.mouse_left.just_up,
+        );
+
         if (btn.element == maxInt(usize)) {
             self.button_delete_queue.append(self.allocator, btn_info.key_ptr.*) catch |err|
                 std.debug.panic("DoButtonPostProcessing ({s})", .{@errorName(err)});
@@ -918,10 +933,23 @@ pub fn EndContainer(self: *GU) void {
         assert(element.area.h < 0);
     }
 
-    // TODO: move button style to a style stack-like setup, not hardcoded
     // Button
     if (element.features.bClickable) {
-        element.layout.color = switch (element.btn_state) {
+        // button state setup
+        const btn: *const Button = btn: {
+            const btn_key = self.GetElementKey(element);
+            const btn_info = self.buttons.getOrPut(btn_key) catch break :btn &.empty;
+
+            // TODO: button mode should come from push stack (currently defaults .Press)
+            const btn = btn_info.value_ptr;
+            if (!btn_info.found_existing) btn.* = .empty;
+            btn.element = element.id;
+            break :btn btn;
+        };
+
+        // visual updating
+        // TODO: move button style to a style stack-like setup, not hardcoded
+        element.layout.color = switch (btn.state) {
             .Idle => if (element.features.bClickDepressed) Button.COLOR_DOWN else Button.COLOR_IDLE,
             .Hover => if (element.features.bClickDepressed) Button.COLOR_IDLE else Button.COLOR_HOVER,
             .Down => Button.COLOR_DOWN,
@@ -956,8 +984,20 @@ pub fn EndContainer(self: *GU) void {
 /// until the next call to DoContainer
 pub inline fn GetContainer(self: *GU) *Element {
     const i = self.element_stack.getLast();
-    const element = &self.element_tree.items[i];
-    return element;
+    return &self.element_tree.items[i];
+}
+
+// TODO: more robust hashing strategy that doesn't cause hover state to break on
+//  buttons that change where the button is in the element tree (e.g. by inserting
+//  or removing an element above the button)
+pub fn GetContainerKey(self: *GU, element: *const Element) []const u8 {
+    return std.fmt.allocPrint(self.allocator, "{X:0>16}{s}", .{ element.id, element.name }) catch &.{};
+}
+
+pub fn GetContainerClicked(self: *GU, element: *const Element) bool {
+    const btn_key = self.GetElementKey(element);
+    const btn: Button = self.buttons.get(btn_key) orelse .empty;
+    return btn.activated;
 }
 
 pub fn SetContainerColor(self: *GU, color: u32) void {
@@ -989,13 +1029,15 @@ pub fn SetContainerSize(self: *GU, w: f32, h: f32) void {
 const DoElement = DoContainer;
 const EndElement = EndContainer;
 const GetElement = GetContainer;
+const GetElementKey = GetContainerKey;
+const GetElementClicked = GetContainerClicked;
 const SetElementPadding = SetContainerPadding;
 const SetElementGaps = SetContainerGaps;
 const SetElementColor = SetContainerColor;
 const SetElementSize = SetContainerSize;
 
 //------------------------------------------------------------------------------
-// "STOCK" WIDGETS
+// WIDGETS
 
 // TODO: stretch-like rect dimensions
 pub fn DoRect(self: *GU, size: Vec2, color: u32) void {
@@ -1043,61 +1085,23 @@ pub fn DoLabel(self: *GU, font: ?FontHandle, color: ?u32, comptime fmt: []const 
     element.area.h = label_size.y;
 }
 
-// TODO: more robust hashing strategy that doesn't cause hover state to break on
-//  buttons that change where the button is in the element tree (e.g. by inserting
-//  or removing an element above the button)
-/// Turns the current element into a button and evaluates the input state. To
-/// track state between frames, the button is identified internally by hash of the
-/// element id concatenated with str. To emulate standard button behaviour in a
-/// custom widget, refer to the call to this function in `DoButton`.
-pub fn DoButtonLogic(self: *GU, mode: Button.Mode, str: []const u8) ?GUButtonData {
-    const element = self.GetElement();
-    element.features.bClickable = true;
-
-    const btn: *Button = get_button: {
-        const btn_key = std.fmt.allocPrint(self.allocator, "{X:0>16}{s}", .{ element.id, str }) catch
-            return null;
-        const btn_info = self.buttons.getOrPut(btn_key) catch
-            return null;
-
-        const btn = btn_info.value_ptr;
-        if (!btn_info.found_existing) {
-            btn.* = Button{
-                .state = .Idle,
-                .mode = mode,
-                .area = .zero,
-                .element = element.id,
-            };
-        } else btn.element = element.id;
-
-        element.btn_state = btn.state;
-        break :get_button btn;
-    };
-
-    const activated = btn.Update(
-        &self.mouse_pt,
-        self.mouse_left.just_down,
-        self.mouse_left.just_up,
-    );
-
-    return GUButtonData{ .button = btn, .activated = activated };
-}
-
+// FIXME: remove font as input, use font stack
 // NOTE: id hash uses input fmt, not resolved formatted string
 /// returns whether button was 'activated' (pressed)
 pub fn DoButton(self: *GU, font: ?FontHandle, comptime fmt: []const u8, args: anytype) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
     const element = self.GetElement();
+    element.features.bClickable = true;
     element.features.bShowRect = true;
-
-    const btn = self.DoButtonLogic(.Press, fmt) orelse return false;
+    element.name = fmt;
 
     self.DoLabel(font, null, fmt, args);
 
-    return btn.activated;
+    return self.GetElementClicked(element);
 }
 
+// FIXME: remove font as input, use font stack
 // NOTE: id hash uses input fmt, not resolved formatted string
 /// same general behaviour as DoButton, but updates an 'active' bool for you.
 /// if button is culled (due to not rendering, clip culling, etc.), the external
@@ -1107,15 +1111,17 @@ pub fn DoToggleButton(self: *GU, active: *bool, font: ?FontHandle, comptime fmt:
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
     const element = self.GetElement();
+    element.features.bClickable = true;
     element.features.bShowRect = true;
+    element.name = fmt;
 
-    const btn = self.DoButtonLogic(.Press, fmt) orelse return false;
+    const activated = self.GetElementClicked(element);
     if (active.*) element.features.bClickDepressed = true;
-    if (btn.activated) active.* = !active.*;
+    if (activated) active.* = !active.*;
 
     self.DoLabel(font, null, fmt, args);
 
-    return btn.activated;
+    return activated;
 }
 
 pub fn DoLineBreak(self: *GU) void {
