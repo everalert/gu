@@ -288,16 +288,17 @@ const Element = struct {
     features: Features,
     layout: GULayout,
     area: Rect,
+    clip: Rect, // the clipping region this element applies to its children
     fill: Vec2, // how big the element is for layout calculations
     texture: TextureHandle,
     name: []const u8,
     label_str: []const u8,
     label_font: FontHandle,
-    rect_size: Vec2,
 
     const empty: Element = .{
         .layout = .default,
         .area = .zero,
+        .clip = .zero,
         .fill = .zero,
         .id = 0,
         .parent = null,
@@ -310,7 +311,6 @@ const Element = struct {
         .name = &.{},
         .label_str = &.{},
         .label_font = maxInt(usize),
-        .rect_size = .zero,
     };
 
     // TODO: ?? rename bShowRect -> bShowBody or bShowBackground
@@ -358,6 +358,13 @@ const ElementIterator = struct {
     this: ?usize,
     prev: ?usize,
 
+    const ElementRelation = enum { Root, Child, Sibling, Parent };
+
+    const ElementIt = struct {
+        element: *Element,
+        relation: ElementRelation,
+    };
+
     pub fn Init(source: []Element) ElementIterator {
         return ElementIterator{
             .source = source,
@@ -366,10 +373,7 @@ const ElementIterator = struct {
         };
     }
 
-    pub fn Next(self: *ElementIterator) ?struct {
-        element: *Element,
-        relation: enum { Root, Child, Sibling, Parent },
-    } {
+    pub fn Next(self: *ElementIterator) ?ElementIt {
         if (self.this == null) {
             if (self.source.len == 0) return null;
             self.this = 0;
@@ -642,8 +646,9 @@ pub fn EndFrame(self: *GU) void {
 
     self.DoElementLineBreakParsing();
     self.DoElementPositioning();
-    self.DoButtonPostProcessing();
+    self.DoElementClipping();
     self.DoElementEmitDrawCommands();
+    self.DoButtonPostProcessing();
     //self.DoElementDebugLog();
 
     for (self.render_commands.items) |cmd| {
@@ -775,48 +780,73 @@ fn DoElementPositioning(self: *GU) void {
     }
 }
 
-fn DoElementEmitDrawCommands(self: *GU) void {
+fn DoElementClipping(self: *GU) void {
     assert(self.element_stack.items.len == 0);
     assert(self.clip_stack.items.len == 0);
     defer assert(self.element_stack.items.len == 0);
     defer assert(self.clip_stack.items.len == 0);
 
-    const stack = &self.clip_stack;
+    const c_stack = &self.clip_stack;
     const sd = self.backend.GetSurfaceDimensions();
     const c_base = Rect{ .x = 0, .y = 0, .w = sd.x, .h = sd.y };
-    var next_clip = self.render_commands_clip.items.len;
-    self.render_commands.append(self.allocator, .init(.clip, next_clip)) catch |err|
-        std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
-    self.render_commands_clip.append(self.allocator, .{ .area = c_base }) catch |err|
-        std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
-    var c: *const Rect = &c_base;
+    var c = c_base;
 
     var it = ElementIterator.Init(self.element_tree.items);
     while (it.Next()) |it_data| {
         const e = it_data.element;
 
-        if (!e.area.IsCollidingRect(c)) continue;
+        if (!e.area.IsCollidingRect(&c)) continue;
 
+        // child->parent
         if (it_data.relation == .Parent) {
-            _ = stack.pop();
-            c = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &c_base;
-            next_clip = self.render_commands_clip.items.len;
+            _ = c_stack.pop();
+            c = c_stack.getLastOrNull() orelse c_base;
+            continue;
+        }
+
+        // apply regardless of whether current element is a parent, because it
+        // affects things like mouse collision
+        const next_clip = e.area.GetIntersection(&c);
+        e.clip = next_clip;
+
+        // unprocessed parent->child branch
+        if (e.first_child != null) {
+            c_stack.append(self.allocator, next_clip) catch |err|
+                std.log.err("(DoElementClipping) ClipStack Append Error: {s}", .{@errorName(err)});
+            c = c_stack.getLast();
+        }
+    }
+}
+
+fn DoElementEmitDrawCommands(self: *GU) void {
+    const sd = self.backend.GetSurfaceDimensions();
+    const c_base = Rect{ .x = 0, .y = 0, .w = sd.x, .h = sd.y };
+    var c = c_base;
+
+    var it = ElementIterator.Init(self.element_tree.items);
+    while (it.Next()) |it_data| {
+        const e = it_data.element;
+
+        if (!e.area.IsCollidingRect(&c)) continue;
+
+        // returning to parent from child, don't need to process anything more
+        if (it_data.relation == .Parent) {
+            c = if (e.parent) |p| self.element_tree.items[p].clip else c_base;
+            const next_clip = self.render_commands_clip.items.len;
             self.render_commands.append(self.allocator, .init(.clip, next_clip)) catch |err|
                 std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
-            self.render_commands_clip.append(self.allocator, .{ .area = c.* }) catch |err|
+            self.render_commands_clip.append(self.allocator, .{ .area = c }) catch |err|
                 std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
             continue;
         }
 
-        defer if (it_data.relation != .Parent and e.first_child != null) {
-            stack.append(self.allocator, e.area.GetIntersection(c)) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Clip Stack ({s})", .{@errorName(err)});
-            c = &stack.items[stack.items.len - 1];
-
-            next_clip = self.render_commands_clip.items.len;
+        // this element is an unprocessed parent, so we go deeper
+        defer if (e.first_child != null) {
+            c = e.clip;
+            const next_clip = self.render_commands_clip.items.len;
             self.render_commands.append(self.allocator, .init(.clip, next_clip)) catch |err|
                 std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
-            self.render_commands_clip.append(self.allocator, .{ .area = c.* }) catch |err|
+            self.render_commands_clip.append(self.allocator, .{ .area = c }) catch |err|
                 std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
         };
 
@@ -858,17 +888,6 @@ fn DoElementEmitDrawCommands(self: *GU) void {
     }
 }
 
-fn DoElementDebugLog(self: *GU) void {
-    var it = ElementIterator.Init(self.element_tree.items);
-    while (it.Next()) |it_data| {
-        const e = it_data.element;
-        std.log.debug(
-            "it-element: ({*})  {t: <12}{d}x{d}",
-            .{ e, it_data.relation, e.area.w, e.area.h },
-        );
-    }
-}
-
 fn DoButtonPostProcessing(self: *GU) void {
     assert(self.button_delete_queue.items.len == 0);
 
@@ -893,6 +912,17 @@ fn DoButtonPostProcessing(self: *GU) void {
 
     while (self.button_delete_queue.pop()) |item|
         _ = self.buttons.remove(item);
+}
+
+fn DoElementDebugLog(self: *GU) void {
+    var it = ElementIterator.Init(self.element_tree.items);
+    while (it.Next()) |it_data| {
+        const e = it_data.element;
+        std.log.debug(
+            "it-element: ({*})  {t: <12}{d: >3}x{d: <3}",
+            .{ e, it_data.relation, e.area.w, e.area.h },
+        );
+    }
 }
 
 //------------------------------------------------------------------------------

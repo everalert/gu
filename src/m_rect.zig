@@ -29,6 +29,14 @@ pub fn format(self: *const Rect, comptime _: []const u8, _: FormatOptions, write
 }
 
 //------------------------------------------------------------------------------
+// math ops
+
+pub fn EQL(r1: *const Rect, r2: *const Rect) bool {
+    return @intFromBool(r1.x == r2.x) & @intFromBool(r1.y == r2.y) &
+        @intFromBool(r1.w == r2.w) & @intFromBool(r1.h == r2.h) > 0;
+}
+
+//------------------------------------------------------------------------------
 // properties
 
 pub inline fn Area(self: Rect) f32 {
