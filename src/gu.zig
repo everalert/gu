@@ -906,7 +906,8 @@ fn DoButtonPostProcessing(self: *GU) void {
                 std.debug.panic("DoButtonPostProcessing ({s})", .{@errorName(err)});
             continue;
         }
-        btn.area = self.element_tree.items[btn.element].area;
+
+        btn.area = self.element_tree.items[btn.element].clip;
         btn.element = maxInt(usize);
     }
 
