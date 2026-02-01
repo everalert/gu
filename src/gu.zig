@@ -14,7 +14,7 @@ const Vec2 = @import("m_vec2.zig");
 const Rect = @import("m_rect.zig");
 const Color = @import("m_color.zig").Color;
 
-pub const GUBackend = struct {
+pub const Backend = struct {
     ptr: *anyopaque,
     fnGetSurfaceDimensions: *const fn (*anyopaque) Vec2,
     fnDrawRect: *const fn (*anyopaque, *const RCRect) void,
@@ -23,31 +23,31 @@ pub const GUBackend = struct {
     fnBeginRendering: *const fn (*anyopaque) void,
     fnEndRendering: *const fn (*anyopaque) void,
 
-    pub fn GetSurfaceDimensions(self: *GUBackend) Vec2 {
+    pub fn GetSurfaceDimensions(self: *Backend) Vec2 {
         return self.fnGetSurfaceDimensions(self.ptr);
     }
 
-    // TODO: impl texture tile drawing, see GURenderCommand->Rect
-    pub fn DrawRect(self: *GUBackend, cmd: *const RCRect) void {
+    // TODO: impl texture tile drawing, see RenderCommand->Rect
+    pub fn DrawRect(self: *Backend, cmd: *const RCRect) void {
         self.fnDrawRect(self.ptr, cmd);
     }
 
-    pub fn DrawString(self: *GUBackend, cmd: *const RCText) void {
+    pub fn DrawString(self: *Backend, cmd: *const RCText) void {
         self.fnDrawString(self.ptr, cmd);
     }
 
-    pub fn SetClip(self: *GUBackend, cmd: *const RCClip) void {
+    pub fn SetClip(self: *Backend, cmd: *const RCClip) void {
         self.fnSetClip(self.ptr, cmd);
     }
 
     /// called as a way to signal to the backend that we are about to render a
     /// frame, and give it a 'hook' to do any related setup (store clip state, etc.)
-    pub fn BeginRendering(self: *GUBackend) void {
+    pub fn BeginRendering(self: *Backend) void {
         self.fnBeginRendering(self.ptr);
     }
 
     /// a 'hook' for the backend to cleanup after we're done with a frame
-    pub fn EndRendering(self: *GUBackend) void {
+    pub fn EndRendering(self: *Backend) void {
         self.fnEndRendering(self.ptr);
     }
 };
@@ -55,10 +55,10 @@ pub const GUBackend = struct {
 //------------------------------------------------------------------------------
 
 // FIXME: don't really like having the field types separated, but afaik needed to
-// pass their types to function params (see GUBackend); investigate to confirm
+// pass their types to function params (see Backend); investigate to confirm
 // that it's actually not possible/practical to reference the field type directly
 // WARN: also, not sure it's necessarily a good idea to obfuscate the field members
-// when calling the GUBackend functions; however, it makes for cleaner fn defs
+// when calling the Backend functions; however, it makes for cleaner fn defs
 // and theoretically cuts down on stack thrashing (to compare/confirm), need to
 // make a final call on which way to do it
 pub const RenderCommand = struct {
@@ -76,7 +76,7 @@ pub const RCRect = struct {
     rect: Rect,
     corner: Corner,
     color: u32,
-    texture: ?*GUTextureAtlas,
+    texture: ?*TextureAtlas,
     tile: ?u32, // for texture atlases
 
     pub fn init(rect: Rect, corner: Corner, color: u32) RCRect {
@@ -90,7 +90,7 @@ pub const RCRect = struct {
 
 pub const RCText = struct {
     str: []const u8,
-    font: *GUFontAtlas,
+    font: *FontAtlas,
     pos: Vec2,
     color: u32,
 };
@@ -116,7 +116,7 @@ pub const TextureHandle = usize;
 // FIXME: not sure this needs to be in ui core, maybe adding these to backend
 //  vtable is enough? so we only remember handles (provided by backend)
 // TODO: add CanDrawString to check against supported character range in font impl
-pub const GUFontAtlas = struct {
+pub const FontAtlas = struct {
     ptr: *anyopaque,
     fnDrawString: *const fn (*anyopaque, []const u8, *const Vec2) void,
     fnDrawChar: *const fn (*anyopaque, u8, *const Vec2) void,
@@ -124,23 +124,23 @@ pub const GUFontAtlas = struct {
     fnCharSize: *const fn (*anyopaque, u8) Vec2,
     fnSetColor: *const fn (*anyopaque, u32) void,
 
-    pub fn DrawString(self: *GUFontAtlas, str: []const u8, pos: *const Vec2) void {
+    pub fn DrawString(self: *FontAtlas, str: []const u8, pos: *const Vec2) void {
         self.fnDrawString(self.ptr, str, pos);
     }
 
-    pub fn DrawChar(self: *GUFontAtlas, char: u8, pos: *const Vec2) void {
+    pub fn DrawChar(self: *FontAtlas, char: u8, pos: *const Vec2) void {
         self.fnDrawChar(self.ptr, char, pos);
     }
 
-    pub fn StringSize(self: *GUFontAtlas, str: []const u8) Vec2 {
+    pub fn StringSize(self: *FontAtlas, str: []const u8) Vec2 {
         return self.fnStringSize(self.ptr, str);
     }
 
-    pub fn CharSize(self: *GUFontAtlas, char: u8) Vec2 {
+    pub fn CharSize(self: *FontAtlas, char: u8) Vec2 {
         return self.fnCharSize(self.ptr, char);
     }
 
-    pub fn SetColor(self: *GUFontAtlas, color: u32) void {
+    pub fn SetColor(self: *FontAtlas, color: u32) void {
         return self.fnSetColor(self.ptr, color);
     }
 };
@@ -148,30 +148,32 @@ pub const GUFontAtlas = struct {
 // TODO: tiling; i.e. actually make it an atlas
 // FIXME: not sure this needs to be in ui core, maybe adding these to backend
 //  vtable is enough? so we only remember handles (provided by backend)
-pub const GUTextureAtlas = struct {
+pub const TextureAtlas = struct {
     ptr: *anyopaque,
     fnDraw: *const fn (*anyopaque, *const Vec2) void,
     fnSize: *const fn (*anyopaque) Vec2,
     fnSetColor: *const fn (*anyopaque, u32) void,
 
-    pub fn Draw(self: *GUTextureAtlas, pos: *const Vec2) void {
+    pub fn Draw(self: *TextureAtlas, pos: *const Vec2) void {
         self.fnDraw(self.ptr, pos);
     }
 
-    pub fn Size(self: *GUTextureAtlas) Vec2 {
+    pub fn Size(self: *TextureAtlas) Vec2 {
         return self.fnSize(self.ptr);
     }
 
-    pub fn SetColor(self: *GUTextureAtlas, color: u32) void {
+    pub fn SetColor(self: *TextureAtlas, color: u32) void {
         return self.fnSetColor(self.ptr, color);
     }
 };
 
 //------------------------------------------------------------------------------
 
+// TODO: rename to something more appropriate?
+/// inter-frame button state tracking, associated with element via hashtable
 pub const Button = struct {
-    mode: ButtonMode = .Press,
-    state: ButtonState = .Idle,
+    mode: ButtonMode,
+    state: ButtonState,
     area: Rect,
     element: usize,
     activated: bool,
@@ -275,7 +277,7 @@ pub const KeyState = struct {
 
 //------------------------------------------------------------------------------
 
-const Element = struct {
+pub const Element = struct {
     id: usize,
     parent: ?usize,
     children: usize,
@@ -284,7 +286,7 @@ const Element = struct {
     sibling_prev: ?usize,
 
     features: ElementFeatures,
-    layout: GULayout,
+    layout: Layout,
     area: Rect,
     clip: Rect, // the clipping region this element applies to its children
     fill: Vec2, // how big the element is for layout calculations
@@ -327,7 +329,7 @@ const Element = struct {
 // TODO: text wrapping (dynamic multiline text)
 // TODO: clickable element is draggable, on X and Y individually (require abs/rel pos)
 // TODO: enable clipping (i.e. "allow/disallow visual overflow")
-const ElementFeatures = packed struct(u32) {
+pub const ElementFeatures = packed struct(u32) {
     // Visual functionality
     bShowRect: bool, // render the body of the element
     bShowTexture: bool, // use a texture on the element body
@@ -354,14 +356,14 @@ const ElementFeatures = packed struct(u32) {
 /// depth-first walk of element tree with pre- and post-order traversal; elements
 /// with children are touched both on the way down and up, i.e. once before then
 /// again after any children are walked
-const ElementIterator = struct {
+pub const ElementIterator = struct {
     source: []Element,
     this: ?usize,
     prev: ?usize,
 
-    const ElementRelation = enum { Root, Child, Sibling, Parent };
+    pub const ElementRelation = enum { Root, Child, Sibling, Parent };
 
-    const ElementIt = struct {
+    pub const ElementIt = struct {
         element: *Element,
         relation: ElementRelation,
     };
@@ -419,9 +421,9 @@ const ElementIterator = struct {
 
 //------------------------------------------------------------------------------
 
-pub const GULayout = struct {
-    mode_w: GUDimensionMode, // derived from parent 'widths' field if .Auto
-    mode_h: GUDimensionMode, // derived from parent 'heights' field if .Auto
+pub const Layout = struct {
+    mode_w: DimensionMode, // derived from parent 'widths' field if .Auto
+    mode_h: DimensionMode, // derived from parent 'heights' field if .Auto
     color: u32,
     corner: Corner,
     widths: ?[]const f32, // FIXME: doesn't need to be null
@@ -431,12 +433,12 @@ pub const GULayout = struct {
     auto_line_break: bool,
     //scroll: ?
 
-    const default = zeroInit(GULayout, .{
+    const default = zeroInit(Layout, .{
         .auto_line_break = true,
     });
 };
 
-const GULineData = struct {
+const LineData = struct {
     parent_padding: Vec2,
     parent_gaps: Vec2,
     line: u32,
@@ -446,8 +448,8 @@ const GULineData = struct {
     current_w: f32,
     max_w: f32, // incl padding/gaps
 
-    // TODO: impl axis def in GULayout and derive
-    pub inline fn AxisSpacing(self: *GULineData, comptime axis: enum { Main, Cross }, items: usize) f32 {
+    // TODO: impl axis def in Layout and derive
+    pub inline fn AxisSpacing(self: *LineData, comptime axis: enum { Main, Cross }, items: usize) f32 {
         const padding: f32, const gaps: f32 = switch (axis) {
             .Main => .{ // x-axis
                 self.parent_padding.x * 2,
@@ -465,7 +467,7 @@ const GULineData = struct {
 // FIXME: Auto and Fit are not actually referenced anywhere??? so basically it's
 //  assumed an element is Auto(Fit) if a dimension is not Stretch or Fixed, without
 //  actually checking???
-const GUDimensionMode = enum {
+const DimensionMode = enum {
     /// Select one of the other modes based on input/context; see `ParseAuto`.
     Auto,
     /// Reduce to child dimensions plus any margins, etc.
@@ -478,7 +480,7 @@ const GUDimensionMode = enum {
 
     // FIXME: similarly, this function gets used pathologically with the assumption
     //  that the element is Auto, without checking
-    fn ParseAuto(dimension: f32) GUDimensionMode {
+    fn ParseAuto(dimension: f32) DimensionMode {
         const sign = std.math.sign(dimension);
         if (sign == 1) return .Fixed;
         if (sign == 0) return .Fit;
@@ -488,7 +490,7 @@ const GUDimensionMode = enum {
 
     /// Whether the dimension can be finalized before evaluating the size of any
     /// child elements.
-    inline fn IsPreComputable(mode: GUDimensionMode) bool {
+    inline fn IsPreComputable(mode: DimensionMode) bool {
         return mode == .Fixed or mode == .Stretch;
     }
 };
@@ -497,21 +499,21 @@ const GUDimensionMode = enum {
 
 allocator: Allocator,
 
-backend: GUBackend,
+backend: Backend,
 
-fonts: ArrayList(GUFontAtlas), // TODO: impl with handles, update GUFontHandle
-textures: ArrayList(GUTextureAtlas), // TODO: impl with handles, update GUTextureHandle
+fonts: ArrayList(FontAtlas), // TODO: impl with handles, update FontHandle
+textures: ArrayList(TextureAtlas), // TODO: impl with handles, update TextureHandle
 
 element_tree: ArrayList(Element),
 element_stack: ArrayList(usize),
 element_sibling: ?usize, // most recent sibling
 element_queue_line_break: bool,
-element_line_stack: ArrayList(GULineData),
+element_line_stack: ArrayList(LineData),
 
 clip_stack: ArrayList(Rect),
 label_arena: ArenaAllocator,
 
-base_layout: GULayout,
+base_layout: Layout,
 
 buttons: StringHashMap(Button),
 button_delete_queue: ArrayList([]const u8),
@@ -535,7 +537,7 @@ render_commands_clip: ArrayList(RCClip),
 mouse_pt: Vec2,
 mouse_left: KeyState, // LMB
 
-pub fn Init(alloc: Allocator, backend: GUBackend, base_layout: ?GULayout) GU {
+pub fn Init(alloc: Allocator, backend: Backend, base_layout: ?Layout) GU {
     return GU{
         .allocator = alloc,
         .label_arena = .init(alloc),
@@ -597,13 +599,13 @@ pub fn Deinit(self: *GU) void {
 // RESOURCES
 
 // TODO: impl handle-based system
-pub fn AddFont(self: *GU, font: GUFontAtlas) !usize {
+pub fn AddFont(self: *GU, font: FontAtlas) !usize {
     try self.fonts.append(self.allocator, font);
     return self.fonts.items.len - 1;
 }
 
 // TODO: impl handle-based system
-pub fn AddTexture(self: *GU, texture: GUTextureAtlas) !usize {
+pub fn AddTexture(self: *GU, texture: TextureAtlas) !usize {
     try self.textures.append(self.allocator, texture);
     return self.textures.items.len - 1;
 }
@@ -628,7 +630,7 @@ pub fn BeginFrame(self: *GU) !void {
     self.element_sibling = null;
     self.mouse_left.Update();
 
-    self.element_line_stack.append(self.allocator, zeroInit(GULineData, .{ .line = 1 })) catch unreachable;
+    self.element_line_stack.append(self.allocator, zeroInit(LineData, .{ .line = 1 })) catch unreachable;
     if (!self.DoElement(&self.base_layout)) unreachable;
     const element = self.GetElement();
     element.layout.mode_w = .Fixed;
@@ -677,8 +679,8 @@ fn DoElementLineBreakParsing(self: *GU) void {
     defer assert(self.element_line_stack.items.len == 0);
 
     const stack = &self.element_line_stack;
-    var ld_base = zeroInit(GULineData, .{ .line = 1 });
-    var ld: *GULineData = &ld_base;
+    var ld_base = zeroInit(LineData, .{ .line = 1 });
+    var ld: *LineData = &ld_base;
 
     var it = ElementIterator.Init(self.element_tree.items);
     while (it.Next()) |it_data| {
@@ -686,7 +688,7 @@ fn DoElementLineBreakParsing(self: *GU) void {
         const p: ?*Element = if (e.parent) |pa_i| &self.element_tree.items[pa_i] else null;
 
         if (it_data.relation == .Child) {
-            stack.appendAssumeCapacity(zeroInit(GULineData, .{
+            stack.appendAssumeCapacity(zeroInit(LineData, .{
                 .parent_padding = p.?.layout.padding,
                 .parent_gaps = p.?.layout.gaps,
             })); // capacity set during initial tree gen
@@ -737,8 +739,8 @@ fn DoElementPositioning(self: *GU) void {
     defer assert(self.element_line_stack.items.len == 0);
 
     const stack = &self.element_line_stack;
-    var ld_base = zeroInit(GULineData, .{});
-    var ld: *GULineData = &ld_base;
+    var ld_base = zeroInit(LineData, .{});
+    var ld: *LineData = &ld_base;
     var p: ?*Element = null;
 
     var it = ElementIterator.Init(self.element_tree.items);
@@ -754,7 +756,7 @@ fn DoElementPositioning(self: *GU) void {
 
         if (it_data.relation == .Child) {
             p = &self.element_tree.items[e.parent.?];
-            stack.appendAssumeCapacity(zeroInit(GULineData, .{})); // capacity set during initial tree gen
+            stack.appendAssumeCapacity(zeroInit(LineData, .{})); // capacity set during initial tree gen
             ld = &stack.items[stack.items.len - 1];
             e.area.x = p.?.area.x + p.?.layout.padding.x;
             e.area.y = p.?.area.y + p.?.layout.padding.y;
@@ -932,7 +934,7 @@ fn DoElementDebugLog(self: *GU) void {
 
 /// returns whether creating a new container was successful. guarantees the element
 /// tree will be in a valid state (i.e. the same as before calling, on failure).
-pub fn DoElement(self: *GU, layout: ?*const GULayout) bool {
+pub fn DoElement(self: *GU, layout: ?*const Layout) bool {
     if (layout) |lo| {
         if (lo.widths) |w| assert(w.len > 0);
         if (lo.heights) |h| assert(h.len > 0);
@@ -941,7 +943,7 @@ pub fn DoElement(self: *GU, layout: ?*const GULayout) bool {
     const parent_i: ?usize = self.element_stack.getLastOrNull();
     const element_i = self.element_tree.items.len; // next index will equal len
 
-    const ld: *GULineData = &self.element_line_stack.items[self.element_line_stack.items.len - 1];
+    const ld: *LineData = &self.element_line_stack.items[self.element_line_stack.items.len - 1];
 
     self.element_tree.append(self.allocator, e: {
         var e: Element = .empty;
@@ -976,11 +978,11 @@ pub fn DoElement(self: *GU, layout: ?*const GULayout) bool {
         if (pa.first_child == null) pa.first_child = element_i;
         if (pa.layout.widths) |widths| {
             element.area.w = widths[(ld.current_items - 1) % widths.len];
-            element.layout.mode_w = GUDimensionMode.ParseAuto(element.area.w);
+            element.layout.mode_w = DimensionMode.ParseAuto(element.area.w);
         }
         if (pa.layout.heights) |heights| {
             element.area.h = heights[(ld.line - 1) % heights.len];
-            element.layout.mode_h = GUDimensionMode.ParseAuto(element.area.h);
+            element.layout.mode_h = DimensionMode.ParseAuto(element.area.h);
         }
         pa.children += 1; // FIXME: now redundant with line break parsing implemented?
     }
@@ -990,7 +992,7 @@ pub fn DoElement(self: *GU, layout: ?*const GULayout) bool {
         self.element_sibling = null;
     }
 
-    self.element_line_stack.append(self.allocator, zeroInit(GULineData, .{ .line = 1 })) catch |err|
+    self.element_line_stack.append(self.allocator, zeroInit(LineData, .{ .line = 1 })) catch |err|
         std.debug.panic("DoElement: ({s})", .{@errorName(err)});
     return true;
 }
@@ -1371,6 +1373,9 @@ pub fn DoImage(self: *GU, texture: TextureHandle, color: ?u32, scale: f32) void 
     element.area.h = scale * texture_size.y;
 }
 
+// FIXME: remove font as input, use font stack (note: comments like these should
+//  also be interpreted as "implement layout/styling as stacks in general")
+// FIXME: remove color as input, use color stack
 // TODO: add formatting, like standard string formatting functions
 pub fn DoLabel(self: *GU, font: ?FontHandle, color: ?u32, comptime fmt: []const u8, args: anytype) void {
     if (!self.DoElement(null)) return;
