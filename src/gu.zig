@@ -275,8 +275,6 @@ pub const KeyState = struct {
 
 //------------------------------------------------------------------------------
 
-// TODO: impl texture tilesets
-// TODO: impl absolute/relative positioning
 const Element = struct {
     id: usize,
     parent: ?usize,
@@ -285,7 +283,7 @@ const Element = struct {
     sibling_next: ?usize,
     sibling_prev: ?usize,
 
-    features: Features,
+    features: ElementFeatures,
     layout: GULayout,
     area: Rect,
     clip: Rect, // the clipping region this element applies to its children
@@ -312,40 +310,43 @@ const Element = struct {
         .label_str = &.{},
         .label_font = maxInt(usize),
     };
+};
 
-    // TODO: ?? rename bShowRect -> bShowBody or bShowBackground
-    // TODO: body shadow
-    // TODO: body outline
-    // TODO: texture tiling
-    // TODO: texture scaling
-    // TODO: texture stretch to rect size
-    // TODO: texture treated as 9grid
-    // TODO: text wrapping
-    // TODO: text shadow
-    // TODO: text outline
-    // TODO: text wrapping (dynamic multiline text)
-    // TODO: button uses visual button styling (or is left unstyled)
-    // TODO: enable clipping (i.e. "allow/disallow visual overflow")
-    const Features = packed struct(u32) {
-        // Visual functionality
-        bShowRect: bool, // render the body of the element
-        bShowTexture: bool, // use a texture on the element body
-        bShowLabel: bool,
+// TODO: ?? rename bShowRect -> bShowBody or bShowBackground
+// TODO: body shadow
+// TODO: body outline
+// TODO: body absolute positioning (like CSS)
+// TODO: body relative positioning (like CSS)
+// TODO: body contents scrollable, on X and Y individually
+// TODO: texture tiling
+// TODO: texture scaling
+// TODO: texture stretch to rect size
+// TODO: texture treated as 9grid
+// TODO: text shadow
+// TODO: text outline
+// TODO: text wrapping (dynamic multiline text)
+// TODO: clickable element is draggable, on X and Y individually (require abs/rel pos)
+// TODO: enable clipping (i.e. "allow/disallow visual overflow")
+const ElementFeatures = packed struct(u32) {
+    // Visual functionality
+    bShowRect: bool, // render the body of the element
+    bShowTexture: bool, // use a texture on the element body
+    bShowLabel: bool,
 
-        // Layout functionality
-        bLineBreak: bool,
+    // Layout functionality
+    bLineBreak: bool,
 
-        // Button functionality
-        bClickable: bool,
-        bClickDown: bool,
-        bClickHover: bool,
-        bClickDepressed: bool, // button visually "idles" in down-state
+    // Button functionality
+    bClickable: bool,
+    bClickDown: bool,
+    bClickHover: bool,
+    bClickDepressed: bool, // button visually "idles" in down-state
+    bClickNoStyle: bool, // button visually looks like a regular element
 
-        _: u24,
+    _: u23,
 
-        const none: Features = @bitCast(@as(u32, 0));
-        const all: Features = @bitCast(maxInt(u32));
-    };
+    const none: ElementFeatures = @bitCast(@as(u32, 0));
+    const all: ElementFeatures = @bitCast(maxInt(u32));
 };
 
 // TODO: specify traversal order during Init, as a convenience so that user doesn't
@@ -1025,23 +1026,24 @@ pub fn EndElement(self: *GU) void {
             const btn_key = self.GetElementKey(element);
             const btn_info = self.buttons.getOrPut(btn_key) catch break :btn &.empty;
 
-            // TODO: button mode should come from push stack (currently defaults .Press)
             const btn = btn_info.value_ptr;
             if (!btn_info.found_existing) btn.* = .empty;
             btn.element = element.id;
-            btn.mode = self.btn_mode_stack.getLastOrNull() orelse ButtonMode.default;
+            btn.mode = self.btn_mode_stack.getLastOrNull() orelse .default;
             break :btn btn;
         };
 
         // visual updating
-        const btn_style = &self.btn_style_arena.items[self.GetButtonStyle()];
-        element.layout.color = switch (btn.state) {
-            .Idle => if (element.features.bClickDepressed) btn_style.ColorDown else btn_style.ColorIdle,
-            .Hover => if (element.features.bClickDepressed) btn_style.ColorIdle else btn_style.ColorHover,
-            .Down => btn_style.ColorDown,
-        };
-        element.layout.padding = .{ .x = btn_style.PaddingHor, .y = btn_style.PaddingVer };
-        element.layout.corner = .{ .radius = btn_style.CornerRad, .style = btn_style.CornerShape };
+        if (!element.features.bClickNoStyle) {
+            const btn_style = &self.btn_style_arena.items[self.GetButtonStyle()];
+            element.layout.color = switch (btn.state) {
+                .Idle => if (element.features.bClickDepressed) btn_style.ColorDown else btn_style.ColorIdle,
+                .Hover => if (element.features.bClickDepressed) btn_style.ColorIdle else btn_style.ColorHover,
+                .Down => btn_style.ColorDown,
+            };
+            element.layout.padding = .{ .x = btn_style.PaddingHor, .y = btn_style.PaddingVer };
+            element.layout.corner = .{ .radius = btn_style.CornerRad, .style = btn_style.CornerShape };
+        }
     }
 
     // Texture: behaviour of sizing the element with relation to the texture (e.g.
