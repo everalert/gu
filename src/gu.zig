@@ -517,24 +517,16 @@ base_layout: Layout,
 
 buttons: StringHashMap(Button),
 button_delete_queue: ArrayList([]const u8),
-btn_mode_stack: ArrayList(ButtonMode),
-btn_mode_stack_count: usize,
+btn_mode_vstk: ValueStack(ButtonMode),
 
 btn_style_arena: ArrayList(ButtonStyle), // arraylist for the typing/alignment, usage is like arena
-btn_style_stack_padding_ver: ArrayList(f32),
-btn_style_stack_padding_hor: ArrayList(f32),
-btn_style_stack_corner_rad: ArrayList(f32),
-btn_style_stack_corner_shape: ArrayList(CornerShape),
-btn_style_stack_color_idle: ArrayList(u32),
-btn_style_stack_color_hover: ArrayList(u32),
-btn_style_stack_color_down: ArrayList(u32),
-btn_style_stack_padding_ver_count: usize,
-btn_style_stack_padding_hor_count: usize,
-btn_style_stack_corner_rad_count: usize,
-btn_style_stack_corner_shape_count: usize,
-btn_style_stack_color_idle_count: usize,
-btn_style_stack_color_hover_count: usize,
-btn_style_stack_color_down_count: usize,
+btn_style_vstk_padding_ver: ValueStack(f32),
+btn_style_vstk_padding_hor: ValueStack(f32),
+btn_style_vstk_corner_rad: ValueStack(f32),
+btn_style_vstk_corner_shape: ValueStack(CornerShape),
+btn_style_vstk_color_idle: ValueStack(u32),
+btn_style_vstk_color_hover: ValueStack(u32),
+btn_style_vstk_color_down: ValueStack(u32),
 btn_style_stack_changed: bool,
 
 render_commands: ArrayList(RenderCommand),
@@ -558,24 +550,16 @@ pub fn Init(alloc: Allocator, backend: Backend, base_layout: ?Layout) GU {
         .clip_stack = .empty,
         .buttons = .init(alloc),
         .button_delete_queue = .empty,
-        .btn_mode_stack = .empty,
-        .btn_mode_stack_count = 0,
+        .btn_mode_vstk = .Init(alloc),
         .btn_style_arena = .empty,
-        .btn_style_stack_padding_ver = .empty,
-        .btn_style_stack_padding_hor = .empty,
-        .btn_style_stack_corner_rad = .empty,
-        .btn_style_stack_corner_shape = .empty,
-        .btn_style_stack_color_idle = .empty,
-        .btn_style_stack_color_hover = .empty,
-        .btn_style_stack_color_down = .empty,
+        .btn_style_vstk_padding_ver = .Init(alloc),
+        .btn_style_vstk_padding_hor = .Init(alloc),
+        .btn_style_vstk_corner_rad = .Init(alloc),
+        .btn_style_vstk_corner_shape = .Init(alloc),
+        .btn_style_vstk_color_idle = .Init(alloc),
+        .btn_style_vstk_color_hover = .Init(alloc),
+        .btn_style_vstk_color_down = .Init(alloc),
         .btn_style_stack_changed = false,
-        .btn_style_stack_padding_ver_count = 0,
-        .btn_style_stack_padding_hor_count = 0,
-        .btn_style_stack_corner_rad_count = 0,
-        .btn_style_stack_corner_shape_count = 0,
-        .btn_style_stack_color_idle_count = 0,
-        .btn_style_stack_color_hover_count = 0,
-        .btn_style_stack_color_down_count = 0,
         .render_commands = .empty,
         .render_commands_rect = .empty,
         .render_commands_text = .empty,
@@ -590,15 +574,15 @@ pub fn Init(alloc: Allocator, backend: Backend, base_layout: ?Layout) GU {
 
 pub fn Deinit(self: *GU) void {
     self.label_arena.deinit();
-    self.btn_mode_stack.deinit(self.allocator);
+    self.btn_mode_vstk.Deinit();
     self.btn_style_arena.deinit(self.allocator);
-    self.btn_style_stack_padding_ver.deinit(self.allocator);
-    self.btn_style_stack_padding_hor.deinit(self.allocator);
-    self.btn_style_stack_corner_rad.deinit(self.allocator);
-    self.btn_style_stack_corner_shape.deinit(self.allocator);
-    self.btn_style_stack_color_idle.deinit(self.allocator);
-    self.btn_style_stack_color_hover.deinit(self.allocator);
-    self.btn_style_stack_color_down.deinit(self.allocator);
+    self.btn_style_vstk_padding_ver.Deinit();
+    self.btn_style_vstk_padding_hor.Deinit();
+    self.btn_style_vstk_corner_rad.Deinit();
+    self.btn_style_vstk_corner_shape.Deinit();
+    self.btn_style_vstk_color_idle.Deinit();
+    self.btn_style_vstk_color_hover.Deinit();
+    self.btn_style_vstk_color_down.Deinit();
     self.render_commands.deinit(self.allocator);
     self.render_commands_rect.deinit(self.allocator);
     self.render_commands_text.deinit(self.allocator);
@@ -632,7 +616,7 @@ pub fn AddTexture(self: *GU, texture: TextureAtlas) !usize {
 pub fn BeginFrame(self: *GU) !void {
     assert(self.element_stack.items.len == 0);
     assert(self.element_line_stack.items.len == 0);
-    assert(self.btn_mode_stack.items.len == 0);
+    assert(self.btn_mode_vstk.count == 0);
 
     const surface_size = self.backend.GetSurfaceDimensions();
 
@@ -1047,7 +1031,7 @@ pub fn EndElement(self: *GU) void {
             const btn = btn_info.value_ptr;
             if (!btn_info.found_existing) btn.* = .empty;
             btn.element = element.id;
-            btn.mode = self.btn_mode_stack.getLastOrNull() orelse .default;
+            btn.mode = self.btn_mode_vstk.GetOrNull() orelse .default;
             break :btn btn;
         };
 
@@ -1134,6 +1118,7 @@ pub fn SetElementSize(self: *GU, w: f32, h: f32) void {
 
 // FIXME: (button styles) the actual indexing of the arena could behave like a
 //  stack, thereby avoiding unnecessary pushing of redundant styles, no?
+// TODO: ?? use ValueStack for the ButtonStyle arena itself?
 
 /// returns `btn_style_arena` index for current button style configuration.
 fn GetButtonStyle(self: *GU) usize {
@@ -1145,49 +1130,43 @@ fn GetButtonStyle(self: *GU) usize {
     return self.btn_style_arena.items.len - 1;
 }
 
+// implicitly asserts all value stacks have at least one item via `Get`
 fn GenerateButtonStyle(self: *GU) void {
     assert(self.btn_style_stack_changed == true);
-    assert(self.btn_style_stack_padding_ver.items.len > 0);
-    assert(self.btn_style_stack_padding_hor.items.len > 0);
-    assert(self.btn_style_stack_corner_rad.items.len > 0);
-    assert(self.btn_style_stack_corner_shape.items.len > 0);
-    assert(self.btn_style_stack_color_idle.items.len > 0);
-    assert(self.btn_style_stack_color_hover.items.len > 0);
-    assert(self.btn_style_stack_color_down.items.len > 0);
 
     self.btn_style_stack_changed = false;
     self.btn_style_arena.append(self.allocator, ButtonStyle{
-        .PaddingVer = self.btn_style_stack_padding_ver.getLast(),
-        .PaddingHor = self.btn_style_stack_padding_hor.getLast(),
-        .CornerRad = self.btn_style_stack_corner_rad.getLast(),
-        .CornerShape = self.btn_style_stack_corner_shape.getLast(),
-        .ColorIdle = self.btn_style_stack_color_idle.getLast(),
-        .ColorHover = self.btn_style_stack_color_hover.getLast(),
-        .ColorDown = self.btn_style_stack_color_down.getLast(),
-    }) catch |e| std.log.err("(GenerateButtonStyle) ERROR: {t}", .{e});
+        .PaddingVer = self.btn_style_vstk_padding_ver.Get(),
+        .PaddingHor = self.btn_style_vstk_padding_hor.Get(),
+        .CornerRad = self.btn_style_vstk_corner_rad.Get(),
+        .CornerShape = self.btn_style_vstk_corner_shape.Get(),
+        .ColorIdle = self.btn_style_vstk_color_idle.Get(),
+        .ColorHover = self.btn_style_vstk_color_hover.Get(),
+        .ColorDown = self.btn_style_vstk_color_down.Get(),
+    }) catch |e| std.log.err("(GenerateButtonStyle) append failed: {t}", .{e});
 }
 
 fn ResetButtonStyle(self: *GU) void {
     self.btn_style_arena.clearRetainingCapacity();
-    ValueStackReset(f32, &self.btn_style_stack_padding_ver, &self.btn_style_stack_padding_ver_count);
-    ValueStackReset(f32, &self.btn_style_stack_padding_hor, &self.btn_style_stack_padding_hor_count);
-    ValueStackReset(f32, &self.btn_style_stack_corner_rad, &self.btn_style_stack_corner_rad_count);
-    ValueStackReset(CornerShape, &self.btn_style_stack_corner_shape, &self.btn_style_stack_corner_shape_count);
-    ValueStackReset(u32, &self.btn_style_stack_color_idle, &self.btn_style_stack_color_idle_count);
-    ValueStackReset(u32, &self.btn_style_stack_color_hover, &self.btn_style_stack_color_hover_count);
-    ValueStackReset(u32, &self.btn_style_stack_color_down, &self.btn_style_stack_color_down_count);
+    self.btn_style_vstk_padding_ver.Reset();
+    self.btn_style_vstk_padding_hor.Reset();
+    self.btn_style_vstk_corner_rad.Reset();
+    self.btn_style_vstk_corner_shape.Reset();
+    self.btn_style_vstk_color_idle.Reset();
+    self.btn_style_vstk_color_hover.Reset();
+    self.btn_style_vstk_color_down.Reset();
     self.InitButtonStyle();
 }
 
 fn InitButtonStyle(self: *GU) void {
     assert(self.btn_style_arena.items.len == 0);
-    assert(self.btn_style_stack_padding_ver.items.len == 0);
-    assert(self.btn_style_stack_padding_hor.items.len == 0);
-    assert(self.btn_style_stack_corner_rad.items.len == 0);
-    assert(self.btn_style_stack_corner_shape.items.len == 0);
-    assert(self.btn_style_stack_color_idle.items.len == 0);
-    assert(self.btn_style_stack_color_hover.items.len == 0);
-    assert(self.btn_style_stack_color_down.items.len == 0);
+    assert(self.btn_style_vstk_padding_ver.count == 0);
+    assert(self.btn_style_vstk_padding_hor.count == 0);
+    assert(self.btn_style_vstk_corner_rad.count == 0);
+    assert(self.btn_style_vstk_corner_shape.count == 0);
+    assert(self.btn_style_vstk_color_idle.count == 0);
+    assert(self.btn_style_vstk_color_hover.count == 0);
+    assert(self.btn_style_vstk_color_down.count == 0);
     self.PushButtonStyle(.default);
     self.GenerateButtonStyle();
 }
@@ -1195,57 +1174,80 @@ fn InitButtonStyle(self: *GU) void {
 //------------------------------------------------------------------------------
 // PUSH/POP/SETNEXT API
 
-// errorless value stacks. stack usage is reference-counted independently of
-// stack size, and pushing/popping is synchronized to this counter, such that
-// user code can always push/pop without worrying about error handling. in such
-// an error case, the actual value used will be the top value as usual, and the
-// developer is expected to identify this during development and tune the stack
-// capacity to their use case.
-
-// TODO: convert/formalize as struct; use MultiArrayList with handles in GU struct
-//  to manage all the stacks
+// TODO: testcase - bounds-checking using fixed buffer allocator
 // TODO: auto-pop "freelist" (SetNext api)
 // TODO: `ValueStackSetNext`
 // TODO: `ValueStackAutoPop` to use where the value should pop by itself after SetNext
-// TODO: `ValueStackGetValue` to replace manual indexing
-// TODO: testcase - bounds-checking using fixed buffer allocator
 // TODO: ?? take mutable slice instead of allocator, and require upfront memory
+// TODO: ?? use MultiArrayList with handles in GU struct to manage all the stacks
+/// errorless value stacks. stack usage is reference-counted independently of
+/// stack size, and pushing/popping is synchronized to this counter, such that
+/// user code can always push/pop without worrying about error handling. in such
+/// an error case, the actual value used will be the top value as usual, and the
+/// developer is expected to identify this during development and tune the stack
+/// capacity to their use case.
+pub fn ValueStack(comptime ValueT: type) type {
+    return struct {
+        alloc: Allocator, // FIXME: drop the allocator, use slices exclusively
+        stack: ArrayList(ValueT),
+        count: usize,
 
-inline fn ValueStackPush(
-    comptime T: type,
-    alloc: Allocator,
-    stack: *ArrayList(T),
-    count: *usize,
-    value: T,
-) void {
-    assert(stack.items.len >= count.*);
+        const ValueStackT = @This();
 
-    stack.append(alloc, value) catch |e| std.log.debug("(PushStackValue) append failed: {t}", .{e});
-    count.* += 1;
-}
+        fn Init(alloc: Allocator) ValueStackT {
+            return .{
+                .alloc = alloc,
+                .stack = .empty,
+                .count = 0,
+            };
+        }
 
-inline fn ValueStackPop(comptime T: type, stack: *ArrayList(T), count: *usize) void {
-    assert(stack.items.len >= count.*);
-    assert(stack.items.len > 0);
+        fn Deinit(self: *ValueStackT) void {
+            self.stack.clearAndFree(self.alloc);
+        }
 
-    if (stack.items.len == count.*) _ = stack.pop();
-    count.* -= 1;
-}
+        fn Reset(self: *ValueStackT) void {
+            self.stack.clearRetainingCapacity();
+            self.count = 0;
+        }
 
-inline fn ValueStackReset(comptime T: type, stack: *ArrayList(T), count: *usize) void {
-    stack.clearRetainingCapacity();
-    count.* = 0;
+        inline fn Get(self: *ValueStackT) ValueT {
+            assert(self.stack.items.len > 0);
+            return self.stack.getLast();
+        }
+
+        inline fn GetOrNull(self: *ValueStackT) ?ValueT {
+            return self.stack.getLastOrNull();
+        }
+
+        inline fn Push(self: *ValueStackT, value: ValueT) void {
+            assert(self.count >= self.stack.items.len);
+            defer self.count += 1;
+
+            self.stack.append(self.alloc, value) catch |e|
+                std.log.debug("(PushStackValue) append failed: {t}", .{e});
+        }
+
+        inline fn Pop(self: *ValueStackT) void {
+            assert(self.count >= self.stack.items.len);
+            assert(self.count > 0);
+            defer self.count -= 1;
+
+            if (self.stack.items.len == self.count)
+                _ = self.stack.pop();
+        }
+    };
 }
 
 //--------------------------------------
 // BUTTON MODE
 
 pub fn PushButtonMode(self: *GU, mode: ButtonMode) void {
-    ValueStackPush(ButtonMode, self.allocator, &self.btn_mode_stack, &self.btn_mode_stack_count, mode);
+    self.btn_mode_vstk.Push(mode);
 }
 
 pub fn PopButtonMode(self: *GU) void {
-    ValueStackPop(ButtonMode, &self.btn_mode_stack, &self.btn_mode_stack_count);
+    self.btn_mode_vstk.Pop();
 }
 
 //--------------------------------------
@@ -1282,37 +1284,37 @@ pub fn PushButtonColor(self: *GU, idle: u32, hover: u32, down: u32) void {
 }
 
 pub fn PushButtonPaddingVertical(self: *GU, value: f32) void {
-    ValueStackPush(f32, self.allocator, &self.btn_style_stack_padding_ver, &self.btn_style_stack_padding_ver_count, value);
+    self.btn_style_vstk_padding_ver.Push(value);
     self.btn_style_stack_changed = true;
 }
 
 pub fn PushButtonPaddingHorizontal(self: *GU, value: f32) void {
-    ValueStackPush(f32, self.allocator, &self.btn_style_stack_padding_hor, &self.btn_style_stack_padding_hor_count, value);
+    self.btn_style_vstk_padding_hor.Push(value);
     self.btn_style_stack_changed = true;
 }
 
 pub fn PushButtonCornerRadius(self: *GU, value: f32) void {
-    ValueStackPush(f32, self.allocator, &self.btn_style_stack_corner_rad, &self.btn_style_stack_corner_rad_count, value);
+    self.btn_style_vstk_corner_rad.Push(value);
     self.btn_style_stack_changed = true;
 }
 
 pub fn PushButtonCornerShape(self: *GU, value: CornerShape) void {
-    ValueStackPush(CornerShape, self.allocator, &self.btn_style_stack_corner_shape, &self.btn_style_stack_corner_shape_count, value);
+    self.btn_style_vstk_corner_shape.Push(value);
     self.btn_style_stack_changed = true;
 }
 
 pub fn PushButtonColorIdle(self: *GU, value: u32) void {
-    ValueStackPush(u32, self.allocator, &self.btn_style_stack_color_idle, &self.btn_style_stack_color_idle_count, value);
+    self.btn_style_vstk_color_idle.Push(value);
     self.btn_style_stack_changed = true;
 }
 
 pub fn PushButtonColorHover(self: *GU, value: u32) void {
-    ValueStackPush(u32, self.allocator, &self.btn_style_stack_color_hover, &self.btn_style_stack_color_hover_count, value);
+    self.btn_style_vstk_color_hover.Push(value);
     self.btn_style_stack_changed = true;
 }
 
 pub fn PushButtonColorDown(self: *GU, value: u32) void {
-    ValueStackPush(u32, self.allocator, &self.btn_style_stack_color_down, &self.btn_style_stack_color_down_count, value);
+    self.btn_style_vstk_color_down.Push(value);
     self.btn_style_stack_changed = true;
 }
 
@@ -1347,37 +1349,37 @@ pub fn PopButtonColor(self: *GU) void {
 }
 
 pub fn PopButtonPaddingVertical(self: *GU) void {
-    ValueStackPop(f32, &self.btn_style_stack_padding_ver, &self.btn_style_stack_padding_ver_count);
+    self.btn_style_vstk_padding_ver.Pop();
     self.btn_style_stack_changed = true;
 }
 
 pub fn PopButtonPaddingHorizontal(self: *GU) void {
-    ValueStackPop(f32, &self.btn_style_stack_padding_hor, &self.btn_style_stack_padding_hor_count);
+    self.btn_style_vstk_padding_hor.Pop();
     self.btn_style_stack_changed = true;
 }
 
 pub fn PopButtonCornerRadius(self: *GU) void {
-    ValueStackPop(f32, &self.btn_style_stack_corner_rad, &self.btn_style_stack_corner_rad_count);
+    self.btn_style_vstk_corner_rad.Pop();
     self.btn_style_stack_changed = true;
 }
 
 pub fn PopButtonCornerShape(self: *GU) void {
-    ValueStackPop(CornerShape, &self.btn_style_stack_corner_shape, &self.btn_style_stack_corner_shape_count);
+    self.btn_style_vstk_corner_shape.Pop();
     self.btn_style_stack_changed = true;
 }
 
 pub fn PopButtonColorIdle(self: *GU) void {
-    ValueStackPop(u32, &self.btn_style_stack_color_idle, &self.btn_style_stack_color_idle_count);
+    self.btn_style_vstk_color_idle.Pop();
     self.btn_style_stack_changed = true;
 }
 
 pub fn PopButtonColorHover(self: *GU) void {
-    ValueStackPop(u32, &self.btn_style_stack_color_hover, &self.btn_style_stack_color_hover_count);
+    self.btn_style_vstk_color_hover.Pop();
     self.btn_style_stack_changed = true;
 }
 
 pub fn PopButtonColorDown(self: *GU) void {
-    ValueStackPop(u32, &self.btn_style_stack_color_down, &self.btn_style_stack_color_down_count);
+    self.btn_style_vstk_color_down.Pop();
     self.btn_style_stack_changed = true;
 }
 
