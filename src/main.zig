@@ -627,8 +627,7 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoLineBreak();
         if (gu.DoElement(&LAYOUT_RED)) {
             defer gu.EndElement();
-            gu.PushButtonMode(.Release);
-            defer gu.PopButtonMode();
+            gu.SetNextButtonMode(.Release);
             if (gu.DoButton(font, "Button", .{})) {
                 std.log.debug("b1 activation result!!", .{});
             }
@@ -642,10 +641,9 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
         gu.DoLabel(null, 0xC000C0FF, "testblock2", .{});
-        gu.PushButtonColor(0x800000FF, 0xC00000FF, 0x400000FF);
-        defer gu.PopButtonColor();
-        gu.PushButtonCorner(32, StyleSuperellipse);
-        defer gu.PopButtonCorner();
+        gu.SetNextButtonColor(0x800000FF, 0xC00000FF, 0x400000FF);
+        gu.SetNextButtonCorner(32, StyleSuperellipse);
+        gu.SetNextButtonPadding(12, 3);
         if (gu.DoToggleButton(&app.b2toggle, font, "ToggleButton: {any}", .{app.b2toggle})) {
             std.log.debug("b2 toggled!!", .{});
         }

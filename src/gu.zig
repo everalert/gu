@@ -960,6 +960,18 @@ pub fn DoElement(self: *GU, layout: ?*const Layout) bool {
         return false;
     };
 
+    // TODO: manage this elsewhere and make this a single function call, else
+    //  the upcoming billion stacks will overrun this fn
+    // process SetNext api
+    self.btn_mode_vstk.PushDequeue(element_i);
+    self.btn_style_vstk_padding_ver.PushDequeue(element_i);
+    self.btn_style_vstk_padding_hor.PushDequeue(element_i);
+    self.btn_style_vstk_corner_rad.PushDequeue(element_i);
+    self.btn_style_vstk_corner_shape.PushDequeue(element_i);
+    self.btn_style_vstk_color_idle.PushDequeue(element_i);
+    self.btn_style_vstk_color_hover.PushDequeue(element_i);
+    self.btn_style_vstk_color_down.PushDequeue(element_i);
+
     const parent: ?*Element = if (parent_i) |i| &self.element_tree.items[i] else null;
     const element: *Element = &self.element_tree.items[element_i];
 
@@ -1007,6 +1019,20 @@ pub fn EndElement(self: *GU) void {
     const parent: ?*Element = if (element.parent) |p| &self.element_tree.items[p] else null;
     self.element_sibling = element_i;
     self.element_queue_line_break = false; // cleanup unused line break
+
+    // TODO: manage this elsewhere and make this a single function call, else
+    //  the upcoming billion stacks will overrun this fn
+    // process SetNext api
+    defer {
+        self.btn_mode_vstk.PopAuto(element_i);
+        self.btn_style_vstk_padding_ver.PopAuto(element_i);
+        self.btn_style_vstk_padding_hor.PopAuto(element_i);
+        self.btn_style_vstk_corner_rad.PopAuto(element_i);
+        self.btn_style_vstk_corner_shape.PopAuto(element_i);
+        self.btn_style_vstk_color_idle.PopAuto(element_i);
+        self.btn_style_vstk_color_hover.PopAuto(element_i);
+        self.btn_style_vstk_color_down.PopAuto(element_i);
+    }
 
     if (element.layout.mode_w == .Stretch) {
         assert(parent != null);
@@ -1175,17 +1201,6 @@ fn InitButtonStyle(self: *GU) void {
 // PUSH/POP/SETNEXT API
 
 // TODO: testcase - bounds-checking using fixed buffer allocator
-// TODO: auto-pop "freelist" (SetNext api), ValueStackSetNext, ValueStackAutoPop
-// NOTE: SetNext/AutoPop cannot simply be implemented here, because to time the
-//  autopop correctly there needs to be some awareness of which element actually
-//  received the pushed value. the ability to push non-auto values at any point
-//  also complicates things, because it cannot be assumed that an auto value will
-//  be at the top of the stack. at least, may need to experiment with a "push
-//  queue" that lives outside this struct, which pushes/pops using the normal
-//  methods from within DoElement/EndElement themselves. there may also need to
-//  be a constraint in place that says: if there is a queued push waiting, you
-//  cannot push any more values to that queue until the push has been consumed,
-//  and the stack size must be restored by the time we get back to EndElement.
 // TODO: ?? take mutable slice instead of allocator, and require upfront memory
 // TODO: ?? use MultiArrayList with handles in GU struct to manage all the stacks
 /// errorless value stacks. stack usage is reference-counted independently of
@@ -1198,28 +1213,35 @@ pub fn ValueStack(comptime ValueT: type) type {
     return struct {
         alloc: Allocator, // FIXME: drop the allocator, use slices exclusively
         stack_values: ArrayList(ValueT),
-        //stack_pop_queue: ArrayList(usize),
+        stack_pop_queue: ArrayList(QueueItem),
+        stack_queued: bool,
         count: usize,
 
         const ValueStackT = @This();
+
+        pub const QueueItem = struct {
+            id: usize,
+            count: usize,
+        };
 
         pub fn Init(alloc: Allocator) ValueStackT {
             return .{
                 .alloc = alloc,
                 .stack_values = .empty,
-                //.stack_pop_queue = .empty,
+                .stack_pop_queue = .empty,
+                .stack_queued = false,
                 .count = 0,
             };
         }
 
         pub fn Deinit(self: *ValueStackT) void {
             self.stack_values.clearAndFree(self.alloc);
-            //self.stack_pop_queue.clearAndFree(self.alloc);
+            self.stack_pop_queue.clearAndFree(self.alloc);
         }
 
         pub fn Reset(self: *ValueStackT) void {
             self.stack_values.clearRetainingCapacity();
-            //self.stack_pop_queue.clearRetainingCapacity();
+            self.stack_pop_queue.clearRetainingCapacity();
             self.count = 0;
         }
 
@@ -1235,6 +1257,7 @@ pub fn ValueStack(comptime ValueT: type) type {
         // inline because intended to be wrapped by user-facing API fn
         pub inline fn Push(self: *ValueStackT, value: ValueT) void {
             assert(self.count >= self.stack_values.items.len);
+            assert(self.stack_queued == false); // block against misusing stack
             defer self.count += 1;
 
             self.stack_values.append(self.alloc, value) catch
@@ -1250,11 +1273,40 @@ pub fn ValueStack(comptime ValueT: type) type {
             if (self.stack_values.items.len == self.count)
                 _ = self.stack_values.pop();
         }
+
+        // inline because intended to be wrapped by user-facing API fn
+        pub inline fn PushEnqueue(self: *ValueStackT, value: ValueT) void {
+            self.Push(value);
+            self.stack_queued = true;
+        }
+
+        pub fn PushDequeue(self: *ValueStackT, id: usize) void {
+            if (!self.stack_queued) return;
+
+            self.stack_queued = false;
+            self.stack_pop_queue.append(self.alloc, QueueItem{
+                .count = self.count,
+                .id = id,
+            }) catch @panic("this is your sign to get around to using slices, idiot.");
+        }
+
+        pub fn PopAuto(self: *ValueStackT, id: usize) void {
+            const next = self.stack_pop_queue.getLastOrNull() orelse return;
+
+            if (next.id != id) return;
+            assert(next.count == self.count); // make sure user popped everything
+            self.Pop();
+            _ = self.stack_pop_queue.pop();
+        }
     };
 }
 
 //--------------------------------------
 // BUTTON MODE
+
+pub fn SetNextButtonMode(self: *GU, mode: ButtonMode) void {
+    self.btn_mode_vstk.PushEnqueue(mode);
+}
 
 pub fn PushButtonMode(self: *GU, mode: ButtonMode) void {
     self.btn_mode_vstk.Push(mode);
@@ -1267,9 +1319,74 @@ pub fn PopButtonMode(self: *GU) void {
 //--------------------------------------
 // BUTTON STYLE
 
+pub fn SetNextButtonStyle(self: *GU, style: ButtonStyle) void {
+    self.SetNextButtonPaddingHorizontal(style.PaddingHor);
+    self.SetNextButtonPaddingVertical(style.PaddingVer);
+    self.SetNextButtonCornerRadius(style.CornerRad);
+    self.SetNextButtonCornerShape(style.CornerShape);
+    self.SetNextButtonColorIdle(style.ColorIdle);
+    self.SetNextButtonColorHover(style.ColorHover);
+    self.SetNextButtonColorDown(style.ColorDown);
+    self.btn_style_stack_changed = true;
+}
+
+pub fn SetNextButtonPadding(self: *GU, horizontal: f32, vertical: f32) void {
+    self.SetNextButtonPaddingHorizontal(horizontal);
+    self.SetNextButtonPaddingVertical(vertical);
+    self.btn_style_stack_changed = true;
+}
+
+pub fn SetNextButtonCorner(self: *GU, radius: f32, shape: CornerShape) void {
+    self.SetNextButtonCornerRadius(radius);
+    self.SetNextButtonCornerShape(shape);
+    self.btn_style_stack_changed = true;
+}
+
+pub fn SetNextButtonColor(self: *GU, idle: u32, hover: u32, down: u32) void {
+    self.SetNextButtonColorIdle(idle);
+    self.SetNextButtonColorHover(hover);
+    self.SetNextButtonColorDown(down);
+    self.btn_style_stack_changed = true;
+}
+
+pub fn SetNextButtonPaddingHorizontal(self: *GU, value: f32) void {
+    self.btn_style_vstk_padding_hor.PushEnqueue(value);
+    self.btn_style_stack_changed = true;
+}
+
+pub fn SetNextButtonPaddingVertical(self: *GU, value: f32) void {
+    self.btn_style_vstk_padding_ver.PushEnqueue(value);
+    self.btn_style_stack_changed = true;
+}
+
+pub fn SetNextButtonCornerRadius(self: *GU, value: f32) void {
+    self.btn_style_vstk_corner_rad.PushEnqueue(value);
+    self.btn_style_stack_changed = true;
+}
+
+pub fn SetNextButtonCornerShape(self: *GU, value: CornerShape) void {
+    self.btn_style_vstk_corner_shape.PushEnqueue(value);
+    self.btn_style_stack_changed = true;
+}
+
+pub fn SetNextButtonColorIdle(self: *GU, value: u32) void {
+    self.btn_style_vstk_color_idle.PushEnqueue(value);
+    self.btn_style_stack_changed = true;
+}
+
+pub fn SetNextButtonColorHover(self: *GU, value: u32) void {
+    self.btn_style_vstk_color_hover.PushEnqueue(value);
+    self.btn_style_stack_changed = true;
+}
+
+pub fn SetNextButtonColorDown(self: *GU, value: u32) void {
+    self.btn_style_vstk_color_down.PushEnqueue(value);
+    self.btn_style_stack_changed = true;
+}
+
 pub fn PushButtonStyle(self: *GU, style: ButtonStyle) void {
-    self.PushButtonPaddingVertical(style.PaddingVer);
     self.PushButtonPaddingHorizontal(style.PaddingHor);
+    self.PushButtonPaddingVertical(style.PaddingVer);
     self.PushButtonCornerRadius(style.CornerRad);
     self.PushButtonCornerShape(style.CornerShape);
     self.PushButtonColorIdle(style.ColorIdle);
@@ -1278,9 +1395,9 @@ pub fn PushButtonStyle(self: *GU, style: ButtonStyle) void {
     self.btn_style_stack_changed = true;
 }
 
-pub fn PushButtonPadding(self: *GU, vertical: f32, horizontal: f32) void {
-    self.PushButtonPaddingVertical(vertical);
+pub fn PushButtonPadding(self: *GU, horizontal: f32, vertical: f32) void {
     self.PushButtonPaddingHorizontal(horizontal);
+    self.PushButtonPaddingVertical(vertical);
     self.btn_style_stack_changed = true;
 }
 
@@ -1297,13 +1414,13 @@ pub fn PushButtonColor(self: *GU, idle: u32, hover: u32, down: u32) void {
     self.btn_style_stack_changed = true;
 }
 
-pub fn PushButtonPaddingVertical(self: *GU, value: f32) void {
-    self.btn_style_vstk_padding_ver.Push(value);
+pub fn PushButtonPaddingHorizontal(self: *GU, value: f32) void {
+    self.btn_style_vstk_padding_hor.Push(value);
     self.btn_style_stack_changed = true;
 }
 
-pub fn PushButtonPaddingHorizontal(self: *GU, value: f32) void {
-    self.btn_style_vstk_padding_hor.Push(value);
+pub fn PushButtonPaddingVertical(self: *GU, value: f32) void {
+    self.btn_style_vstk_padding_ver.Push(value);
     self.btn_style_stack_changed = true;
 }
 
@@ -1333,8 +1450,8 @@ pub fn PushButtonColorDown(self: *GU, value: u32) void {
 }
 
 pub fn PopButtonStyle(self: *GU) void {
-    self.PopButtonPaddingVertical();
     self.PopButtonPaddingHorizontal();
+    self.PopButtonPaddingVertical();
     self.PopButtonCornerRadius();
     self.PopButtonCornerShape();
     self.PopButtonColorIdle();
@@ -1344,8 +1461,8 @@ pub fn PopButtonStyle(self: *GU) void {
 }
 
 pub fn PopButtonPadding(self: *GU) void {
-    self.PopButtonPaddingVertical();
     self.PopButtonPaddingHorizontal();
+    self.PopButtonPaddingVertical();
     self.btn_style_stack_changed = true;
 }
 
@@ -1362,13 +1479,13 @@ pub fn PopButtonColor(self: *GU) void {
     self.btn_style_stack_changed = true;
 }
 
-pub fn PopButtonPaddingVertical(self: *GU) void {
-    self.btn_style_vstk_padding_ver.Pop();
+pub fn PopButtonPaddingHorizontal(self: *GU) void {
+    self.btn_style_vstk_padding_hor.Pop();
     self.btn_style_stack_changed = true;
 }
 
-pub fn PopButtonPaddingHorizontal(self: *GU) void {
-    self.btn_style_vstk_padding_hor.Pop();
+pub fn PopButtonPaddingVertical(self: *GU) void {
+    self.btn_style_vstk_padding_ver.Pop();
     self.btn_style_stack_changed = true;
 }
 
