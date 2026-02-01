@@ -1175,9 +1175,17 @@ fn InitButtonStyle(self: *GU) void {
 // PUSH/POP/SETNEXT API
 
 // TODO: testcase - bounds-checking using fixed buffer allocator
-// TODO: auto-pop "freelist" (SetNext api)
-// TODO: `ValueStackSetNext`
-// TODO: `ValueStackAutoPop` to use where the value should pop by itself after SetNext
+// TODO: auto-pop "freelist" (SetNext api), ValueStackSetNext, ValueStackAutoPop
+// NOTE: SetNext/AutoPop cannot simply be implemented here, because to time the
+//  autopop correctly there needs to be some awareness of which element actually
+//  received the pushed value. the ability to push non-auto values at any point
+//  also complicates things, because it cannot be assumed that an auto value will
+//  be at the top of the stack. at least, may need to experiment with a "push
+//  queue" that lives outside this struct, which pushes/pops using the normal
+//  methods from within DoElement/EndElement themselves. there may also need to
+//  be a constraint in place that says: if there is a queued push waiting, you
+//  cannot push any more values to that queue until the push has been consumed,
+//  and the stack size must be restored by the time we get back to EndElement.
 // TODO: ?? take mutable slice instead of allocator, and require upfront memory
 // TODO: ?? use MultiArrayList with handles in GU struct to manage all the stacks
 /// errorless value stacks. stack usage is reference-counted independently of
@@ -1189,52 +1197,58 @@ fn InitButtonStyle(self: *GU) void {
 pub fn ValueStack(comptime ValueT: type) type {
     return struct {
         alloc: Allocator, // FIXME: drop the allocator, use slices exclusively
-        stack: ArrayList(ValueT),
+        stack_values: ArrayList(ValueT),
+        //stack_pop_queue: ArrayList(usize),
         count: usize,
 
         const ValueStackT = @This();
 
-        fn Init(alloc: Allocator) ValueStackT {
+        pub fn Init(alloc: Allocator) ValueStackT {
             return .{
                 .alloc = alloc,
-                .stack = .empty,
+                .stack_values = .empty,
+                //.stack_pop_queue = .empty,
                 .count = 0,
             };
         }
 
-        fn Deinit(self: *ValueStackT) void {
-            self.stack.clearAndFree(self.alloc);
+        pub fn Deinit(self: *ValueStackT) void {
+            self.stack_values.clearAndFree(self.alloc);
+            //self.stack_pop_queue.clearAndFree(self.alloc);
         }
 
-        fn Reset(self: *ValueStackT) void {
-            self.stack.clearRetainingCapacity();
+        pub fn Reset(self: *ValueStackT) void {
+            self.stack_values.clearRetainingCapacity();
+            //self.stack_pop_queue.clearRetainingCapacity();
             self.count = 0;
         }
 
-        inline fn Get(self: *ValueStackT) ValueT {
-            assert(self.stack.items.len > 0);
-            return self.stack.getLast();
+        pub fn Get(self: *ValueStackT) ValueT {
+            assert(self.stack_values.items.len > 0);
+            return self.stack_values.getLast();
         }
 
-        inline fn GetOrNull(self: *ValueStackT) ?ValueT {
-            return self.stack.getLastOrNull();
+        pub fn GetOrNull(self: *ValueStackT) ?ValueT {
+            return self.stack_values.getLastOrNull();
         }
 
-        inline fn Push(self: *ValueStackT, value: ValueT) void {
-            assert(self.count >= self.stack.items.len);
+        // inline because intended to be wrapped by user-facing API fn
+        pub inline fn Push(self: *ValueStackT, value: ValueT) void {
+            assert(self.count >= self.stack_values.items.len);
             defer self.count += 1;
 
-            self.stack.append(self.alloc, value) catch |e|
-                std.log.debug("(PushStackValue) append failed: {t}", .{e});
+            self.stack_values.append(self.alloc, value) catch
+                @panic("this is your sign to get around to using slices, idiot.");
         }
 
-        inline fn Pop(self: *ValueStackT) void {
-            assert(self.count >= self.stack.items.len);
+        // inline because intended to be wrapped by user-facing API fn
+        pub inline fn Pop(self: *ValueStackT) void {
+            assert(self.count >= self.stack_values.items.len);
             assert(self.count > 0);
             defer self.count -= 1;
 
-            if (self.stack.items.len == self.count)
-                _ = self.stack.pop();
+            if (self.stack_values.items.len == self.count)
+                _ = self.stack_values.pop();
         }
     };
 }
