@@ -472,47 +472,44 @@ const LAYOUT_WHITE_BREAK = std.mem.zeroInit(GULayout, .{
     .corner = .{ .style = StyleSuperellipse, .radius = 18 },
 });
 
-const LAYOUT_CIRCLE_BOX = std.mem.zeroInit(GULayout, .{
-    .corner = .{ .style = .Round, .radius = 32 },
-    .color = 0x4040C0FF,
-    .mode_w = .Fixed,
-    .mode_h = .Fixed,
-});
-
-const LAYOUT_QCIRCLE_BOX = std.mem.zeroInit(GULayout, .{
-    .corner = .{ .style = StyleQCircle, .radius = 32 },
-    .color = 0x4040C0FF,
-    .mode_w = .Fixed,
-    .mode_h = .Fixed,
-});
-
-const LAYOUT_SUPERELLIPSE_BOX = std.mem.zeroInit(GULayout, .{
-    .corner = .{ .style = StyleSuperellipse, .radius = 32 },
-    .color = 0x4040C0FF,
-    .mode_w = .Fixed,
-    .mode_h = .Fixed,
-});
-
-const LAYOUT_RHOMBUS_BOX = std.mem.zeroInit(GULayout, .{
-    .corner = .{ .style = StyleRhombus, .radius = 32 },
-    .color = 0x4040C0FF,
-    .mode_w = .Fixed,
-    .mode_h = .Fixed,
-});
-
-const LAYOUT_CHAMFER_BOX = std.mem.zeroInit(GULayout, .{
-    .corner = .{ .style = StyleBeveled, .radius = 32 },
-    .color = 0x4040C0FF,
-    .mode_w = .Fixed,
-    .mode_h = .Fixed,
-});
-
-const LAYOUT_OCTAGON_BOX = std.mem.zeroInit(GULayout, .{
-    .corner = .{ .style = StyleAngular, .radius = 32 },
-    .color = 0x4040C0FF,
-    .mode_w = .Fixed,
-    .mode_h = .Fixed,
-});
+const LAYOUT_SHAPED_BOXES = [_]GULayout{
+    std.mem.zeroInit(GULayout, .{
+        .corner = .{ .style = .Round, .radius = 32 },
+        .color = 0x4040C0FF,
+        .mode_w = .Fixed,
+        .mode_h = .Fixed,
+    }),
+    std.mem.zeroInit(GULayout, .{
+        .corner = .{ .style = StyleQCircle, .radius = 32 },
+        .color = 0x4040C0FF,
+        .mode_w = .Fixed,
+        .mode_h = .Fixed,
+    }),
+    std.mem.zeroInit(GULayout, .{
+        .corner = .{ .style = StyleSuperellipse, .radius = 32 },
+        .color = 0x4040C0FF,
+        .mode_w = .Fixed,
+        .mode_h = .Fixed,
+    }),
+    std.mem.zeroInit(GULayout, .{
+        .corner = .{ .style = StyleRhombus, .radius = 32 },
+        .color = 0x4040C0FF,
+        .mode_w = .Fixed,
+        .mode_h = .Fixed,
+    }),
+    std.mem.zeroInit(GULayout, .{
+        .corner = .{ .style = StyleBeveled, .radius = 32 },
+        .color = 0x4040C0FF,
+        .mode_w = .Fixed,
+        .mode_h = .Fixed,
+    }),
+    std.mem.zeroInit(GULayout, .{
+        .corner = .{ .style = StyleAngular, .radius = 32 },
+        .color = 0x4040C0FF,
+        .mode_w = .Fixed,
+        .mode_h = .Fixed,
+    }),
+};
 
 //------------------------------------------------------------------------------
 
@@ -529,7 +526,10 @@ const App = struct {
     textures: [2]ImageTexture,
     texture_handles: [2]GUTextureHandle,
 
-    b2toggle: bool,
+    btn_toggle: bool,
+    btn_counter: usize,
+    btn_color_loop: usize,
+
     step: bool,
 };
 
@@ -569,7 +569,9 @@ pub export fn SDL_AppInit(app: **App, argc: c_int, argv: [*][:0]u8) c.SDL_AppRes
                 std.debug.panic("AddTexture failed: {s}", .{@errorName(e)});
     }
 
-    app_global.b2toggle = false;
+    app_global.btn_toggle = false;
+    app_global.btn_counter = 0;
+    app_global.btn_color_loop = 0;
     app_global.step = true;
 
     app.* = &app_global;
@@ -609,6 +611,8 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     const img1 = app.texture_handles[0];
     const img2 = app.texture_handles[1];
 
+    const color_loop = [_]u32{ 0xC00000FF, 0x00C000FF, 0x0000C0FF };
+
     // NOTE: frame advance helper for debugging
     //if (!app.step) return c.SDL_APP_CONTINUE;
     //app.step = false;
@@ -628,25 +632,23 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         if (gu.DoElement(&LAYOUT_RED)) {
             defer gu.EndElement();
             gu.SetNextButtonMode(.Release);
-            if (gu.DoButton(font, "Button", .{})) {
-                std.log.debug("b1 activation result!!", .{});
+            if (gu.DoButton(font, "ReleaseButton", .{})) {
+                app.btn_color_loop = (app.btn_color_loop + 1) % color_loop.len;
             }
         }
         gu.DoLineBreak();
         if (gu.DoElement(&LAYOUT_RED)) {
             defer gu.EndElement();
-            gu.DoImage(img1, 0x00C000FF, 0.1);
+            gu.DoImage(img1, color_loop[app.btn_color_loop], 0.1);
         }
     }
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
         gu.DoLabel(null, 0xC000C0FF, "testblock2", .{});
-        gu.SetNextButtonColor(0x800000FF, 0xC00000FF, 0x400000FF);
-        gu.SetNextButtonCorner(32, StyleSuperellipse);
-        if (gu.DoToggleButton(&app.b2toggle, font, "ToggleButton: {any}", .{app.b2toggle})) {
-            std.log.debug("b2 toggled!!", .{});
+        if (gu.DoToggleButton(&app.btn_toggle, font, "ToggleButton: {any}", .{app.btn_toggle})) {
+            // maybe do stuff here
         }
-        if (app.b2toggle) {
+        if (app.btn_toggle) {
             gu.DoLabel(null, null, "only visible if b2 is on", .{});
         }
         gu.DoImage(img2, 0xC000C0FF, 0.25);
@@ -654,73 +656,33 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     }
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
-        gu.DoRect(.{ .x = 64, .y = 64 }, 0x000055FF);
+        gu.DoRect(64, 64, 0x000055FF);
         gu.DoLineBreak();
         gu.DoLabel(font, 0xC00000FF, "testblock3", .{});
         gu.DoLineBreak();
-        gu.DoRect(.{ .x = 64, .y = 64 }, 0x2222AAFF); // old outline color
+        gu.DoRect(64, 64, 0x2222AAFF); // old outline color
     }
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
         gu.DoLabel(null, 0x0000C0FF, "testing... !!@$(#!QOIEANSHT)", .{});
-        gu.DoLineBreak();
-        if (gu.DoElement(&LAYOUT_CIRCLE_BOX)) {
-            defer gu.EndElement();
-            const element = gu.GetElement();
-            element.features.bShowRect = true;
-            element.area.w = 64;
-            element.area.h = 64;
-        }
-        gu.DoLineBreak();
-        if (gu.DoElement(&LAYOUT_QCIRCLE_BOX)) {
-            defer gu.EndElement();
-            const element = gu.GetElement();
-            element.features.bShowRect = true;
-            element.area.w = 64;
-            element.area.h = 64;
-        }
-        gu.DoLineBreak();
-        if (gu.DoElement(&LAYOUT_SUPERELLIPSE_BOX)) {
-            defer gu.EndElement();
-            const element = gu.GetElement();
-            element.features.bShowRect = true;
-            element.area.w = 64;
-            element.area.h = 64;
-        }
-        gu.DoLineBreak();
-        if (gu.DoElement(&LAYOUT_RHOMBUS_BOX)) {
-            defer gu.EndElement();
-            const element = gu.GetElement();
-            element.features.bShowRect = true;
-            element.area.w = 64;
-            element.area.h = 64;
-        }
-        gu.DoLineBreak();
-        if (gu.DoElement(&LAYOUT_CHAMFER_BOX)) {
-            defer gu.EndElement();
-            const element = gu.GetElement();
-            element.features.bShowRect = true;
-            element.area.w = 64;
-            element.area.h = 64;
-        }
-        gu.DoLineBreak();
-        if (gu.DoElement(&LAYOUT_OCTAGON_BOX)) {
-            defer gu.EndElement();
-            const element = gu.GetElement();
-            element.features.bShowRect = true;
-            element.area.w = 64;
-            element.area.h = 64;
+        for (&LAYOUT_SHAPED_BOXES) |*layout| {
+            gu.DoLineBreak();
+            if (gu.DoElement(layout)) {
+                defer gu.EndElement();
+                const element = gu.GetElement();
+                element.features.bShowRect = true;
+                element.area.w = 64;
+                element.area.h = 64;
+            }
         }
     }
     if (gu.DoElement(&LAYOUT_WHITE_BREAK)) {
         defer gu.EndElement();
         gu.DoLabel(null, 0x00C0C0FF, "testing... with auto linebreak!!", .{});
-        gu.PushButtonPadding(12, 3);
-        defer gu.PopButtonPadding();
-        if (gu.DoToggleButton(&app.b2toggle, font, "ToggleButton", .{})) {
-            std.log.debug("b2 toggled!!", .{});
+        if (gu.DoToggleButton(&app.btn_toggle, font, "ToggleButton", .{})) {
+            // maybe do stuff here
         }
-        if (app.b2toggle) {
+        if (app.btn_toggle) {
             gu.DoLabel(null, null, "only visible if b2 is on", .{});
         }
         gu.DoLineBreak();
@@ -729,7 +691,17 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     }
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
-        gu.DoLabel(null, 0xC0C000FF, "testing... !!@$(#!QOIEANSHT)", .{});
+        gu.SetElementGaps(4, 4);
+        gu.DoLineBreak();
+        gu.PushButtonPadding(12, 3);
+        defer gu.PopButtonPadding();
+        gu.PushButtonCorner(32, StyleSuperellipse);
+        defer gu.PopButtonCorner();
+        gu.SetNextButtonColor(0x800000FF, 0xC00000FF, 0x400000FF);
+        if (gu.DoButton(font, "SUB", .{})) app.btn_counter -|= 1;
+        if (gu.DoButton(font, "ADD", .{})) app.btn_counter +|= 1;
+        gu.DoLineBreak();
+        gu.DoLabel(font, null, "{d:0>3}", .{app.btn_counter});
     }
 
     gu.EndFrame();

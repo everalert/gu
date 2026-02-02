@@ -1107,16 +1107,23 @@ pub inline fn GetElement(self: *GU) *Element {
 // TODO: more robust hashing strategy that doesn't cause hover state to break on
 //  buttons that change where the button is in the element tree (e.g. by inserting
 //  or removing an element above the button)
+// FIXME: should not be pub?
 pub fn GetElementKey(self: *GU, element: *const Element) []const u8 {
     return std.fmt.allocPrint(self.allocator, "{X:0>16}{s}", .{ element.id, element.name }) catch &.{};
 }
 
 // TODO: don't take element directly?
+// FIXME: should not be pub?
 pub fn GetElementClicked(self: *GU, element: *const Element) bool {
     const btn_key = self.GetElementKey(element);
     const btn: Button = self.buttons.get(btn_key) orelse .empty;
     return btn.activated;
 }
+
+// FIXME: the following will need to be moved and possibly adjusted for the
+//  push/pop/setnext api when the layout/style stacks are implemented
+// TODO: re-evaluate whether a "Set" counterpart to the push/pop/setnext functions
+//  is needed or practical
 
 pub fn SetElementColor(self: *GU, color: u32) void {
     const element = self.GetElement();
@@ -1128,9 +1135,10 @@ pub fn SetElementPadding(self: *GU, padding: Vec2) void {
     element.layout.padding = padding;
 }
 
-pub fn SetElementGaps(self: *GU, gaps: Vec2) void {
+pub fn SetElementGaps(self: *GU, hor: f32, ver: f32) void {
     const element = self.GetElement();
-    element.layout.gaps = gaps;
+    element.layout.gaps.x = hor;
+    element.layout.gaps.y = ver;
 }
 
 pub fn SetElementSize(self: *GU, w: f32, h: f32) void {
@@ -1143,7 +1151,10 @@ pub fn SetElementSize(self: *GU, w: f32, h: f32) void {
 // STACKS
 
 // TODO: testcase - bounds-checking using fixed buffer allocator
-// TODO: ?? take mutable slice instead of allocator, and require upfront memory
+// TODO: ?? take mutable slice instead of allocator; require upfront memory. may
+//  also make sense to impose limits on stack sizes on everything rather than
+//  just throwing usize at it, since just storing usize IDs can take more memory
+//  than the values and the number of values will never reach usize (nor close to)
 // TODO: ?? use MultiArrayList with handles in GU struct to manage all the stacks
 /// errorless value stacks. stack usage is reference-counted independently of
 /// stack size, and pushing/popping is synchronized to this counter, such that
@@ -1500,13 +1511,13 @@ pub fn PopButtonColorDown(self: *GU) void {
 // WIDGETS
 
 // TODO: stretch-like rect dimensions
-pub fn DoRect(self: *GU, size: Vec2, color: u32) void {
+pub fn DoRect(self: *GU, w: f32, h: f32, color: u32) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
     element.features.bShowRect = true;
-    element.area.w = size.x;
-    element.area.h = size.y;
+    element.area.w = w;
+    element.area.h = h;
     element.layout.color = color;
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
