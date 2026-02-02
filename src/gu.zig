@@ -200,7 +200,7 @@ pub const Button = struct {
             if (self.state == .Hover and btn_just_down) {
                 self.state = .Down;
                 if (self.mode == .Press) {
-                    std.log.debug("button activated! (press)", .{});
+                    //std.log.debug("button activated! (press)", .{});
                     self.activated = true;
                     return;
                 }
@@ -209,7 +209,7 @@ pub const Button = struct {
             if (self.state == .Down and btn_just_up) {
                 self.state = .Hover;
                 if (self.mode == .Release) {
-                    std.log.debug("button activated! (release)", .{});
+                    //std.log.debug("button activated! (release)", .{});
                     self.activated = true;
                     return;
                 }
