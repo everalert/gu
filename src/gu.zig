@@ -619,7 +619,8 @@ pub fn BeginFrame(self: *GU) !void {
     const surface_size = self.backend.GetSurfaceDimensions();
 
     _ = self.label_arena.reset(.retain_capacity);
-    self.ResetButtonStyle();
+    self.btn_style_arena.clearRetainingCapacity();
+    self.ButtonStyleStackStart();
     self.render_commands.clearRetainingCapacity();
     self.render_commands_rect.clearRetainingCapacity();
     self.render_commands_text.clearRetainingCapacity();
@@ -642,6 +643,7 @@ pub fn BeginFrame(self: *GU) !void {
 pub fn EndFrame(self: *GU) void {
     self.EndElement(); // close base layout container
     _ = self.element_line_stack.pop();
+    self.ButtonStyleStackEnd();
 
     self.backend.BeginRendering();
 
@@ -1061,7 +1063,7 @@ pub fn EndElement(self: *GU) void {
 
         // visual updating
         if (!element.features.bClickNoStyle) {
-            const btn_style = &self.btn_style_arena.items[self.GetButtonStyle()];
+            const btn_style = &self.btn_style_arena.items[self.ButtonStyleGet()];
             element.layout.color = switch (btn.state) {
                 .Idle => if (element.features.bClickDepressed) btn_style.ColorDown else btn_style.ColorIdle,
                 .Hover => if (element.features.bClickDepressed) btn_style.ColorIdle else btn_style.ColorHover,
@@ -1139,71 +1141,6 @@ pub fn SetElementSize(self: *GU, w: f32, h: f32) void {
 
 //------------------------------------------------------------------------------
 // STACKS
-
-// FIXME: (button styles) the actual indexing of the arena could behave like a
-//  stack, thereby avoiding unnecessary pushing of redundant styles, no?
-// TODO: ?? use ValueStack for the ButtonStyle arena itself?
-
-/// returns `btn_style_arena` index for current button style configuration.
-fn GetButtonStyle(self: *GU) usize {
-    assert(self.btn_style_arena.items.len > 0);
-
-    if (self.ButtonStyleAnyChanged())
-        self.GenerateButtonStyle();
-
-    return self.btn_style_arena.items.len - 1;
-}
-
-fn ButtonStyleAnyChanged(self: *GU) bool {
-    return @intFromBool(self.btn_style_vstk_padding_ver.CheckChanged()) |
-        @intFromBool(self.btn_style_vstk_padding_hor.CheckChanged()) |
-        @intFromBool(self.btn_style_vstk_corner_rad.CheckChanged()) |
-        @intFromBool(self.btn_style_vstk_corner_shape.CheckChanged()) |
-        @intFromBool(self.btn_style_vstk_color_idle.CheckChanged()) |
-        @intFromBool(self.btn_style_vstk_color_hover.CheckChanged()) |
-        @intFromBool(self.btn_style_vstk_color_down.CheckChanged()) > 0;
-}
-
-// implicitly asserts all value stacks have at least one item via `Get`
-fn GenerateButtonStyle(self: *GU) void {
-    self.btn_style_arena.append(self.allocator, ButtonStyle{
-        .PaddingVer = self.btn_style_vstk_padding_ver.Get(),
-        .PaddingHor = self.btn_style_vstk_padding_hor.Get(),
-        .CornerRad = self.btn_style_vstk_corner_rad.Get(),
-        .CornerShape = self.btn_style_vstk_corner_shape.Get(),
-        .ColorIdle = self.btn_style_vstk_color_idle.Get(),
-        .ColorHover = self.btn_style_vstk_color_hover.Get(),
-        .ColorDown = self.btn_style_vstk_color_down.Get(),
-    }) catch |e| std.log.err("(GenerateButtonStyle) append failed: {t}", .{e});
-}
-
-fn ResetButtonStyle(self: *GU) void {
-    self.btn_style_arena.clearRetainingCapacity();
-    self.btn_style_vstk_padding_ver.Reset();
-    self.btn_style_vstk_padding_hor.Reset();
-    self.btn_style_vstk_corner_rad.Reset();
-    self.btn_style_vstk_corner_shape.Reset();
-    self.btn_style_vstk_color_idle.Reset();
-    self.btn_style_vstk_color_hover.Reset();
-    self.btn_style_vstk_color_down.Reset();
-    self.InitButtonStyle();
-}
-
-fn InitButtonStyle(self: *GU) void {
-    assert(self.btn_style_arena.items.len == 0);
-    assert(self.btn_style_vstk_padding_ver.count == 0);
-    assert(self.btn_style_vstk_padding_hor.count == 0);
-    assert(self.btn_style_vstk_corner_rad.count == 0);
-    assert(self.btn_style_vstk_corner_shape.count == 0);
-    assert(self.btn_style_vstk_color_idle.count == 0);
-    assert(self.btn_style_vstk_color_hover.count == 0);
-    assert(self.btn_style_vstk_color_down.count == 0);
-    self.PushButtonStyle(.default);
-    self.GenerateButtonStyle();
-}
-
-//------------------------------------------------------------------------------
-// PUSH/POP/SETNEXT API
 
 // TODO: testcase - bounds-checking using fixed buffer allocator
 // TODO: ?? take mutable slice instead of allocator, and require upfront memory
@@ -1314,6 +1251,70 @@ pub fn ValueStack(comptime ValueT: type) type {
         }
     };
 }
+
+//--------------------------------------
+// BUTTON STYLE
+
+// FIXME: (button styles) the actual indexing of the arena could behave like a
+//  stack, thereby avoiding unnecessary pushing of redundant styles, no?
+// TODO: ?? use ValueStack for the ButtonStyle arena itself?
+
+fn ButtonStyleStackStart(self: *GU) void {
+    assert(self.ButtonStyleAllEmpty());
+    self.PushButtonStyle(.default);
+    self.ButtonStyleGenerate();
+}
+
+fn ButtonStyleStackEnd(self: *GU) void {
+    self.PopButtonStyle();
+}
+
+/// returns `btn_style_arena` index for current button style configuration.
+fn ButtonStyleGet(self: *GU) usize {
+    assert(self.btn_style_arena.items.len > 0);
+
+    if (self.ButtonStyleAnyChanged())
+        self.ButtonStyleGenerate();
+
+    return self.btn_style_arena.items.len - 1;
+}
+
+// implicitly asserts all value stacks have at least one item via `Get`
+fn ButtonStyleGenerate(self: *GU) void {
+    self.btn_style_arena.append(self.allocator, ButtonStyle{
+        .PaddingVer = self.btn_style_vstk_padding_ver.Get(),
+        .PaddingHor = self.btn_style_vstk_padding_hor.Get(),
+        .CornerRad = self.btn_style_vstk_corner_rad.Get(),
+        .CornerShape = self.btn_style_vstk_corner_shape.Get(),
+        .ColorIdle = self.btn_style_vstk_color_idle.Get(),
+        .ColorHover = self.btn_style_vstk_color_hover.Get(),
+        .ColorDown = self.btn_style_vstk_color_down.Get(),
+    }) catch |e| std.log.err("(ButtonStyleGenerate) append failed: {t}", .{e});
+}
+
+fn ButtonStyleAnyChanged(self: *GU) bool {
+    return @intFromBool(self.btn_style_vstk_padding_ver.CheckChanged()) |
+        @intFromBool(self.btn_style_vstk_padding_hor.CheckChanged()) |
+        @intFromBool(self.btn_style_vstk_corner_rad.CheckChanged()) |
+        @intFromBool(self.btn_style_vstk_corner_shape.CheckChanged()) |
+        @intFromBool(self.btn_style_vstk_color_idle.CheckChanged()) |
+        @intFromBool(self.btn_style_vstk_color_hover.CheckChanged()) |
+        @intFromBool(self.btn_style_vstk_color_down.CheckChanged()) > 0;
+}
+
+fn ButtonStyleAllEmpty(self: *GU) bool {
+    return @intFromBool(self.btn_style_arena.items.len == 0) &
+        @intFromBool(self.btn_style_vstk_padding_ver.count == 0) &
+        @intFromBool(self.btn_style_vstk_padding_hor.count == 0) &
+        @intFromBool(self.btn_style_vstk_corner_rad.count == 0) &
+        @intFromBool(self.btn_style_vstk_corner_shape.count == 0) &
+        @intFromBool(self.btn_style_vstk_color_idle.count == 0) &
+        @intFromBool(self.btn_style_vstk_color_hover.count == 0) &
+        @intFromBool(self.btn_style_vstk_color_down.count == 0) > 0;
+}
+
+//------------------------------------------------------------------------------
+// PUSH/POP/SETNEXT API
 
 //--------------------------------------
 // BUTTON MODE
