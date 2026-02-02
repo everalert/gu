@@ -1051,7 +1051,7 @@ pub fn EndElement(self: *GU) void {
     if (element.features.bClickable) {
         // button state setup
         const btn: *const Button = btn: {
-            const btn_key = self.GetElementKey(element);
+            const btn_key = self.GetElementKeyAt(element_i);
             const btn_info = self.buttons.getOrPut(btn_key) catch break :btn &.empty;
 
             const btn = btn_info.value_ptr;
@@ -1096,26 +1096,47 @@ pub fn EndElement(self: *GU) void {
     }
 }
 
-/// returns pointer to current element. pointer is only guaranteed to be valid
-/// until the next call to DoElement
+/// Returns pointer to the current element. Pointer is only guaranteed to be valid
+/// until the next call to DoElement, including implicit calls in widget helpers.
 pub inline fn GetElement(self: *GU) *Element {
     const i = self.element_stack.getLast();
     return &self.element_tree.items[i];
 }
 
-// TODO: don't take element directly?
+/// Returns pointer to the element associated with a given handle. Pointer is only
+/// guaranteed to be valid until the next call to DoElement, including implicit
+/// calls in widget helpers.
+pub inline fn GetElementAt(self: *GU, i: usize) *Element {
+    assert(self.element_tree.items.len > i);
+    return &self.element_tree.items[i];
+}
+
 // TODO: more robust hashing strategy that doesn't cause hover state to break on
 //  buttons that change where the button is in the element tree (e.g. by inserting
 //  or removing an element above the button)
-// FIXME: should not be pub?
-pub fn GetElementKey(self: *GU, element: *const Element) []const u8 {
-    return std.fmt.allocPrint(self.allocator, "{X:0>16}{s}", .{ element.id, element.name }) catch &.{};
+inline fn HashElementKey(self: *GU, id: usize, name: []const u8) []const u8 {
+    const alloc = self.label_arena.allocator();
+    return std.fmt.allocPrint(alloc, "{X:0>16}{s}", .{ id, name }) catch &.{};
 }
 
-// TODO: don't take element directly?
-// FIXME: should not be pub?
-pub fn GetElementClicked(self: *GU, element: *const Element) bool {
-    const btn_key = self.GetElementKey(element);
+fn GetElementKey(self: *GU) []const u8 {
+    const element = self.GetElement();
+    return self.HashElementKey(element.id, element.name);
+}
+
+fn GetElementKeyAt(self: *GU, i: usize) []const u8 {
+    const element = self.GetElementAt(i);
+    return self.HashElementKey(element.id, element.name);
+}
+
+fn GetElementClicked(self: *GU) bool {
+    const btn_key = self.GetElementKey();
+    const btn: Button = self.buttons.get(btn_key) orelse .empty;
+    return btn.activated;
+}
+
+fn GetElementClickedAt(self: *GU, i: usize) bool {
+    const btn_key = self.GetElementKeyAt(i);
     const btn: Button = self.buttons.get(btn_key) orelse .empty;
     return btn.activated;
 }
@@ -1572,7 +1593,7 @@ pub fn DoButton(self: *GU, font: ?FontHandle, comptime fmt: []const u8, args: an
 
     self.DoLabel(font, null, fmt, args);
 
-    return self.GetElementClicked(element);
+    return self.GetElementClicked();
 }
 
 // FIXME: remove font as input, use font stack
@@ -1589,7 +1610,7 @@ pub fn DoToggleButton(self: *GU, active: *bool, font: ?FontHandle, comptime fmt:
     element.features.bShowRect = true;
     element.name = fmt;
 
-    const activated = self.GetElementClicked(element);
+    const activated = self.GetElementClicked();
     if (active.*) element.features.bClickDepressed = true;
     if (activated) active.* = !active.*;
 
