@@ -19,6 +19,8 @@ const GUFontAtlas = GU.FontAtlas;
 const GUTextureHandle = GU.TextureHandle;
 const GUFontHandle = GU.FontHandle;
 const GULayout = GU.Layout;
+const GUCustomActionHandle = GU.CustomActionHandle;
+const GURCCustom = GU.RCCustom;
 const GURCRect = GU.RCRect;
 const GURCText = GU.RCText;
 const GURCClip = GU.RCClip;
@@ -232,6 +234,7 @@ const RenderData = struct {
     pub const CNR_SUPERELLIPSE: GUCornerShape = 4;
     pub const CNR_QCIRCLE: GUCornerShape = 5;
     pub const CNR_RHOMBUS: GUCornerShape = 6;
+    pub const ACT_DEMO_SINE: GUCustomActionHandle = 0;
 
     pub const empty: RenderData = .{
         .window = null,
@@ -290,6 +293,33 @@ const RenderData = struct {
         }
         const sd = GetSurfaceDimensions(ptr);
         return Rect{ .x = 0, .y = 0, .w = sd.w, .h = sd.h };
+    }
+
+    // TODO: respect corner shape/radius def in cmd
+    fn EmitCustomCommand(ptr: *anyopaque, cmd: *const GURCCustom) void {
+        const self: *RenderData = @ptrCast(@alignCast(ptr));
+        switch (cmd.action) {
+            ACT_DEMO_SINE => {
+                var t: i64 = 0;
+                SDLEP(c.SDL_GetCurrentTime(&t));
+                const t_f = @as(f32, @floatFromInt(@mod(@divTrunc(t, c.SDL_NS_PER_MS), 2500)));
+                const t_start = t_f * std.math.tau / 2500;
+                const amp: f32 = cmd.rect.h / 2;
+                const freq: f32 = amp * 2;
+                var pts: [128]c.SDL_FPoint = undefined;
+                for (&pts, 0..) |*p, i| {
+                    const i_f = @as(f32, @floatFromInt(i));
+                    const progress = i_f / pts.len;
+                    const w = progress * cmd.rect.w;
+                    p.x = cmd.rect.x + w;
+                    p.y = cmd.rect.y + cmd.rect.h / 2 + @sin(t_start + w / freq) * amp;
+                }
+                const c1 = Color.fromInt(cmd.color);
+                SDLEP(c.SDL_SetRenderDrawColor(self.renderer, c1.r, c1.g, c1.b, c1.a));
+                SDLEP(c.SDL_RenderLines(self.renderer, &pts, pts.len));
+            },
+            else => unreachable,
+        }
     }
 
     fn DrawRect(ptr: *anyopaque, cmd: *const GURCRect) void {
@@ -383,6 +413,7 @@ const RenderData = struct {
         return GUBackend{
             .ptr = self,
             .fnGetSurfaceDimensions = GetSurfaceDimensions,
+            .fnEmitCustomCommand = EmitCustomCommand,
             .fnDrawRect = DrawRect,
             .fnDrawString = DrawString,
             .fnSetClip = SetClip,
@@ -614,11 +645,12 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     }
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
-        gu.DoRect(64, 64, 0x000055FF);
+        var current_time: i64 = 0;
+        SDLEP(c.SDL_GetCurrentTime(&current_time));
+        const current_time_f = @as(f32, @floatFromInt(@mod(@divTrunc(current_time, c.SDL_NS_PER_MS), 2500)));
+        gu.DoLabel(font, 0xCCCCFFFF, "{d:0>5.3} {d:0>5.3}", .{ current_time_f / 1000, current_time_f / 2500 });
         gu.DoLineBreak();
-        gu.DoLabel(font, 0xC00000FF, "testblock3", .{});
-        gu.DoLineBreak();
-        gu.DoRect(64, 64, 0x2222AAFF); // old outline color
+        gu.DoCustomSurface(RenderData.ACT_DEMO_SINE, 192, 48);
     }
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
@@ -659,7 +691,7 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         if (gu.DoButton(font, "SUB", .{})) app.btn_counter -|= 1;
         if (gu.DoButton(font, "ADD", .{})) app.btn_counter +|= 1;
         gu.DoLineBreak();
-        gu.DoLabel(font, null, "{d:0>3}", .{app.btn_counter});
+        gu.DoLabel(font, 0xCCCCFFFF, "{d:0>3}", .{app.btn_counter});
     }
 
     gu.EndFrame();

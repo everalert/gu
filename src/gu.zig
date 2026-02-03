@@ -17,6 +17,7 @@ const Color = @import("m_color.zig").Color;
 pub const Backend = struct {
     ptr: *anyopaque,
     fnGetSurfaceDimensions: *const fn (*anyopaque) Vec2,
+    fnEmitCustomCommand: *const fn (*anyopaque, *const RCCustom) void,
     fnDrawRect: *const fn (*anyopaque, *const RCRect) void,
     fnDrawString: *const fn (*anyopaque, *const RCText) void,
     fnSetClip: *const fn (*anyopaque, *const RCClip) void,
@@ -25,6 +26,10 @@ pub const Backend = struct {
 
     pub fn GetSurfaceDimensions(self: *Backend) Vec2 {
         return self.fnGetSurfaceDimensions(self.ptr);
+    }
+
+    pub fn EmitCustomCommand(self: *Backend, cmd: *const RCCustom) void {
+        self.fnEmitCustomCommand(self.ptr, cmd);
     }
 
     // TODO: impl texture tile drawing, see RenderCommand->Rect
@@ -65,11 +70,28 @@ pub const RenderCommand = struct {
     kind: Kind,
     handle: usize, // TODO: actual handle impl
 
-    pub const Kind = enum { rect, text, clip };
+    pub const Kind = enum { custom, rect, text, clip };
 
     pub fn init(kind: Kind, handle: usize) RenderCommand {
         return .{ .handle = handle, .kind = kind };
     }
+};
+
+pub const CustomActionHandle = usize;
+
+// TODO: ?? add field for data ptr/handle? with only action id, the implementation
+//  will need to register separate actions for equivalent behaviours operating
+//  on different data. not the end of the world, but..
+// NOTE: should mirror RCRect, minus texture-related fields. the idea is that
+//  the custom command will use the rect info as context so that it knows the
+//  region in which to enact the action, and if it ends up drawing to it directly,
+//  the drawing essentially replaces what would be the body of an RCRect call.
+pub const RCCustom = struct {
+    action: CustomActionHandle, // implementation-defined action id
+    rect: Rect,
+    corner_radius: f32,
+    corner_shape: CornerShape,
+    color: u32,
 };
 
 pub const RCRect = struct {
@@ -79,15 +101,6 @@ pub const RCRect = struct {
     color: u32,
     texture: ?*TextureAtlas,
     tile: ?u32, // for texture atlases
-
-    pub fn init(rect: Rect, cnr_radius: f32, cnr_shape: CornerShape, color: u32) RCRect {
-        return std.mem.zeroInit(RCRect, .{
-            .rect = rect,
-            .corner_radius = cnr_radius,
-            .corner_shape = cnr_shape,
-            .color = color,
-        });
-    }
 };
 
 pub const RCText = struct {
@@ -288,6 +301,7 @@ pub const Element = struct {
     name: []const u8,
     label_str: []const u8,
     label_font: FontHandle,
+    custom_action: CustomActionHandle, // impl-defined action associated with custom command
 
     const empty: Element = .{
         .layout = .default,
@@ -305,6 +319,7 @@ pub const Element = struct {
         .name = &.{},
         .label_str = &.{},
         .label_font = maxInt(usize),
+        .custom_action = maxInt(usize),
     };
 };
 
@@ -339,7 +354,10 @@ pub const ElementFeatures = packed struct(u32) {
     bClickDepressed: bool, // button visually "idles" in down-state
     bClickNoStyle: bool, // button visually looks like a regular element
 
-    _: u23,
+    // Misc. functionality
+    bCustomCommand: bool,
+
+    _: u22,
 
     const none: ElementFeatures = @bitCast(@as(u32, 0));
     const all: ElementFeatures = @bitCast(maxInt(u32));
@@ -531,6 +549,7 @@ btn_style_vstk_color_hover: ValueStack(u32),
 btn_style_vstk_color_down: ValueStack(u32),
 
 render_commands: ArrayList(RenderCommand),
+render_commands_cust: ArrayList(RCCustom),
 render_commands_rect: ArrayList(RCRect),
 render_commands_text: ArrayList(RCText),
 render_commands_clip: ArrayList(RCClip),
@@ -561,6 +580,7 @@ pub fn Init(alloc: Allocator, backend: Backend, base_layout: ?Layout) GU {
         .btn_style_vstk_color_hover = .Init(alloc),
         .btn_style_vstk_color_down = .Init(alloc),
         .render_commands = .empty,
+        .render_commands_cust = .empty,
         .render_commands_rect = .empty,
         .render_commands_text = .empty,
         .render_commands_clip = .empty,
@@ -584,6 +604,7 @@ pub fn Deinit(self: *GU) void {
     self.btn_style_vstk_color_hover.Deinit();
     self.btn_style_vstk_color_down.Deinit();
     self.render_commands.deinit(self.allocator);
+    self.render_commands_cust.deinit(self.allocator);
     self.render_commands_rect.deinit(self.allocator);
     self.render_commands_text.deinit(self.allocator);
     self.render_commands_clip.deinit(self.allocator);
@@ -624,6 +645,7 @@ pub fn BeginFrame(self: *GU) !void {
     self.btn_style_arena.clearRetainingCapacity();
     self.ButtonStyleStackStart();
     self.render_commands.clearRetainingCapacity();
+    self.render_commands_cust.clearRetainingCapacity();
     self.render_commands_rect.clearRetainingCapacity();
     self.render_commands_text.clearRetainingCapacity();
     self.render_commands_clip.clearRetainingCapacity();
@@ -658,6 +680,7 @@ pub fn EndFrame(self: *GU) void {
 
     for (self.render_commands.items) |cmd| {
         switch (cmd.kind) {
+            .custom => self.backend.EmitCustomCommand(&self.render_commands_cust.items[cmd.handle]),
             .rect => self.backend.DrawRect(&self.render_commands_rect.items[cmd.handle]),
             .text => self.backend.DrawString(&self.render_commands_text.items[cmd.handle]),
             .clip => self.backend.SetClip(&self.render_commands_clip.items[cmd.handle]),
@@ -817,7 +840,7 @@ fn DoElementClipping(self: *GU) void {
         // unprocessed parent->child branch
         if (e.first_child != null) {
             c_stack.append(self.allocator, next_clip) catch |err|
-                std.log.err("(DoElementClipping) ClipStack Append Error: {s}", .{@errorName(err)});
+                std.log.err("(DoElementClipping) ClipStack Append Error: {t}", .{err});
             c = c_stack.getLast();
         }
     }
@@ -839,9 +862,9 @@ fn DoElementEmitDrawCommands(self: *GU) void {
             c = if (e.parent) |p| self.element_tree.items[p].clip else c_base;
             const next_clip = self.render_commands_clip.items.len;
             self.render_commands.append(self.allocator, .init(.clip, next_clip)) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
             self.render_commands_clip.append(self.allocator, .{ .area = c }) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
             continue;
         }
 
@@ -850,9 +873,9 @@ fn DoElementEmitDrawCommands(self: *GU) void {
             c = e.clip;
             const next_clip = self.render_commands_clip.items.len;
             self.render_commands.append(self.allocator, .init(.clip, next_clip)) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
             self.render_commands_clip.append(self.allocator, .{ .area = c }) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
         };
 
         // is it actually drawable?
@@ -860,15 +883,37 @@ fn DoElementEmitDrawCommands(self: *GU) void {
         if (!e.area.AreaIsNonZero()) continue;
 
         if (e.features.bShowRect) {
-            var cmd: RCRect = .init(e.area, e.layout.corner_radius, e.layout.corner_shape, e.layout.color);
-
-            if (e.features.bShowTexture) cmd.texture = &self.textures.items[e.texture];
+            const cmd: RCRect = .{
+                .rect = e.area,
+                .corner_radius = e.layout.corner_radius,
+                .corner_shape = e.layout.corner_shape,
+                .color = e.layout.color,
+                .texture = if (e.features.bShowTexture) &self.textures.items[e.texture] else null,
+                .tile = null,
+            };
 
             const next_rect = self.render_commands_rect.items.len;
             self.render_commands.append(self.allocator, .init(.rect, next_rect)) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
             self.render_commands_rect.append(self.allocator, cmd) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
+        }
+
+        if (e.features.bCustomCommand) {
+            assert(e.custom_action != maxInt(usize)); // non-null value actually set
+            const cmd: RCCustom = .{
+                .action = e.custom_action,
+                .rect = e.area,
+                .corner_radius = e.layout.corner_radius,
+                .corner_shape = e.layout.corner_shape,
+                .color = e.layout.color,
+            };
+
+            const next_cmd = self.render_commands_cust.items.len;
+            self.render_commands.append(self.allocator, .init(.custom, next_cmd)) catch |err|
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
+            self.render_commands_cust.append(self.allocator, cmd) catch |err|
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
         }
 
         if (e.features.bShowLabel and e.label_str.len > 0) {
@@ -886,9 +931,9 @@ fn DoElementEmitDrawCommands(self: *GU) void {
 
             const next_text = self.render_commands_text.items.len;
             self.render_commands.append(self.allocator, .init(.text, next_text)) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
             self.render_commands_text.append(self.allocator, cmd) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Draw Command ({s})", .{@errorName(err)});
+                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
         }
     }
 }
@@ -1533,6 +1578,22 @@ pub fn PopButtonColorDown(self: *GU) void {
 
 //------------------------------------------------------------------------------
 // WIDGETS
+
+/// Emit a custom action associated with a region. Typical use cases are drawing
+/// a rendered scene to a specific part of the UI, drawing data-driven contents
+/// such as lines and graphs, etc.
+pub fn DoCustomSurface(self: *GU, action: CustomActionHandle, w: f32, h: f32) void {
+    if (!self.DoElement(null)) return;
+    defer self.EndElement();
+    const element = self.GetElement();
+    element.features.bCustomCommand = true;
+    element.custom_action = action;
+    element.area.w = w;
+    element.area.h = h;
+    element.layout.mode_w = .Fixed;
+    element.layout.mode_h = .Fixed;
+    element.layout.color = 0xFFFFFFFF;
+}
 
 // TODO: stretch-like rect dimensions
 pub fn DoRect(self: *GU, w: f32, h: f32, color: u32) void {
