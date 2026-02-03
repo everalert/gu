@@ -74,15 +74,17 @@ pub const RenderCommand = struct {
 
 pub const RCRect = struct {
     rect: Rect,
-    corner: Corner,
+    corner_radius: f32,
+    corner_shape: CornerShape,
     color: u32,
     texture: ?*TextureAtlas,
     tile: ?u32, // for texture atlases
 
-    pub fn init(rect: Rect, corner: Corner, color: u32) RCRect {
+    pub fn init(rect: Rect, cnr_radius: f32, cnr_shape: CornerShape, color: u32) RCRect {
         return std.mem.zeroInit(RCRect, .{
             .rect = rect,
-            .corner = corner,
+            .corner_radius = cnr_radius,
+            .corner_shape = cnr_shape,
             .color = color,
         });
     }
@@ -98,15 +100,6 @@ pub const RCText = struct {
 pub const RCClip = struct {
     area: Rect,
 };
-
-pub const Corner = struct {
-    radius: f32,
-    style: CornerShape,
-};
-
-// FIXME: does this even need to be an enum, rather than like an id or handle?
-//  the backend has to decide what to implement anyway, so..
-pub const CornerShape = enum { None, Round, Custom1, Custom2, Custom3, Custom4, Custom5, Custom6 };
 
 //------------------------------------------------------------------------------
 
@@ -238,11 +231,12 @@ pub const ButtonStyle = struct {
     ColorHover: u32,
     ColorDown: u32,
 
+    // FIXME: ?? define default from user side?
     const default: ButtonStyle = .{
         .PaddingVer = 2,
         .PaddingHor = 8,
         .CornerRad = 6,
-        .CornerShape = .Round,
+        .CornerShape = 1, // round
         .ColorIdle = 0x008000FF,
         .ColorHover = 0x00C000FF,
         .ColorDown = 0x004000FF,
@@ -425,7 +419,8 @@ pub const Layout = struct {
     mode_w: DimensionMode, // derived from parent 'widths' field if .Auto
     mode_h: DimensionMode, // derived from parent 'heights' field if .Auto
     color: u32,
-    corner: Corner,
+    corner_radius: f32,
+    corner_shape: CornerShape,
     widths: ?[]const f32, // FIXME: doesn't need to be null
     heights: ?[]const f32, // FIXME: doesn't need to be null
     padding: Vec2,
@@ -438,31 +433,11 @@ pub const Layout = struct {
     });
 };
 
-const LineData = struct {
-    parent_padding: Vec2,
-    parent_gaps: Vec2,
-    line: u32,
-    current_y: f32,
-    current_h: f32,
-    current_items: u32,
-    current_w: f32,
-    max_w: f32, // incl padding/gaps
-
-    // TODO: impl axis def in Layout and derive
-    pub inline fn AxisSpacing(self: *LineData, comptime axis: enum { Main, Cross }, items: usize) f32 {
-        const padding: f32, const gaps: f32 = switch (axis) {
-            .Main => .{ // x-axis
-                self.parent_padding.x * 2,
-                self.parent_gaps.x * @as(f32, @floatFromInt(items -| 1)),
-            },
-            .Cross => .{ // y-axis
-                self.parent_padding.y * 2,
-                self.parent_gaps.y * @as(f32, @floatFromInt(items -| 1)),
-            },
-        };
-        return padding + gaps;
-    }
-};
+/// implementation-defined shape id
+/// typical values:
+/// 0 = None (Square)
+/// 1 = Round (Circle)
+pub const CornerShape = u8;
 
 // FIXME: Auto and Fit are not actually referenced anywhere??? so basically it's
 //  assumed an element is Auto(Fit) if a dimension is not Stretch or Fixed, without
@@ -492,6 +467,33 @@ const DimensionMode = enum {
     /// child elements.
     inline fn IsPreComputable(mode: DimensionMode) bool {
         return mode == .Fixed or mode == .Stretch;
+    }
+};
+
+// TODO: reorganize? this is layouting pass stuff, not layout definition stuff
+const LineData = struct {
+    parent_padding: Vec2,
+    parent_gaps: Vec2,
+    line: u32,
+    current_y: f32,
+    current_h: f32,
+    current_items: u32,
+    current_w: f32,
+    max_w: f32, // incl padding/gaps
+
+    // TODO: impl axis def in Layout and derive
+    pub inline fn AxisSpacing(self: *LineData, comptime axis: enum { Main, Cross }, items: usize) f32 {
+        const padding: f32, const gaps: f32 = switch (axis) {
+            .Main => .{ // x-axis
+                self.parent_padding.x * 2,
+                self.parent_gaps.x * @as(f32, @floatFromInt(items -| 1)),
+            },
+            .Cross => .{ // y-axis
+                self.parent_padding.y * 2,
+                self.parent_gaps.y * @as(f32, @floatFromInt(items -| 1)),
+            },
+        };
+        return padding + gaps;
     }
 };
 
@@ -858,7 +860,7 @@ fn DoElementEmitDrawCommands(self: *GU) void {
         if (!e.area.AreaIsNonZero()) continue;
 
         if (e.features.bShowRect) {
-            var cmd: RCRect = .init(e.area, e.layout.corner, e.layout.color);
+            var cmd: RCRect = .init(e.area, e.layout.corner_radius, e.layout.corner_shape, e.layout.color);
 
             if (e.features.bShowTexture) cmd.texture = &self.textures.items[e.texture];
 
@@ -1070,7 +1072,8 @@ pub fn EndElement(self: *GU) void {
                 .Down => btn_style.ColorDown,
             };
             element.layout.padding = .{ .x = btn_style.PaddingHor, .y = btn_style.PaddingVer };
-            element.layout.corner = .{ .radius = btn_style.CornerRad, .style = btn_style.CornerShape };
+            element.layout.corner_radius = btn_style.CornerRad;
+            element.layout.corner_shape = btn_style.CornerShape;
         }
     }
 
