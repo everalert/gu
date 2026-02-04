@@ -70,7 +70,21 @@ pub const RenderCommand = struct {
     kind: Kind,
     handle: usize, // TODO: actual handle impl
 
-    pub const Kind = enum { custom, rect, text, clip };
+    pub const Kind = enum {
+        custom,
+        rect,
+        text,
+        clip,
+
+        pub fn toPayloadT(k: Kind) type {
+            return switch (k) {
+                .custom => RCCustom,
+                .text => RCText,
+                .rect => RCRect,
+                .clip => RCClip,
+            };
+        }
+    };
 
     pub fn init(kind: Kind, handle: usize) RenderCommand {
         return .{ .handle = handle, .kind = kind };
@@ -674,7 +688,7 @@ pub fn EndFrame(self: *GU) void {
     self.DoElementLineBreakParsing();
     self.DoElementPositioning();
     self.DoElementClipping();
-    self.DoElementEmitDrawCommands();
+    self.DoElementEmitRenderCommands();
     self.DoButtonPostProcessing();
     //self.DoElementDebugLog();
 
@@ -846,7 +860,24 @@ fn DoElementClipping(self: *GU) void {
     }
 }
 
-fn DoElementEmitDrawCommands(self: *GU) void {
+fn EmitRenderCommand(
+    self: *GU,
+    comptime Kind: RenderCommand.Kind,
+    payload: Kind.toPayloadT(),
+) void {
+    const cmdbuf = switch (Kind) {
+        .custom => &self.render_commands_cust,
+        .rect => &self.render_commands_rect,
+        .clip => &self.render_commands_clip,
+        .text => &self.render_commands_text,
+    };
+    self.render_commands.append(self.allocator, .init(Kind, cmdbuf.items.len)) catch |err|
+        std.log.err("EmitRenderCommand({t}): {t}", .{ Kind, err });
+    cmdbuf.append(self.allocator, payload) catch |err|
+        std.log.err("EmitRenderCommand({t}): {t}", .{ Kind, err });
+}
+
+fn DoElementEmitRenderCommands(self: *GU) void {
     const sd = self.backend.GetSurfaceDimensions();
     const c_base = Rect{ .x = 0, .y = 0, .w = sd.x, .h = sd.y };
     var c = c_base;
@@ -860,22 +891,14 @@ fn DoElementEmitDrawCommands(self: *GU) void {
         // returning to parent from child, don't need to process anything more
         if (it_data.relation == .Parent) {
             c = if (e.parent) |p| self.element_tree.items[p].clip else c_base;
-            const next_clip = self.render_commands_clip.items.len;
-            self.render_commands.append(self.allocator, .init(.clip, next_clip)) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
-            self.render_commands_clip.append(self.allocator, .{ .area = c }) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
+            self.EmitRenderCommand(.clip, RCClip{ .area = c });
             continue;
         }
 
         // this element is an unprocessed parent, so we go deeper
         defer if (e.first_child != null) {
             c = e.clip;
-            const next_clip = self.render_commands_clip.items.len;
-            self.render_commands.append(self.allocator, .init(.clip, next_clip)) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
-            self.render_commands_clip.append(self.allocator, .{ .area = c }) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
+            self.EmitRenderCommand(.clip, RCClip{ .area = e.clip });
         };
 
         // is it actually drawable?
@@ -883,37 +906,25 @@ fn DoElementEmitDrawCommands(self: *GU) void {
         if (!e.area.AreaIsNonZero()) continue;
 
         if (e.features.bShowRect) {
-            const cmd: RCRect = .{
+            self.EmitRenderCommand(.rect, RCRect{
                 .rect = e.area,
                 .corner_radius = e.layout.corner_radius,
                 .corner_shape = e.layout.corner_shape,
                 .color = e.layout.color,
                 .texture = if (e.features.bShowTexture) &self.textures.items[e.texture] else null,
                 .tile = null,
-            };
-
-            const next_rect = self.render_commands_rect.items.len;
-            self.render_commands.append(self.allocator, .init(.rect, next_rect)) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
-            self.render_commands_rect.append(self.allocator, cmd) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
+            });
         }
 
         if (e.features.bCustomCommand) {
             assert(e.custom_action != maxInt(usize)); // non-null value actually set
-            const cmd: RCCustom = .{
+            self.EmitRenderCommand(.custom, RCCustom{
                 .action = e.custom_action,
                 .rect = e.area,
                 .corner_radius = e.layout.corner_radius,
                 .corner_shape = e.layout.corner_shape,
                 .color = e.layout.color,
-            };
-
-            const next_cmd = self.render_commands_cust.items.len;
-            self.render_commands.append(self.allocator, .init(.custom, next_cmd)) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
-            self.render_commands_cust.append(self.allocator, cmd) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
+            });
         }
 
         if (e.features.bShowLabel and e.label_str.len > 0) {
@@ -922,18 +933,12 @@ fn DoElementEmitDrawCommands(self: *GU) void {
             //  and the renderer may not respect the call order if batching;
             //  maybe add a "batch layer" value to draw cmd, and give labels
             //  a half-value extra so that they are intereted as upper layer.
-            const cmd: RCText = .{
+            self.EmitRenderCommand(.text, RCText{
                 .pos = e.area.toPos(),
                 .font = &self.fonts.items[e.label_font],
                 .color = e.layout.color,
                 .str = e.label_str,
-            };
-
-            const next_text = self.render_commands_text.items.len;
-            self.render_commands.append(self.allocator, .init(.text, next_text)) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
-            self.render_commands_text.append(self.allocator, cmd) catch |err|
-                std.log.err("DoElementEmitDrawCommands: Draw Command ({t})", .{err});
+            });
         }
     }
 }
