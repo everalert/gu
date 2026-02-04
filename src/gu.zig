@@ -439,8 +439,8 @@ pub const Layout = struct {
     color: u32,
     corner_radius: f32,
     corner_shape: CornerShape,
-    widths: ?[]const f32, // FIXME: doesn't need to be null
-    heights: ?[]const f32, // FIXME: doesn't need to be null
+    widths: []const f32,
+    heights: []const f32,
     padding: Vec2,
     gaps: Vec2,
     auto_line_break: bool,
@@ -732,14 +732,14 @@ fn DoElementLineBreakParsing(self: *GU) void {
 
         if (it_data.relation != .Parent) {
             if (e.layout.mode_w == .Stretch)
-                e.area.w = @max(p.?.area.w + e.area.w - ld.AxisSpacing(.Main, p.?.layout.widths.?.len), 0);
+                e.area.w = @max(p.?.area.w + e.area.w - ld.AxisSpacing(.Main, p.?.layout.widths.len), 0);
             if (e.layout.mode_h == .Stretch)
-                e.area.h = @max(p.?.area.h + e.area.h - ld.AxisSpacing(.Cross, p.?.layout.heights.?.len), 0);
+                e.area.h = @max(p.?.area.h + e.area.h - ld.AxisSpacing(.Cross, p.?.layout.heights.len), 0);
         }
 
         if (p != null and
             p.?.layout.auto_line_break and
-            p.?.layout.widths == null and
+            p.?.layout.widths.len == 0 and
             p.?.layout.mode_w.IsPreComputable() and
             ld.current_w + ld.parent_gaps.x + e.area.w > p.?.area.w - ld.parent_padding.x * 2)
             e.features.bLineBreak = true;
@@ -982,11 +982,6 @@ fn DoElementDebugLog(self: *GU) void {
 /// returns whether creating a new container was successful. guarantees the element
 /// tree will be in a valid state (i.e. the same as before calling, on failure).
 pub fn DoElement(self: *GU, layout: ?*const Layout) bool {
-    if (layout) |lo| {
-        if (lo.widths) |w| assert(w.len > 0);
-        if (lo.heights) |h| assert(h.len > 0);
-    }
-
     const parent_i: ?usize = self.element_stack.getLastOrNull();
     const element_i = self.element_tree.items.len; // next index will equal len
 
@@ -1022,10 +1017,7 @@ pub fn DoElement(self: *GU, layout: ?*const Layout) bool {
     const parent: ?*Element = if (parent_i) |i| &self.element_tree.items[i] else null;
     const element: *Element = &self.element_tree.items[element_i];
 
-    if (self.element_queue_line_break or
-        (parent != null and parent.?.layout.widths != null and
-            ld.current_items == parent.?.layout.widths.?.len))
-    {
+    if (self.element_queue_line_break or (parent != null and ld.current_items == parent.?.layout.widths.len)) {
         self.element_queue_line_break = false;
         ld.line += 1;
         ld.current_items = 0;
@@ -1035,12 +1027,12 @@ pub fn DoElement(self: *GU, layout: ?*const Layout) bool {
 
     if (parent) |pa| {
         if (pa.first_child == null) pa.first_child = element_i;
-        if (pa.layout.widths) |widths| {
-            element.area.w = widths[(ld.current_items - 1) % widths.len];
+        if (pa.layout.widths.len > 0) {
+            element.area.w = pa.layout.widths[(ld.current_items - 1) % pa.layout.widths.len];
             element.layout.mode_w = DimensionMode.ParseAuto(element.area.w);
         }
-        if (pa.layout.heights) |heights| {
-            element.area.h = heights[(ld.line - 1) % heights.len];
+        if (pa.layout.heights.len > 0) {
+            element.area.h = pa.layout.heights[(ld.line - 1) % pa.layout.heights.len];
             element.layout.mode_h = DimensionMode.ParseAuto(element.area.h);
         }
         pa.children += 1; // FIXME: now redundant with line break parsing implemented?
@@ -1083,13 +1075,13 @@ pub fn EndElement(self: *GU) void {
 
     if (element.layout.mode_w == .Stretch) {
         assert(parent != null);
-        assert(parent.?.layout.widths != null);
+        assert(parent.?.layout.widths.len > 0);
         assert(parent.?.layout.mode_w.IsPreComputable());
         assert(element.area.w < 0);
     }
     if (element.layout.mode_h == .Stretch) {
         assert(parent != null);
-        assert(parent.?.layout.heights != null);
+        assert(parent.?.layout.heights.len > 0);
         assert(parent.?.layout.mode_h.IsPreComputable());
         assert(element.area.h < 0);
     }
