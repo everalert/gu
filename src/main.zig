@@ -306,7 +306,7 @@ const RenderData = struct {
                 SDLEP(c.SDL_GetCurrentTime(&t));
                 const t_f = @as(f32, @floatFromInt(@mod(@divTrunc(t, c.SDL_NS_PER_MS), 2500)));
                 const t_start = t_f * std.math.tau / 2500;
-                const amp: f32 = cmd.rect.h / 2;
+                const amp: f32 = cmd.rect.h / 2 - 1;
                 const freq: f32 = amp * 2;
                 var pts: [128]c.SDL_FPoint = undefined;
                 for (&pts, 0..) |*p, i| {
