@@ -313,7 +313,7 @@ pub const Element = struct {
     custom_action: CustomActionHandle, // impl-defined action associated with custom command
 
     const empty: Element = .{
-        .layout = .default,
+        .layout = .blank,
         .area = .zero,
         .clip = .zero,
         .fill = .zero,
@@ -455,9 +455,7 @@ pub const Layout = struct {
     auto_line_break: bool,
     //scroll: ?
 
-    const default = zeroInit(Layout, .{
-        .auto_line_break = true,
-    });
+    const blank = zeroInit(Layout, .{});
 };
 
 /// implementation-defined shape id
@@ -570,7 +568,7 @@ mouse_left: KeyState, // LMB
 pub fn Init(
     alloc: Allocator,
     backend: Backend,
-    base_layout: ?Layout,
+    base_layout: Layout,
     base_button_style: ButtonStyle,
 ) GU {
     return GU{
@@ -599,7 +597,7 @@ pub fn Init(
         .render_commands_rect = .empty,
         .render_commands_text = .empty,
         .render_commands_clip = .empty,
-        .base_layout = base_layout orelse .default,
+        .base_layout = base_layout,
         .base_button_style = base_button_style,
         .mouse_pt = .{ .x = -1, .y = -1 },
         .element_queue_line_break = false,
@@ -996,7 +994,7 @@ pub fn DoElement(self: *GU, layout: ?*const Layout) bool {
 
     self.element_tree.append(self.allocator, e: {
         var e: Element = .empty;
-        e.layout = if (layout) |lo| lo.* else .default;
+        e.layout = if (layout) |lo| lo.* else .blank;
         e.id = element_i;
         e.parent = parent_i;
         e.sibling_prev = self.element_sibling;
