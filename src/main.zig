@@ -19,6 +19,7 @@ const GUFontAtlas = GU.FontAtlas;
 const GUTextureHandle = GU.TextureHandle;
 const GUFontHandle = GU.FontHandle;
 const GULayout = GU.Layout;
+const GUButtonStyle = GU.ButtonStyle;
 const GUCustomActionHandle = GU.CustomActionHandle;
 const GURCCustom = GU.RCCustom;
 const GURCRect = GU.RCRect;
@@ -500,6 +501,16 @@ fn generate_layout_shaped_box(shape: GUCornerShape) GULayout {
     });
 }
 
+const BASE_BUTTON_STYLE = GUButtonStyle{
+    .PaddingVer = 2,
+    .PaddingHor = 8,
+    .CornerRad = 6,
+    .CornerShape = RenderData.CNR_ROUND,
+    .ColorIdle = 0x008000FF,
+    .ColorHover = 0x00C000FF,
+    .ColorDown = 0x004000FF,
+};
+
 //------------------------------------------------------------------------------
 
 const App = struct {
@@ -543,7 +554,7 @@ pub export fn SDL_AppInit(app: **App, argc: c_int, argv: [*][:0]u8) c.SDL_AppRes
 
     // UI-RELATED
 
-    app_global.gu = GU.Init(alloc, app_global.rd.GetBackend(), BASE_LAYOUT);
+    app_global.gu = GU.Init(alloc, app_global.rd.GetBackend(), BASE_LAYOUT, BASE_BUTTON_STYLE);
 
     app_global.font = AsciiFont.Init(app_global.rd.renderer, FONT) catch |e|
         std.debug.panic("initializing AsciiFont failed: {s}", .{@errorName(e)});

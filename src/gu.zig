@@ -257,17 +257,6 @@ pub const ButtonStyle = struct {
     ColorIdle: u32,
     ColorHover: u32,
     ColorDown: u32,
-
-    // FIXME: ?? define default from user side?
-    const default: ButtonStyle = .{
-        .PaddingVer = 2,
-        .PaddingHor = 8,
-        .CornerRad = 6,
-        .CornerShape = 1, // round
-        .ColorIdle = 0x008000FF,
-        .ColorHover = 0x00C000FF,
-        .ColorDown = 0x004000FF,
-    };
 };
 
 pub const KeyState = struct {
@@ -548,6 +537,7 @@ clip_stack: ArrayList(Rect),
 label_arena: ArenaAllocator,
 
 base_layout: Layout,
+base_button_style: ButtonStyle,
 
 buttons: StringHashMap(Button),
 button_delete_queue: ArrayList([]const u8),
@@ -571,7 +561,12 @@ render_commands_clip: ArrayList(RCClip),
 mouse_pt: Vec2,
 mouse_left: KeyState, // LMB
 
-pub fn Init(alloc: Allocator, backend: Backend, base_layout: ?Layout) GU {
+pub fn Init(
+    alloc: Allocator,
+    backend: Backend,
+    base_layout: ?Layout,
+    base_button_style: ButtonStyle,
+) GU {
     return GU{
         .allocator = alloc,
         .label_arena = .init(alloc),
@@ -599,6 +594,7 @@ pub fn Init(alloc: Allocator, backend: Backend, base_layout: ?Layout) GU {
         .render_commands_text = .empty,
         .render_commands_clip = .empty,
         .base_layout = base_layout orelse .default,
+        .base_button_style = base_button_style,
         .mouse_pt = .{ .x = -1, .y = -1 },
         .element_queue_line_break = false,
         .element_sibling = null,
@@ -1338,7 +1334,7 @@ pub fn ValueStack(comptime ValueT: type) type {
 
 fn ButtonStyleStackStart(self: *GU) void {
     assert(self.ButtonStyleAllEmpty());
-    self.PushButtonStyle(.default);
+    self.PushButtonStyle(self.base_button_style);
     self.ButtonStyleGenerate();
 }
 
