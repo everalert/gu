@@ -63,7 +63,8 @@ fn step_example(
     if (opts.NoBin) {
         step.dependOn(&bin.step);
     } else {
-        b.installArtifact(bin);
+        const install = b.addInstallArtifact(bin, .{});
+        step.dependOn(&install.step);
     }
 }
 
