@@ -260,13 +260,19 @@ pub const ButtonStyle = struct {
 };
 
 pub const KeyState = struct {
-    down: bool = false,
-    just_up: bool = false,
-    just_down: bool = false,
-    accumulator_down: bool = false,
-    accumulator_changes: u32 = 0,
+    down: bool,
+    just_up: bool,
+    just_down: bool,
+    accumulator_down: bool,
+    accumulator_changes: u32,
 
-    pub const default = zeroInit(KeyState, .{});
+    pub const start: KeyState = .{
+        .down = false,
+        .just_up = false,
+        .just_down = false,
+        .accumulator_down = false,
+        .accumulator_changes = 0,
+    };
 
     pub fn Accumulate(self: *KeyState, down: bool) void {
         if (self.accumulator_down != down) {
@@ -598,7 +604,7 @@ pub fn Init(
         .mouse_pt = .{ .x = -1, .y = -1 },
         .element_queue_line_break = false,
         .element_sibling = null,
-        .mouse_left = .default,
+        .mouse_left = .start,
     };
 }
 
