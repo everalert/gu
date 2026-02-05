@@ -236,6 +236,7 @@ const RenderData = struct {
     pub const CNR_QCIRCLE: GUCornerShape = 5;
     pub const CNR_RHOMBUS: GUCornerShape = 6;
     pub const ACT_DEMO_SINE: GUCustomActionHandle = 0;
+    pub const ACT_DEMO_GRADIENT: GUCustomActionHandle = 1;
 
     pub const empty: RenderData = .{
         .window = null,
@@ -318,6 +319,33 @@ const RenderData = struct {
                 const c1 = Color.fromInt(cmd.color);
                 SDLEP(c.SDL_SetRenderDrawColor(self.renderer, c1.r, c1.g, c1.b, c1.a));
                 SDLEP(c.SDL_RenderLines(self.renderer, &pts, pts.len));
+            },
+            ACT_DEMO_GRADIENT => {
+                var pixels: [*]u32 = undefined;
+                var pitch: c_int = undefined; // in bytes, not values
+                if (c.SDL_LockTexture(app_global.gradient_texture, null, @ptrCast(&pixels), &pitch)) {
+                    defer c.SDL_UnlockTexture(app_global.gradient_texture);
+                    var t: i64 = 0;
+                    SDLEP(c.SDL_GetCurrentTime(&t));
+                    const xo: usize = 0xFF - @as(usize, @intCast(@mod(t >> 24, 0x3F)));
+                    const yo: usize = 0xFF - @as(usize, @intCast(@mod(t >> 25, 0x3F)));
+                    for (0..64) |y| {
+                        for (0..64) |x| {
+                            const xc: u32 = @truncate(((xo + x) % 0x3F) * 0xFF / 0x3F);
+                            const yc: u32 = @truncate(((yo + y) % 0x3F) * 0xFF / 0x3F);
+                            pixels[x + y * 64] = 0xFFFFFFFF ^ (xc << 8) ^ (yc << 16);
+                        }
+                    }
+                    const c1 = Color.fromInt(cmd.color);
+                    SDLEP(c.SDL_SetRenderDrawColor(self.renderer, c1.r, c1.g, c1.b, c1.a));
+                    SDLEP(c.SDL_RenderTextureTiled(
+                        self.renderer,
+                        app_global.gradient_texture,
+                        null,
+                        1.0,
+                        &.{ .x = cmd.rect.x, .y = cmd.rect.y, .w = cmd.rect.w, .h = cmd.rect.h },
+                    ));
+                }
             },
             else => unreachable,
         }
@@ -530,6 +558,8 @@ const App = struct {
     btn_counter: usize,
     btn_color_loop: usize,
 
+    gradient_texture: *c.SDL_Texture,
+
     step: bool,
 };
 
@@ -560,6 +590,7 @@ pub export fn SDL_AppInit(app: **App, argc: c_int, argv: [*][:0]u8) c.SDL_AppRes
         std.debug.panic("initializing AsciiFont failed: {s}", .{@errorName(e)});
     app_global.font_handle = app_global.gu.AddFont(app_global.font.GetFontAtlas()) catch |e|
         std.debug.panic("AddFont failed: {s}", .{@errorName(e)});
+
     for (0..app_global.textures.len) |ti| {
         app_global.textures[ti] =
             ImageTexture.Init(app_global.rd.renderer, TEXTURES[ti]) catch |e|
@@ -568,6 +599,14 @@ pub export fn SDL_AppInit(app: **App, argc: c_int, argv: [*][:0]u8) c.SDL_AppRes
             app_global.gu.AddTexture(app_global.textures[ti].GetTextureAtlas()) catch |e|
                 std.debug.panic("AddTexture failed: {s}", .{@errorName(e)});
     }
+
+    app_global.gradient_texture = SDLEP(c.SDL_CreateTexture(
+        app_global.rd.renderer,
+        c.SDL_PIXELFORMAT_RGBA8888,
+        c.SDL_TEXTUREACCESS_STREAMING,
+        64,
+        64,
+    ));
 
     app_global.btn_toggle = false;
     app_global.btn_counter = 0;
@@ -656,12 +695,17 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     }
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
-        var current_time: i64 = 0;
-        SDLEP(c.SDL_GetCurrentTime(&current_time));
-        const current_time_f = @as(f32, @floatFromInt(@mod(@divTrunc(current_time, c.SDL_NS_PER_MS), 2500)));
-        gu.DoLabel(font, 0xCCCCFFFF, "{d:0>5.3} {d:0>5.3}", .{ current_time_f / 1000, current_time_f / 2500 });
+        gu.SetElementGaps(4, 4);
         gu.DoLineBreak();
-        gu.DoCustomSurface(RenderData.ACT_DEMO_SINE, 192, 48);
+        gu.PushButtonPadding(12, 3);
+        defer gu.PopButtonPadding();
+        gu.PushButtonCorner(32, RenderData.CNR_SUPERELLIPSE);
+        defer gu.PopButtonCorner();
+        gu.SetNextButtonColor(0x800000FF, 0xC00000FF, 0x400000FF);
+        if (gu.DoButton(font, "SUB", .{})) app.btn_counter -|= 1;
+        if (gu.DoButton(font, "ADD", .{})) app.btn_counter +|= 1;
+        gu.DoLineBreak();
+        gu.DoLabel(font, 0xCCCCFFFF, "{d:0>3}", .{app.btn_counter});
     }
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
@@ -692,17 +736,14 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     }
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
-        gu.SetElementGaps(4, 4);
+        var current_time: i64 = 0;
+        SDLEP(c.SDL_GetCurrentTime(&current_time));
+        const current_time_f = @as(f32, @floatFromInt(@mod(@divTrunc(current_time, c.SDL_NS_PER_MS), 2500)));
+        gu.DoLabel(font, 0xCCCCFFFF, "{d:0>5.3} {d:0>5.3}", .{ current_time_f / 1000, current_time_f / 2500 });
         gu.DoLineBreak();
-        gu.PushButtonPadding(12, 3);
-        defer gu.PopButtonPadding();
-        gu.PushButtonCorner(32, RenderData.CNR_SUPERELLIPSE);
-        defer gu.PopButtonCorner();
-        gu.SetNextButtonColor(0x800000FF, 0xC00000FF, 0x400000FF);
-        if (gu.DoButton(font, "SUB", .{})) app.btn_counter -|= 1;
-        if (gu.DoButton(font, "ADD", .{})) app.btn_counter +|= 1;
+        gu.DoCustomSurface(RenderData.ACT_DEMO_SINE, 192, 48);
         gu.DoLineBreak();
-        gu.DoLabel(font, 0xCCCCFFFF, "{d:0>3}", .{app.btn_counter});
+        gu.DoCustomSurface(RenderData.ACT_DEMO_GRADIENT, 192, 48);
     }
 
     gu.EndFrame();
