@@ -542,6 +542,7 @@ label_arena: ArenaAllocator,
 
 base_layout: Layout,
 base_button_style: ButtonStyle,
+base_font: FontHandle,
 
 buttons: StringHashMap(Button),
 button_delete_queue: ArrayList([]const u8),
@@ -555,6 +556,8 @@ btn_style_vstk_corner_shape: ValueStack(CornerShape),
 btn_style_vstk_color_idle: ValueStack(u32),
 btn_style_vstk_color_hover: ValueStack(u32),
 btn_style_vstk_color_down: ValueStack(u32),
+
+font_vstk: ValueStack(FontHandle),
 
 render_commands: ArrayList(RenderCommand),
 render_commands_cust: ArrayList(RCCustom),
@@ -570,6 +573,7 @@ pub fn Init(
     backend: Backend,
     base_layout: Layout,
     base_button_style: ButtonStyle,
+    base_font: FontHandle,
 ) GU {
     return GU{
         .allocator = alloc,
@@ -592,6 +596,7 @@ pub fn Init(
         .btn_style_vstk_color_idle = .Init(alloc),
         .btn_style_vstk_color_hover = .Init(alloc),
         .btn_style_vstk_color_down = .Init(alloc),
+        .font_vstk = .Init(alloc),
         .render_commands = .empty,
         .render_commands_cust = .empty,
         .render_commands_rect = .empty,
@@ -599,6 +604,7 @@ pub fn Init(
         .render_commands_clip = .empty,
         .base_layout = base_layout,
         .base_button_style = base_button_style,
+        .base_font = base_font,
         .mouse_pt = .{ .x = -1, .y = -1 },
         .element_queue_line_break = false,
         .element_sibling = null,
@@ -617,6 +623,7 @@ pub fn Deinit(self: *GU) void {
     self.btn_style_vstk_color_idle.Deinit();
     self.btn_style_vstk_color_hover.Deinit();
     self.btn_style_vstk_color_down.Deinit();
+    self.font_vstk.Deinit();
     self.render_commands.deinit(self.allocator);
     self.render_commands_cust.deinit(self.allocator);
     self.render_commands_rect.deinit(self.allocator);
@@ -652,6 +659,7 @@ pub fn BeginFrame(self: *GU) !void {
     assert(self.element_stack.items.len == 0);
     assert(self.element_line_stack.items.len == 0);
     assert(self.btn_mode_vstk.count == 0);
+    assert(self.font_vstk.count == 0);
 
     const surface_size = self.backend.GetSurfaceDimensions();
 
@@ -1010,6 +1018,7 @@ pub fn DoElement(self: *GU, layout: ?*const Layout) bool {
     // TODO: manage this elsewhere and make this a single function call, else
     //  the upcoming billion stacks will overrun this fn
     // process SetNext api
+    self.font_vstk.PushDequeue(element_i);
     self.btn_mode_vstk.PushDequeue(element_i);
     self.btn_style_vstk_padding_ver.PushDequeue(element_i);
     self.btn_style_vstk_padding_hor.PushDequeue(element_i);
@@ -1068,6 +1077,7 @@ pub fn EndElement(self: *GU) void {
     //  the upcoming billion stacks will overrun this fn
     // process SetNext api
     defer {
+        self.font_vstk.PopAuto(element_i);
         self.btn_mode_vstk.PopAuto(element_i);
         self.btn_style_vstk_padding_ver.PopAuto(element_i);
         self.btn_style_vstk_padding_hor.PopAuto(element_i);
@@ -1135,9 +1145,17 @@ pub fn EndElement(self: *GU) void {
     //  - behaviour of sizing the element with relation to string size is left
     //    to the widget impl
     if (element.features.bShowLabel) {
+        const font = self.font_vstk.GetOrNull() orelse self.base_font;
         assert(element.features.bShowRect == false);
-        assert(element.label_font != maxInt(usize)); // TODO: proper/safe "null font" value
+        assert(font != maxInt(usize)); // TODO: proper/safe "null font" value
         //assert(element.label_str.len > 0);
+
+        const label_size = &self.fonts.items[font].StringSize(element.label_str);
+        element.layout.mode_w = .Fixed;
+        element.layout.mode_h = .Fixed;
+        element.area.w = label_size.x;
+        element.area.h = label_size.y;
+        element.label_font = font;
     }
 }
 
@@ -1394,6 +1412,21 @@ fn ButtonStyleAllEmpty(self: *GU) bool {
 // PUSH/POP/SETNEXT API
 
 //--------------------------------------
+// FONT
+
+pub fn SetNextFont(self: *GU, font: FontHandle) void {
+    self.font_vstk.PushEnqueue(font);
+}
+
+pub fn PushFont(self: *GU, font: FontHandle) void {
+    self.font_vstk.Push(font);
+}
+
+pub fn PopFont(self: *GU) void {
+    self.font_vstk.Pop();
+}
+
+//--------------------------------------
 // BUTTON MODE
 
 pub fn SetNextButtonMode(self: *GU, mode: ButtonMode) void {
@@ -1624,27 +1657,21 @@ pub fn DoImage(self: *GU, texture: TextureHandle, color: ?u32, scale: f32) void 
 //  also be interpreted as "implement layout/styling as stacks in general")
 // FIXME: remove color as input, use color stack
 // TODO: add formatting, like standard string formatting functions
-pub fn DoLabel(self: *GU, font: ?FontHandle, color: ?u32, comptime fmt: []const u8, args: anytype) void {
+pub fn DoLabel(self: *GU, color: ?u32, comptime fmt: []const u8, args: anytype) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
     const str = std.fmt.allocPrint(self.label_arena.allocator(), fmt, args) catch |err|
         std.debug.panic("DoLabel failed to allocate string: ({s})", .{@errorName(err)});
     element.features.bShowLabel = true;
-    element.label_font = font orelse 0;
     element.label_str = str;
     element.layout.color = color orelse 0xFFFFFFFF;
-    element.layout.mode_w = .Fixed;
-    element.layout.mode_h = .Fixed;
-    const label_size = &self.fonts.items[element.label_font].StringSize(element.label_str);
-    element.area.w = label_size.x;
-    element.area.h = label_size.y;
 }
 
 // FIXME: remove font as input, use font stack
 // NOTE: id hash uses input fmt, not resolved formatted string
 /// returns whether button was 'activated' (pressed)
-pub fn DoButton(self: *GU, font: ?FontHandle, comptime fmt: []const u8, args: anytype) bool {
+pub fn DoButton(self: *GU, comptime fmt: []const u8, args: anytype) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
     const element = self.GetElement();
@@ -1652,7 +1679,7 @@ pub fn DoButton(self: *GU, font: ?FontHandle, comptime fmt: []const u8, args: an
     element.features.bShowRect = true;
     element.name = fmt;
 
-    self.DoLabel(font, null, fmt, args);
+    self.DoLabel(null, fmt, args);
 
     return self.GetElementClicked();
 }
@@ -1663,7 +1690,7 @@ pub fn DoButton(self: *GU, font: ?FontHandle, comptime fmt: []const u8, args: an
 /// if button is culled (due to not rendering, clip culling, etc.), the external
 /// bool will NOT be toggled
 /// returns whether button was 'activated' (pressed and subsequently toggled)
-pub fn DoToggleButton(self: *GU, active: *bool, font: ?FontHandle, comptime fmt: []const u8, args: anytype) bool {
+pub fn DoToggleButton(self: *GU, active: *bool, comptime fmt: []const u8, args: anytype) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
     const element = self.GetElement();
@@ -1675,7 +1702,7 @@ pub fn DoToggleButton(self: *GU, active: *bool, font: ?FontHandle, comptime fmt:
     if (active.*) element.features.bClickDepressed = true;
     if (activated) active.* = !active.*;
 
-    self.DoLabel(font, null, fmt, args);
+    self.DoLabel(null, fmt, args);
 
     return activated;
 }
