@@ -14,46 +14,52 @@ const Vec2 = @import("m_vec2.zig");
 const Rect = @import("m_rect.zig");
 const Color = @import("m_color.zig").Color;
 
+// TODO: ?? add CanDrawString to check against supported character range in font impl
 pub const Backend = struct {
     ptr: *anyopaque,
-    fnGetSurfaceDimensions: *const fn (*anyopaque) Vec2,
-    fnEmitCustomCommand: *const fn (*anyopaque, *const RCCustom) void,
-    fnDrawRect: *const fn (*anyopaque, *const RCRect) void,
-    fnDrawString: *const fn (*anyopaque, *const RCText) void,
-    fnSetClip: *const fn (*anyopaque, *const RCClip) void,
-    fnBeginRendering: *const fn (*anyopaque) void,
-    fnEndRendering: *const fn (*anyopaque) void,
+    fnSurfaceSize: *const fn (*anyopaque) Vec2,
+    fnCustomCommandEmit: *const fn (*anyopaque, *const RCCustom) void,
+    fnRectDraw: *const fn (*anyopaque, *const RCRect) void,
+    fnStringDraw: *const fn (*anyopaque, *const RCText) void,
+    fnStringSize: *const fn (*anyopaque, font: FontHandle, []const u8) Vec2,
+    fnClipSet: *const fn (*anyopaque, *const RCClip) void,
+    fnRenderBegin: *const fn (*anyopaque) void,
+    fnRenderEnd: *const fn (*anyopaque) void,
 
-    pub fn GetSurfaceDimensions(self: *Backend) Vec2 {
-        return self.fnGetSurfaceDimensions(self.ptr);
+    pub fn SurfaceSize(self: *Backend) Vec2 {
+        return self.fnSurfaceSize(self.ptr);
     }
 
-    pub fn EmitCustomCommand(self: *Backend, cmd: *const RCCustom) void {
-        self.fnEmitCustomCommand(self.ptr, cmd);
+    pub fn CustomCommandEmit(self: *Backend, cmd: *const RCCustom) void {
+        self.fnCustomCommandEmit(self.ptr, cmd);
     }
 
     // TODO: impl texture tile drawing, see RenderCommand->Rect
-    pub fn DrawRect(self: *Backend, cmd: *const RCRect) void {
-        self.fnDrawRect(self.ptr, cmd);
+    pub fn RectDraw(self: *Backend, cmd: *const RCRect) void {
+        self.fnRectDraw(self.ptr, cmd);
     }
 
-    pub fn DrawString(self: *Backend, cmd: *const RCText) void {
-        self.fnDrawString(self.ptr, cmd);
+    pub fn StringDraw(self: *Backend, cmd: *const RCText) void {
+        self.fnStringDraw(self.ptr, cmd);
     }
 
-    pub fn SetClip(self: *Backend, cmd: *const RCClip) void {
-        self.fnSetClip(self.ptr, cmd);
+    pub fn StringSize(self: *Backend, font: FontHandle, str: []const u8) Vec2 {
+        return self.fnStringSize(self.ptr, font, str);
+    }
+
+    pub fn ClipSet(self: *Backend, cmd: *const RCClip) void {
+        self.fnClipSet(self.ptr, cmd);
     }
 
     /// called as a way to signal to the backend that we are about to render a
     /// frame, and give it a 'hook' to do any related setup (store clip state, etc.)
-    pub fn BeginRendering(self: *Backend) void {
-        self.fnBeginRendering(self.ptr);
+    pub fn RenderBegin(self: *Backend) void {
+        self.fnRenderBegin(self.ptr);
     }
 
     /// a 'hook' for the backend to cleanup after we're done with a frame
-    pub fn EndRendering(self: *Backend) void {
-        self.fnEndRendering(self.ptr);
+    pub fn RenderEnd(self: *Backend) void {
+        self.fnRenderEnd(self.ptr);
     }
 };
 
@@ -119,7 +125,7 @@ pub const RCRect = struct {
 
 pub const RCText = struct {
     str: []const u8,
-    font: *FontAtlas,
+    font: FontHandle,
     pos: Vec2,
     color: u32,
 };
@@ -132,38 +138,6 @@ pub const RCClip = struct {
 
 pub const FontHandle = usize;
 pub const TextureHandle = usize;
-
-// FIXME: not sure this needs to be in ui core, maybe adding these to backend
-//  vtable is enough? so we only remember handles (provided by backend)
-// TODO: add CanDrawString to check against supported character range in font impl
-pub const FontAtlas = struct {
-    ptr: *anyopaque,
-    fnDrawString: *const fn (*anyopaque, []const u8, *const Vec2) void,
-    fnDrawChar: *const fn (*anyopaque, u8, *const Vec2) void,
-    fnStringSize: *const fn (*anyopaque, []const u8) Vec2,
-    fnCharSize: *const fn (*anyopaque, u8) Vec2,
-    fnSetColor: *const fn (*anyopaque, u32) void,
-
-    pub fn DrawString(self: *FontAtlas, str: []const u8, pos: *const Vec2) void {
-        self.fnDrawString(self.ptr, str, pos);
-    }
-
-    pub fn DrawChar(self: *FontAtlas, char: u8, pos: *const Vec2) void {
-        self.fnDrawChar(self.ptr, char, pos);
-    }
-
-    pub fn StringSize(self: *FontAtlas, str: []const u8) Vec2 {
-        return self.fnStringSize(self.ptr, str);
-    }
-
-    pub fn CharSize(self: *FontAtlas, char: u8) Vec2 {
-        return self.fnCharSize(self.ptr, char);
-    }
-
-    pub fn SetColor(self: *FontAtlas, color: u32) void {
-        return self.fnSetColor(self.ptr, color);
-    }
-};
 
 // TODO: tiling; i.e. actually make it an atlas
 // FIXME: not sure this needs to be in ui core, maybe adding these to backend
@@ -528,7 +502,7 @@ allocator: Allocator,
 
 backend: Backend,
 
-fonts: ArrayList(FontAtlas), // TODO: impl with handles, update FontHandle
+font_vstk: ValueStack(FontHandle), // TODO: user-defined font handle type
 textures: ArrayList(TextureAtlas), // TODO: impl with handles, update TextureHandle
 
 element_tree: ArrayList(Element),
@@ -557,8 +531,6 @@ btn_style_vstk_color_idle: ValueStack(u32),
 btn_style_vstk_color_hover: ValueStack(u32),
 btn_style_vstk_color_down: ValueStack(u32),
 
-font_vstk: ValueStack(FontHandle),
-
 render_commands: ArrayList(RenderCommand),
 render_commands_cust: ArrayList(RCCustom),
 render_commands_rect: ArrayList(RCRect),
@@ -579,7 +551,6 @@ pub fn Init(
         .allocator = alloc,
         .label_arena = .init(alloc),
         .backend = backend,
-        .fonts = .empty,
         .textures = .empty,
         .element_tree = .empty,
         .element_stack = .empty,
@@ -623,7 +594,6 @@ pub fn Deinit(self: *GU) void {
     self.btn_style_vstk_color_idle.Deinit();
     self.btn_style_vstk_color_hover.Deinit();
     self.btn_style_vstk_color_down.Deinit();
-    self.font_vstk.Deinit();
     self.render_commands.deinit(self.allocator);
     self.render_commands_cust.deinit(self.allocator);
     self.render_commands_rect.deinit(self.allocator);
@@ -634,17 +604,11 @@ pub fn Deinit(self: *GU) void {
     self.element_stack.deinit(self.allocator);
     self.element_tree.deinit(self.allocator);
     self.textures.deinit(self.allocator);
-    self.fonts.deinit(self.allocator);
+    self.font_vstk.Deinit();
 }
 
 //------------------------------------------------------------------------------
 // RESOURCES
-
-// TODO: impl handle-based system
-pub fn AddFont(self: *GU, font: FontAtlas) !usize {
-    try self.fonts.append(self.allocator, font);
-    return self.fonts.items.len - 1;
-}
 
 // TODO: impl handle-based system
 pub fn AddTexture(self: *GU, texture: TextureAtlas) !usize {
@@ -661,7 +625,7 @@ pub fn BeginFrame(self: *GU) !void {
     assert(self.btn_mode_vstk.count == 0);
     assert(self.font_vstk.count == 0);
 
-    const surface_size = self.backend.GetSurfaceDimensions();
+    const surface_size = self.backend.SurfaceSize();
 
     _ = self.label_arena.reset(.retain_capacity);
     self.btn_style_arena.clearRetainingCapacity();
@@ -691,7 +655,7 @@ pub fn EndFrame(self: *GU) void {
     _ = self.element_line_stack.pop();
     self.ButtonStyleStackEnd();
 
-    self.backend.BeginRendering();
+    self.backend.RenderBegin();
 
     self.DoElementLineBreakParsing();
     self.DoElementPositioning();
@@ -702,14 +666,14 @@ pub fn EndFrame(self: *GU) void {
 
     for (self.render_commands.items) |cmd| {
         switch (cmd.kind) {
-            .custom => self.backend.EmitCustomCommand(&self.render_commands_cust.items[cmd.handle]),
-            .rect => self.backend.DrawRect(&self.render_commands_rect.items[cmd.handle]),
-            .text => self.backend.DrawString(&self.render_commands_text.items[cmd.handle]),
-            .clip => self.backend.SetClip(&self.render_commands_clip.items[cmd.handle]),
+            .custom => self.backend.CustomCommandEmit(&self.render_commands_cust.items[cmd.handle]),
+            .rect => self.backend.RectDraw(&self.render_commands_rect.items[cmd.handle]),
+            .text => self.backend.StringDraw(&self.render_commands_text.items[cmd.handle]),
+            .clip => self.backend.ClipSet(&self.render_commands_clip.items[cmd.handle]),
         }
     }
 
-    self.backend.EndRendering();
+    self.backend.RenderEnd();
 }
 
 //------------------------------------------------------------------------------
@@ -837,7 +801,7 @@ fn DoElementClipping(self: *GU) void {
     defer assert(self.clip_stack.items.len == 0);
 
     const c_stack = &self.clip_stack;
-    const sd = self.backend.GetSurfaceDimensions();
+    const sd = self.backend.SurfaceSize();
     const c_base = Rect{ .x = 0, .y = 0, .w = sd.x, .h = sd.y };
     var c = c_base;
 
@@ -886,7 +850,7 @@ fn EmitRenderCommand(
 }
 
 fn DoElementEmitRenderCommands(self: *GU) void {
-    const sd = self.backend.GetSurfaceDimensions();
+    const sd = self.backend.SurfaceSize();
     const c_base = Rect{ .x = 0, .y = 0, .w = sd.x, .h = sd.y };
     var c = c_base;
 
@@ -943,7 +907,7 @@ fn DoElementEmitRenderCommands(self: *GU) void {
             //  a half-value extra so that they are intereted as upper layer.
             self.EmitRenderCommand(.text, RCText{
                 .pos = e.area.toPos(),
-                .font = &self.fonts.items[e.label_font],
+                .font = e.label_font,
                 .color = e.layout.color,
                 .str = e.label_str,
             });
@@ -1150,7 +1114,7 @@ pub fn EndElement(self: *GU) void {
         assert(font != maxInt(usize)); // TODO: proper/safe "null font" value
         //assert(element.label_str.len > 0);
 
-        const label_size = &self.fonts.items[font].StringSize(element.label_str);
+        const label_size = &self.backend.StringSize(font, element.label_str);
         element.layout.mode_w = .Fixed;
         element.layout.mode_h = .Fixed;
         element.area.w = label_size.x;

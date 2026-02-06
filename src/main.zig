@@ -15,7 +15,6 @@ const GU = @import("gu.zig");
 const GUBackend = GU.Backend;
 const GUCornerShape = GU.CornerShape;
 const GUTextureAtlas = GU.TextureAtlas;
-const GUFontAtlas = GU.FontAtlas;
 const GUTextureHandle = GU.TextureHandle;
 const GUFontHandle = GU.FontHandle;
 const GULayout = GU.Layout;
@@ -34,7 +33,7 @@ const sdf = @import("m_sdf.zig");
 const WINDOW_W = 800;
 const WINDOW_H = 600;
 
-const FONT = @embedFile("ascii-font");
+const FONTS: [1][]const u8 = .{@embedFile("ascii-font")};
 const TEXTURES: [2][]const u8 = .{ @embedFile("yuriko1"), @embedFile("yuriko2") };
 
 // FIXME: assumes tile size/coordinates for now (implemented as a pure port of test code as stopgap)
@@ -57,45 +56,40 @@ const AsciiFont = struct {
         c.SDL_DestroyTexture(self.texture);
     }
 
+    // TODO: use CharSize
+    pub fn MeasureString(_: *AsciiFont, str: []const u8) Vec2 {
+        assert(std.mem.min(u8, str) >= ' ');
+        assert(std.mem.max(u8, str) < 127);
+        return .{ .x = 10 * @as(f32, @floatFromInt(str.len)), .y = 21 };
+    }
+
     // TODO: use alpha from input color
-    fn SetColor(ptr: *anyopaque, color: u32) void {
-        const self: *AsciiFont = @ptrCast(@alignCast(ptr));
+    pub fn SetColor(self: *AsciiFont, color: u32) void {
         const rgba = Color.fromInt(color);
         SDLEP(c.SDL_SetTextureColorMod(self.texture, rgba.r, rgba.g, rgba.b));
     }
 
     // FONT RELATED
 
-    // TODO: use CharSize
-    fn StringSize(_: *anyopaque, str: []const u8) Vec2 {
-        //const self: *AsciiFont = @alignCast(@ptrCast(ptr));
-        assert(std.mem.min(u8, str) >= ' ');
-        assert(std.mem.max(u8, str) < 127);
-        return .{ .x = 10 * @as(f32, @floatFromInt(str.len)), .y = 21 };
-    }
-
     // TODO: use data table/mapping for individual char data
-    fn CharSize(_: *anyopaque, _: u8) Vec2 {
-        //const self: *AsciiFont = @alignCast(@ptrCast(ptr));
+    pub fn CharSize(_: *AsciiFont, _: u8) Vec2 {
         return Vec2{ .x = 10, .y = 21 };
     }
 
-    fn DrawString(ptr: *anyopaque, str: []const u8, pos: *const Vec2) void {
-        const self: *AsciiFont = @ptrCast(@alignCast(ptr));
+    pub fn DrawString(self: *AsciiFont, str: []const u8, pos: *const Vec2) void {
         assert(std.mem.min(u8, str) >= ' ');
         assert(std.mem.max(u8, str) < 127);
         var rolling_pos = pos.*;
         for (str) |char| {
-            DrawChar(ptr, char, &rolling_pos);
+            self.DrawChar(char, &rolling_pos);
             rolling_pos.x += CharSize(self, char).x;
         }
     }
 
-    fn DrawChar(ptr: *anyopaque, char: u8, pos: *const Vec2) void {
-        const self: *AsciiFont = @ptrCast(@alignCast(ptr));
+    pub fn DrawChar(self: *AsciiFont, char: u8, pos: *const Vec2) void {
         assert(char >= ' ');
         assert(char < 127);
-        const size = CharSize(ptr, char);
+        const size = self.CharSize(char);
         const n = char - ' ';
         const i: f32 = @as(f32, @floatFromInt(n % 16)) * size.x;
         const j: f32 = @as(f32, @floatFromInt(n / 16)) * size.y;
@@ -105,17 +99,6 @@ const AsciiFont = struct {
             &.{ .x = i, .y = j, .w = size.x, .h = size.y },
             &.{ .x = pos.x, .y = pos.y, .w = size.x, .h = size.y },
         ));
-    }
-
-    pub fn GetFontAtlas(self: *AsciiFont) GUFontAtlas {
-        return GUFontAtlas{
-            .ptr = self,
-            .fnDrawString = DrawString,
-            .fnDrawChar = DrawChar,
-            .fnStringSize = StringSize,
-            .fnCharSize = CharSize,
-            .fnSetColor = SetColor,
-        };
     }
 };
 
@@ -225,9 +208,11 @@ const RenderData = struct {
     window: ?*c.SDL_Window,
     renderer: ?*c.SDL_Renderer,
     stored_clip: ?c.SDL_Rect,
-    tex_corners: [CNR_SHAPES - 1][LOD_LEVELS]CornerTexture, // 4, 8, 16 and 32px radii
-    const LOD_LEVELS = 4;
-    const CNR_SHAPES = 7;
+    tex_corners: [NUM_CNR_SHAPES - 1][NUM_LOD_LEVELS]CornerTexture, // 4, 8, 16 and 32px radii
+    fonts: [NUM_FONTS]AsciiFont,
+    const NUM_LOD_LEVELS = 4;
+    const NUM_CNR_SHAPES = 7;
+    const NUM_FONTS = 1;
     pub const CNR_RECT: GUCornerShape = 0;
     pub const CNR_ROUND: GUCornerShape = 1;
     pub const CNR_ANGULAR: GUCornerShape = 2;
@@ -237,12 +222,14 @@ const RenderData = struct {
     pub const CNR_RHOMBUS: GUCornerShape = 6;
     pub const ACT_DEMO_SINE: GUCustomActionHandle = 0;
     pub const ACT_DEMO_GRADIENT: GUCustomActionHandle = 1;
+    pub const FONT_BODY: GUFontHandle = 0;
 
     pub const empty: RenderData = .{
         .window = null,
         .renderer = null,
         .stored_clip = null,
         .tex_corners = undefined,
+        .fonts = undefined,
     };
 
     pub fn Init() !RenderData {
@@ -251,14 +238,17 @@ const RenderData = struct {
         SDLE(c.SDL_SetHint(c.SDL_HINT_RENDER_VSYNC, "1")) catch {};
         try SDLE(c.SDL_CreateWindowAndRenderer("GU", WINDOW_W, WINDOW_H, 0, &rd.window, &rd.renderer));
 
-        comptime assert(CNR_PX_LODS.len == CNR_SHAPES - 1);
-        for (0..CNR_SHAPES - 1) |ci| {
-            comptime assert(CNR_PX_LODS[ci].len == LOD_LEVELS);
-            for (0..LOD_LEVELS) |li| {
+        comptime assert(CNR_PX_LODS.len == NUM_CNR_SHAPES - 1);
+        for (0..NUM_CNR_SHAPES - 1) |ci| {
+            comptime assert(CNR_PX_LODS[ci].len == NUM_LOD_LEVELS);
+            for (0..NUM_LOD_LEVELS) |li| {
                 const width = pow(i32, 2, @as(i32, @intCast(li)) + 2) * 2;
-                rd.tex_corners[ci][li] = try CornerTexture.Init(rd.renderer, width, CNR_PX_LODS[ci][li]);
+                rd.tex_corners[ci][li] = try .Init(rd.renderer, width, CNR_PX_LODS[ci][li]);
             }
         }
+
+        comptime assert(FONTS.len == NUM_FONTS);
+        for (0..NUM_FONTS) |fi| rd.fonts[fi] = try .Init(rd.renderer, FONTS[fi]);
 
         errdefer comptime unreachable;
         SDLEP(c.SDL_SetRenderDrawBlendMode(rd.renderer, c.SDL_BLENDMODE_BLEND));
@@ -268,14 +258,15 @@ const RenderData = struct {
     }
 
     pub fn Deinit(self: *RenderData) void {
-        for (0..CNR_SHAPES - 1) |ci| for (0..LOD_LEVELS) |li| self.tex_corners[ci][li].Deinit();
+        for (0..NUM_CNR_SHAPES - 1) |ci| for (0..NUM_LOD_LEVELS) |li| self.tex_corners[ci][li].Deinit();
+        for (0..NUM_FONTS) |fi| self.fonts[fi].Deinit();
         c.SDL_DestroyWindow(self.window);
         c.SDL_DestroyRenderer(self.renderer);
     }
 
     // BACKEND
 
-    fn GetSurfaceDimensions(ptr: *anyopaque) Vec2 {
+    fn fn_surface_size(ptr: *anyopaque) Vec2 {
         const self: *RenderData = @ptrCast(@alignCast(ptr));
         var screen_w: c_int = undefined;
         var screen_h: c_int = undefined;
@@ -283,7 +274,18 @@ const RenderData = struct {
         return Vec2{ .x = @floatFromInt(screen_w), .y = @floatFromInt(screen_h) };
     }
 
-    fn GetClip(ptr: *anyopaque) Rect {
+    fn fn_clip_set(ptr: *anyopaque, cmd: *const GURCClip) void {
+        const self: *RenderData = @ptrCast(@alignCast(ptr));
+        const rect = c.SDL_Rect{
+            .x = @as(c_int, @intFromFloat(cmd.area.x)),
+            .y = @as(c_int, @intFromFloat(cmd.area.y)),
+            .w = @as(c_int, @intFromFloat(cmd.area.w)),
+            .h = @as(c_int, @intFromFloat(cmd.area.h)),
+        };
+        SDLEP(c.SDL_SetRenderClipRect(self.renderer, &rect));
+    }
+
+    fn fn_clip_get(ptr: *anyopaque) Rect {
         const self: *RenderData = @ptrCast(@alignCast(ptr));
         if (self.stored_clip) |*clip| {
             return Rect{
@@ -293,12 +295,12 @@ const RenderData = struct {
                 .h = @as(f32, @floatFromInt(clip.h)),
             };
         }
-        const sd = GetSurfaceDimensions(ptr);
+        const sd = fn_surface_size(ptr);
         return Rect{ .x = 0, .y = 0, .w = sd.w, .h = sd.h };
     }
 
     // TODO: respect corner shape/radius def in cmd
-    fn EmitCustomCommand(ptr: *anyopaque, cmd: *const GURCCustom) void {
+    fn fn_custom_command_emit(ptr: *anyopaque, cmd: *const GURCCustom) void {
         const self: *RenderData = @ptrCast(@alignCast(ptr));
         switch (cmd.action) {
             ACT_DEMO_SINE => {
@@ -351,7 +353,7 @@ const RenderData = struct {
         }
     }
 
-    fn DrawRect(ptr: *anyopaque, cmd: *const GURCRect) void {
+    fn fn_rect_draw(ptr: *anyopaque, cmd: *const GURCRect) void {
         const self: *RenderData = @ptrCast(@alignCast(ptr));
         const c1 = Color.fromInt(cmd.color);
         SDLEP(c.SDL_SetRenderDrawColor(self.renderer, c1.r, c1.g, c1.b, c1.a));
@@ -380,11 +382,11 @@ const RenderData = struct {
         }
 
         assert(cmd.corner_shape > 0);
-        assert(cmd.corner_shape < CNR_SHAPES);
+        assert(cmd.corner_shape < NUM_CNR_SHAPES);
         const dst_size: f32 = @min(@floor(@min(cmd.rect.w, cmd.rect.h) / 2), cmd.corner_radius);
 
         const tex_lod_index: usize =
-            clamp(log2_int_ceil(usize, @intFromFloat(dst_size)), 2, 2 + LOD_LEVELS - 1) - 2;
+            clamp(log2_int_ceil(usize, @intFromFloat(dst_size)), 2, 2 + NUM_LOD_LEVELS - 1) - 2;
         const tex: *CornerTexture = &self.tex_corners[cmd.corner_shape - 1][tex_lod_index];
         SDLEP(c.SDL_SetTextureAlphaMod(tex.texture, c1.a));
         SDLEP(c.SDL_SetTextureColorMod(tex.texture, c1.r, c1.g, c1.b));
@@ -402,24 +404,19 @@ const RenderData = struct {
         ));
     }
 
-    fn DrawString(_: *anyopaque, cmd: *const GURCText) void {
-        //const self: *RenderData = @alignCast(@ptrCast(ptr));
-        cmd.font.SetColor(cmd.color);
-        cmd.font.DrawString(cmd.str, &cmd.pos);
-    }
-
-    fn SetClip(ptr: *anyopaque, cmd: *const GURCClip) void {
+    fn fn_string_draw(ptr: *anyopaque, cmd: *const GURCText) void {
         const self: *RenderData = @ptrCast(@alignCast(ptr));
-        const rect = c.SDL_Rect{
-            .x = @as(c_int, @intFromFloat(cmd.area.x)),
-            .y = @as(c_int, @intFromFloat(cmd.area.y)),
-            .w = @as(c_int, @intFromFloat(cmd.area.w)),
-            .h = @as(c_int, @intFromFloat(cmd.area.h)),
-        };
-        SDLEP(c.SDL_SetRenderClipRect(self.renderer, &rect));
+        const font = &self.fonts[cmd.font];
+        font.SetColor(cmd.color);
+        font.DrawString(cmd.str, &cmd.pos);
     }
 
-    fn BeginRendering(ptr: *anyopaque) void {
+    fn fn_string_size(ptr: *anyopaque, font: GUFontHandle, str: []const u8) Vec2 {
+        const self: *RenderData = @ptrCast(@alignCast(ptr));
+        return self.fonts[font].MeasureString(str);
+    }
+
+    fn fn_render_begin(ptr: *anyopaque) void {
         const self: *RenderData = @ptrCast(@alignCast(ptr));
         assert(self.stored_clip == null);
         if (c.SDL_RenderClipEnabled(self.renderer)) {
@@ -429,7 +426,7 @@ const RenderData = struct {
         }
     }
 
-    fn EndRendering(ptr: *anyopaque) void {
+    fn fn_render_end(ptr: *anyopaque) void {
         const self: *RenderData = @ptrCast(@alignCast(ptr));
         SDLEP(c.SDL_SetRenderClipRect(
             self.renderer,
@@ -441,13 +438,14 @@ const RenderData = struct {
     pub fn GetBackend(self: *RenderData) GUBackend {
         return GUBackend{
             .ptr = self,
-            .fnGetSurfaceDimensions = GetSurfaceDimensions,
-            .fnEmitCustomCommand = EmitCustomCommand,
-            .fnDrawRect = DrawRect,
-            .fnDrawString = DrawString,
-            .fnSetClip = SetClip,
-            .fnBeginRendering = BeginRendering,
-            .fnEndRendering = EndRendering,
+            .fnSurfaceSize = fn_surface_size,
+            .fnCustomCommandEmit = fn_custom_command_emit,
+            .fnRectDraw = fn_rect_draw,
+            .fnStringDraw = fn_string_draw,
+            .fnStringSize = fn_string_size,
+            .fnClipSet = fn_clip_set,
+            .fnRenderBegin = fn_render_begin,
+            .fnRenderEnd = fn_render_end,
         };
     }
 };
@@ -539,7 +537,7 @@ const BASE_BUTTON_STYLE = GUButtonStyle{
     .ColorDown = 0x004000FF,
 };
 
-const BASE_FONT: GUFontHandle = std.math.maxInt(GUFontHandle);
+const BASE_FONT = RenderData.FONT_BODY;
 
 //------------------------------------------------------------------------------
 
@@ -549,9 +547,6 @@ const App = struct {
 
     rd: RenderData,
     gu: GU,
-
-    font: AsciiFont,
-    font_handle: GUFontHandle,
 
     textures: [2]ImageTexture,
     texture_handles: [2]GUTextureHandle,
@@ -587,12 +582,6 @@ pub export fn SDL_AppInit(app: **App, argc: c_int, argv: [*][:0]u8) c.SDL_AppRes
     // UI-RELATED
 
     app_global.gu = GU.Init(alloc, app_global.rd.GetBackend(), BASE_LAYOUT, BASE_BUTTON_STYLE, BASE_FONT);
-
-    app_global.font = AsciiFont.Init(app_global.rd.renderer, FONT) catch |e|
-        std.debug.panic("initializing AsciiFont failed: {s}", .{@errorName(e)});
-    app_global.font_handle = app_global.gu.AddFont(app_global.font.GetFontAtlas()) catch |e|
-        std.debug.panic("AddFont failed: {s}", .{@errorName(e)});
-    app_global.gu.base_font = app_global.font_handle;
 
     for (0..app_global.textures.len) |ti| {
         app_global.textures[ti] =
@@ -649,7 +638,6 @@ pub export fn SDL_AppEvent(app: *App, event: *c.SDL_Event) c.SDL_AppResult {
 pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     const rd = &app.rd;
     const gu = &app.gu;
-    //const font = app.font_handle;
     const img1 = app.texture_handles[0];
     const img2 = app.texture_handles[1];
 
@@ -757,7 +745,6 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
 }
 
 pub export fn SDL_AppQuit(app: *App, _: c.SDL_AppResult) void {
-    app.font.Deinit();
     app.gu.Deinit();
     app.rd.Deinit();
 }
