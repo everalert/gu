@@ -43,7 +43,8 @@ fn bin_example(b: *Build, opts: *const GlobalOptions) *StepCompile {
     }
 
     const assets = [_]struct { []const u8, []const u8 }{
-        .{ "ascii-font", "assets/ascii.bmp" },
+        .{ "ascii-font-lod-black", "assets/ascii-lod-black.bmp" },
+        .{ "ascii-font-lod", "assets/ascii-lod.bmp" },
         .{ "yuriko1", "assets/yuriko1.bmp" },
         .{ "yuriko2", "assets/yuriko2.bmp" },
     };
