@@ -698,6 +698,7 @@ fn DoElementLineBreakParsing(self: *GU) void {
     while (it.Next()) |it_data| {
         const e = it_data.element;
         const p: ?*Element = if (e.parent) |pa_i| &self.element_tree.items[pa_i] else null;
+        var this_gap_x = ld.parent_gaps.x;
 
         // parent->child
         if (it_data.relation == .Child) {
@@ -717,6 +718,8 @@ fn DoElementLineBreakParsing(self: *GU) void {
 
             _ = self.element_line_stack.pop();
             ld = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &ld_base;
+            this_gap_x = 0; // don't need for newline calc, already added to running len
+
         }
 
         // root OR parent->child OR sibling->sibling
@@ -731,7 +734,7 @@ fn DoElementLineBreakParsing(self: *GU) void {
             p.?.layout.auto_line_break and
             p.?.layout.widths.len == 0 and
             p.?.layout.mode_w.IsPreComputable() and
-            ld.current_w + ld.parent_gaps.x + e.area.w > p.?.area.w - ld.parent_padding.x * 2)
+            ld.current_w + this_gap_x + e.area.w > p.?.area.w - ld.parent_padding.x * 2)
             e.features.bLineBreak = true;
 
         if (it_data.relation == .Child or e.features.bLineBreak) {
@@ -745,7 +748,7 @@ fn DoElementLineBreakParsing(self: *GU) void {
         }
 
         ld.current_items += 1;
-        ld.current_w += e.area.w + ld.parent_gaps.x;
+        ld.current_w += e.area.w + this_gap_x;
         ld.current_h = @max(ld.current_h, e.area.h);
     }
 }
