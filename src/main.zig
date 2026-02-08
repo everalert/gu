@@ -967,12 +967,12 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
 
         if (gu.DoElement(&LAYOUT_RED)) {
             defer gu.EndElement();
-            gu.DoLabel(0x00C000FF, "testblock1", .{});
+            gu.DoLabel(0x00C000FF, "testblock1");
         }
 
         gu.DoLineBreak();
         gu.SetNextButtonMode(.Release);
-        if (gu.DoButton("ReleaseButton", .{}))
+        if (gu.DoButton("ReleaseButton"))
             app.btn_color_loop = (app.btn_color_loop + 1) % color_loop.len;
         gu.DoLineBreak();
         gu.DoImage(img1, color_loop[app.btn_color_loop], 0.1);
@@ -981,9 +981,10 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
 
-        gu.DoLabel(0xC000C0FF, "testblock2", .{});
-        if (gu.DoToggleButton(&app.btn_toggle, "ToggleButton: {any}", .{app.btn_toggle})) {}
-        if (app.btn_toggle) gu.DoLabel(null, "only visible if b2 is on", .{});
+        gu.DoLabel(0xC000C0FF, "testblock2");
+        const str_toggle_button = gu.MakeString("ToggleButton: {any}", .{app.btn_toggle});
+        _ = gu.DoToggleButton(&app.btn_toggle, str_toggle_button);
+        if (app.btn_toggle) gu.DoLabel(null, "only visible if b2 is on");
         gu.DoImage(img2, 0xC000C0FF, 0.15);
         gu.DoImage(img1, null, 0.15);
     }
@@ -998,10 +999,11 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.PushButtonCorner(32, RenderData.CNR_SUPERELLIPSE);
         defer gu.PopButtonCorner();
         gu.SetNextButtonColor(0x800000FF, 0xC00000FF, 0x400000FF);
-        if (gu.DoButton("SUB", .{})) app.btn_counter -|= 1;
-        if (gu.DoButton("ADD", .{})) app.btn_counter +|= 1;
+        if (gu.DoButton("SUB")) app.btn_counter -|= 1;
+        if (gu.DoButton("ADD")) app.btn_counter +|= 1;
         gu.DoLineBreak();
-        gu.DoLabel(0xCCCCFFFF, "{d:0>3}", .{app.btn_counter});
+        const str_counter = gu.MakeString("{d:0>3}", .{app.btn_counter});
+        gu.DoLabel(0xCCCCFFFF, str_counter);
     }
 
     if (gu.DoElement(&LAYOUT_WHITE)) {
@@ -1021,8 +1023,8 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     if (gu.DoElement(&LAYOUT_WHITE_BREAK)) {
         defer gu.EndElement();
 
-        gu.DoLabel(0x00C0C0FF, "testing... with auto linebreak!!", .{});
-        if (gu.DoToggleButton(&app.btn_toggle, "ToggleButton", .{})) {}
+        gu.DoLabel(0x00C0C0FF, "testing... with auto linebreak!!");
+        _ = gu.DoToggleButton(&app.btn_toggle, "ToggleButton");
 
         gu.DoLineBreak();
         gu.DoImage(img1, null, 0.35);
@@ -1036,10 +1038,11 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
 
-        var current_time: i64 = 0;
-        SDLEP(c.SDL_GetCurrentTime(&current_time));
-        const current_time_f = @as(f32, @floatFromInt(@mod(@divTrunc(current_time, c.SDL_NS_PER_MS), 2500)));
-        gu.DoLabel(0xCCCCFFFF, "{d:0>5.3} {d:0>5.3}", .{ current_time_f / 1000, current_time_f / 2500 });
+        var time: i64 = 0;
+        SDLEP(c.SDL_GetCurrentTime(&time));
+        const time_f = @as(f32, @floatFromInt(@mod(@divTrunc(time, c.SDL_NS_PER_MS), 2500)));
+        const str_time = gu.MakeString("{d:0>5.3} {d:0>5.3}", .{ time_f / 1000, time_f / 2500 });
+        gu.DoLabel(0xCCCCFFFF, str_time);
         gu.DoLineBreak();
         gu.DoCustomSurface(RenderData.ACT_DEMO_SINE, 192, 48);
         gu.DoLineBreak();
@@ -1048,20 +1051,23 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         const fnt_ptr = &app.rd.fonts.BufSty[FONT_BODY];
         gu.DoLineBreak();
         gu.SetNextButtonColor(0x800000FF, 0xC00000FF, 0x400000FF);
-        if (gu.DoButton("Font DN", .{})) fnt_ptr.Size = @max(1, fnt_ptr.Size - 1);
-        if (gu.DoButton("Font UP", .{})) fnt_ptr.Size += 1;
+        if (gu.DoButton("Font DN")) fnt_ptr.Size = @max(1, fnt_ptr.Size - 1);
+        if (gu.DoButton("Font UP")) fnt_ptr.Size += 1;
         gu.DoLineBreak();
-        gu.DoLabel(0xCCCCFFFF, "{d:0>3}", .{fnt_ptr.Size});
+        const str_font_size = gu.MakeString("{d:0>3}", .{fnt_ptr.Size});
+        gu.DoLabel(0xCCCCFFFF, str_font_size);
 
         const new_font_lod = app.rd.fonts.ResolveLOD(FONT_BODY);
         gu.DoLineBreak();
-        gu.DoLabel(0xCCCCFFFF, "LOD: {d}", .{new_font_lod});
+        const str_font_lod = gu.MakeString("LOD: {d}", .{new_font_lod});
+        gu.DoLabel(0xCCCCFFFF, str_font_lod);
 
         const measure_size = app.rd.fonts.MeasureString(FONT_BODY, "Measure");
         gu.DoLineBreak();
-        gu.DoLabel(0xCCCCFFFF, "\"Measure\" Size:", .{});
+        gu.DoLabel(0xCCCCFFFF, "'Measure' Size:");
         gu.DoLineBreak();
-        gu.DoLabel(0xCCCCFFFF, "  {d:3.1} x {d:3.1}", .{ measure_size.x, measure_size.y });
+        const str_measure_size = gu.MakeString("  {d:3.1} x {d:3.1}", .{ measure_size.x, measure_size.y });
+        gu.DoLabel(0xCCCCFFFF, str_measure_size);
     }
 
     gu.EndFrame();

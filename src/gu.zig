@@ -1571,7 +1571,13 @@ pub fn PopButtonColorDown(self: *GU) void {
 }
 
 //------------------------------------------------------------------------------
-// WIDGETS
+// WIDGET API
+
+/// format a string using the internal frame arena. guaranteed to succeed; returns
+/// an empty string when allocation is not possible.
+pub fn MakeString(self: *GU, comptime fmt: []const u8, args: anytype) []const u8 {
+    return std.fmt.allocPrint(self.label_arena.allocator(), fmt, args) catch &.{};
+}
 
 /// Emit a custom action associated with a region. Typical use cases are drawing
 /// a rendered scene to a specific part of the UI, drawing data-driven contents
@@ -1620,19 +1626,9 @@ pub fn DoImage(self: *GU, texture: TextureHandle, color: ?u32, scale: f32) void 
 // TODO: remove formatting version and expect user to allocate their own strings?
 // FIXME: remove color as input, use color stack (note: comments like these should
 //  also be interpreted as "implement layout/styling as stacks in general")
-pub fn DoLabel(self: *GU, color: ?u32, comptime fmt: []const u8, args: anytype) void {
-    if (!self.DoElement(null)) return;
-    defer self.EndElement();
-    const element = self.GetElement();
-    const str = std.fmt.allocPrint(self.label_arena.allocator(), fmt, args) catch |err|
-        std.debug.panic("DoLabel failed to allocate string: ({s})", .{@errorName(err)});
-    element.features.bShowLabel = true;
-    element.label_str = str;
-    element.layout.color = color orelse 0xFFFFFFFF;
-}
-
-// FIXME: remove color as input, use color stack
-pub fn DoLabelRaw(self: *GU, color: ?u32, str: []const u8) void {
+/// create an element rendering text. see `MakeString` for string formatting
+/// using the internal frame arena memory.
+pub fn DoLabel(self: *GU, color: ?u32, str: []const u8) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
@@ -1642,16 +1638,17 @@ pub fn DoLabelRaw(self: *GU, color: ?u32, str: []const u8) void {
 }
 
 // NOTE: id hash uses input fmt, not resolved formatted string
-/// returns whether button was 'activated' (pressed)
-pub fn DoButton(self: *GU, comptime fmt: []const u8, args: anytype) bool {
+/// returns whether button was 'activated' (pressed). see `MakeString` for string
+/// formatting using the internal frame arena memory.
+pub fn DoButton(self: *GU, str: []const u8) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
     const element = self.GetElement();
     element.features.bClickable = true;
     element.features.bShowRect = true;
-    element.name = fmt;
+    element.name = str;
 
-    self.DoLabel(null, fmt, args);
+    self.DoLabel(null, str);
 
     return self.GetElementClicked();
 }
@@ -1660,20 +1657,21 @@ pub fn DoButton(self: *GU, comptime fmt: []const u8, args: anytype) bool {
 /// same general behaviour as DoButton, but updates an 'active' bool for you.
 /// if button is culled (due to not rendering, clip culling, etc.), the external
 /// bool will NOT be toggled
-/// returns whether button was 'activated' (pressed and subsequently toggled)
-pub fn DoToggleButton(self: *GU, active: *bool, comptime fmt: []const u8, args: anytype) bool {
+/// returns whether button was 'activated' (pressed and subsequently toggled). see
+/// `MakeString` for string formatting using the internal frame arena memory.
+pub fn DoToggleButton(self: *GU, active: *bool, str: []const u8) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
     const element = self.GetElement();
     element.features.bClickable = true;
     element.features.bShowRect = true;
-    element.name = fmt;
+    element.name = str;
 
     const activated = self.GetElementClicked();
     if (active.*) element.features.bClickDepressed = true;
     if (activated) active.* = !active.*;
 
-    self.DoLabel(null, fmt, args);
+    self.DoLabel(null, str);
 
     return activated;
 }
@@ -1724,6 +1722,6 @@ pub fn DoLabelsFromString(self: *GU, str: []const u8) void {
                 // TODO: emit word
             },
         }
-        self.DoLabelRaw(null, str[i..it.i]);
+        self.DoLabel(null, str[i..it.i]);
     }
 }
