@@ -45,6 +45,7 @@ const FONTS = [1]struct { []const u8, u32, f32, Vec2, []const Vec2 }{
     } },
 };
 
+// FIXME: do proper ZII approach and see how it pans out
 // TODO: tracking of number of attempted assignments, to help tune buffer sizes
 // TODO: ?? externally managed textures? (decouple texture lifetime)
 // NOTE: to keep things simple for now, no delete functions; must free entire thing
@@ -327,7 +328,7 @@ fn FontRenderer(
             }
         }
 
-        pub fn MeasureString(self: *const FontRendererT, font_config: GUFontHandle, str: []const u8) Vec2 {
+        pub fn MeasureString(self: *const FontRendererT, font_config: usize, str: []const u8) Vec2 {
             if (font_config >= self.BufStyCount) return .zero;
             const config = &self.BufSty[font_config];
             const font_lod = &self.BufLOD[self.ResolveLOD(font_config)];
@@ -971,9 +972,8 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
 
         gu.DoLineBreak();
         gu.SetNextButtonMode(.Release);
-        if (gu.DoButton("ReleaseButton", .{})) {
+        if (gu.DoButton("ReleaseButton", .{}))
             app.btn_color_loop = (app.btn_color_loop + 1) % color_loop.len;
-        }
         gu.DoLineBreak();
         gu.DoImage(img1, color_loop[app.btn_color_loop], 0.1);
     }
@@ -984,8 +984,8 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoLabel(0xC000C0FF, "testblock2", .{});
         if (gu.DoToggleButton(&app.btn_toggle, "ToggleButton: {any}", .{app.btn_toggle})) {}
         if (app.btn_toggle) gu.DoLabel(null, "only visible if b2 is on", .{});
-        gu.DoImage(img2, 0xC000C0FF, 0.25);
-        gu.DoImage(img1, null, 0.25);
+        gu.DoImage(img2, 0xC000C0FF, 0.15);
+        gu.DoImage(img1, null, 0.15);
     }
 
     if (gu.DoElement(&LAYOUT_WHITE)) {
@@ -1023,11 +1023,14 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
 
         gu.DoLabel(0x00C0C0FF, "testing... with auto linebreak!!", .{});
         if (gu.DoToggleButton(&app.btn_toggle, "ToggleButton", .{})) {}
-        if (app.btn_toggle) gu.DoLabel(null, "only visible if b2 is on", .{});
 
         gu.DoLineBreak();
-        gu.DoImage(img1, null, 0.5);
-        gu.DoImage(img2, null, 0.5);
+        gu.DoImage(img1, null, 0.35);
+        gu.DoImage(img2, null, 0.35);
+
+        gu.DoLineBreak();
+        if (app.btn_toggle) gu.DoLabelsFromString("only visible if b2 is on.");
+        gu.DoLabelsFromString("The quick, brown fox jumps over a lazy dog. DJs flock by when MTV ax quiz prog. Junk MTV quiz graced by fox whelps. Bawds jog, flick quartz, vex nymphs. Waltz, bad nymph, for quick jigs vex! Fox nymphs grab quick-jived waltz. Brick quiz whangs jumpy veldt fox. Bright vixens jump; dozy fowl quack. Quick wafting zephyrs vex bold Jim. Quick zephyrs blow, vexing daft Jim. Sex-charged fop blew my junk TV quiz. How quickly daft jumping zebras vex.\nTwo driven jocks help fax my big quiz. Quick, Baz, get my woven flax jodhpurs! \"Now fax quiz Jack!\" my brave ghost pled. Five quacking zephyrs jolt my wax bed. Flummoxed by job, kvetching W. zaps Iraq. Cozy sphinx waves quart jug of bad milk. A very bad quack might jinx zippy fowls. Few quips galvanized the mock jury box. Quick brown dogs jump over the lazy fox. The jay, pig, fox, zebra, and my wolves quack! Blowzy red vixens fight for a quick jump. Joaquin Phoenix was gazed by MTV for luck. A wizard's job is to vex chumps quickly in fog. Watch \"Jeopardy!\", Alex Trebek's fun TV quiz game. Woven silk pyjamas exchanged for blue quartz.");
     }
 
     if (gu.DoElement(&LAYOUT_WHITE)) {

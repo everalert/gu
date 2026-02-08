@@ -1617,10 +1617,9 @@ pub fn DoImage(self: *GU, texture: TextureHandle, color: ?u32, scale: f32) void 
     element.area.h = scale * texture_size.y;
 }
 
-// FIXME: remove font as input, use font stack (note: comments like these should
+// TODO: remove formatting version and expect user to allocate their own strings?
+// FIXME: remove color as input, use color stack (note: comments like these should
 //  also be interpreted as "implement layout/styling as stacks in general")
-// FIXME: remove color as input, use color stack
-// TODO: add formatting, like standard string formatting functions
 pub fn DoLabel(self: *GU, color: ?u32, comptime fmt: []const u8, args: anytype) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
@@ -1632,7 +1631,16 @@ pub fn DoLabel(self: *GU, color: ?u32, comptime fmt: []const u8, args: anytype) 
     element.layout.color = color orelse 0xFFFFFFFF;
 }
 
-// FIXME: remove font as input, use font stack
+// FIXME: remove color as input, use color stack
+pub fn DoLabelRaw(self: *GU, color: ?u32, str: []const u8) void {
+    if (!self.DoElement(null)) return;
+    defer self.EndElement();
+    const element = self.GetElement();
+    element.features.bShowLabel = true;
+    element.label_str = str;
+    element.layout.color = color orelse 0xFFFFFFFF;
+}
+
 // NOTE: id hash uses input fmt, not resolved formatted string
 /// returns whether button was 'activated' (pressed)
 pub fn DoButton(self: *GU, comptime fmt: []const u8, args: anytype) bool {
@@ -1648,7 +1656,6 @@ pub fn DoButton(self: *GU, comptime fmt: []const u8, args: anytype) bool {
     return self.GetElementClicked();
 }
 
-// FIXME: remove font as input, use font stack
 // NOTE: id hash uses input fmt, not resolved formatted string
 /// same general behaviour as DoButton, but updates an 'active' bool for you.
 /// if button is culled (due to not rendering, clip culling, etc.), the external
@@ -1671,6 +1678,52 @@ pub fn DoToggleButton(self: *GU, active: *bool, comptime fmt: []const u8, args: 
     return activated;
 }
 
+// FIXME: rename to something like "line clear", to reflect the fact that it doesn't
+//  actually push the content down beyond ensuring the next element is at line start
 pub fn DoLineBreak(self: *GU) void {
     self.element_queue_line_break = true;
+}
+
+//------------------------------------------------------------------------------
+// MULTI-LINE TEXT EXPERIMENTATION
+// FIXME: move/refactor once decent idea for api figured out
+
+const SplitChars = std.ascii.whitespace ++ "-/\\";
+
+pub fn DoLabelsFromString(self: *GU, str: []const u8) void {
+    const view = std.unicode.Utf8View.init(str) catch return; // FIXME: stopgap, investigate better handling
+    var it = view.iterator();
+    var i: usize = 0;
+    while (it.nextCodepoint()) |cp| {
+        defer i = it.i;
+        switch (cp) {
+            // TODO: ?? option to emit space-sized spacer?
+            // TODO: impl "use font space size for gaps" feature on element
+            ' ' => continue,
+            // TODO: emit tab-sized spacer. spacer impl should consume the next gap
+            '\t' => continue,
+            // TODO: ?? paragraph-aware line break behaviour that inserts spacing
+            '\r' => {
+                if (std.mem.indexOfScalar(u8, it.peek(1), '\n')) |_|
+                    _ = it.nextCodepoint();
+                self.DoLineBreak();
+                continue;
+            },
+            '\n' => {
+                self.DoLineBreak();
+                continue;
+            },
+            std.ascii.control_code.vt,
+            std.ascii.control_code.ff,
+            => continue,
+            // separated so they can linebreak
+            '/', '\\', '-' => {},
+            else => {
+                while (std.mem.indexOfNone(u8, it.peek(1), SplitChars)) |_|
+                    _ = it.nextCodepoint();
+                // TODO: emit word
+            },
+        }
+        self.DoLabelRaw(null, str[i..it.i]);
+    }
 }
