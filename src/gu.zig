@@ -698,6 +698,7 @@ fn DoElementLineBreakParsing(self: *GU) void {
         const e = it_data.element;
         const p: ?*Element = if (e.parent) |pa_i| &self.element_tree.items[pa_i] else null;
 
+        // parent->child
         if (it_data.relation == .Child) {
             stack.appendAssumeCapacity(zeroInit(LineData, .{
                 .parent_padding = p.?.layout.padding,
@@ -706,6 +707,7 @@ fn DoElementLineBreakParsing(self: *GU) void {
             ld = &stack.items[stack.items.len - 1];
         }
 
+        // child->parent
         if (it_data.relation == .Parent) {
             if (!e.layout.mode_w.IsPreComputable())
                 e.area.w = @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items));
@@ -716,6 +718,7 @@ fn DoElementLineBreakParsing(self: *GU) void {
             ld = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &ld_base;
         }
 
+        // root OR parent->child OR sibling->sibling
         if (it_data.relation != .Parent) {
             if (e.layout.mode_w == .Stretch)
                 e.area.w = @max(p.?.area.w + e.area.w - ld.AxisSpacing(.Main, p.?.layout.widths.len), 0);
@@ -734,13 +737,14 @@ fn DoElementLineBreakParsing(self: *GU) void {
             ld.max_w = @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items));
             ld.line += 1;
             ld.current_y += ld.current_h;
-            ld.current_w = 0;
-            ld.current_h = 0;
-            ld.current_items = 0;
+            ld.current_w = e.area.w;
+            ld.current_h = e.area.h;
+            ld.current_items = 1;
+            continue;
         }
 
         ld.current_items += 1;
-        ld.current_w += e.area.w;
+        ld.current_w += e.area.w + ld.parent_gaps.x;
         ld.current_h = @max(ld.current_h, e.area.h);
     }
 }
@@ -758,6 +762,7 @@ fn DoElementPositioning(self: *GU) void {
     while (it.Next()) |it_data| {
         const e = it_data.element;
 
+        // child->parent
         if (it_data.relation == .Parent) {
             _ = self.element_line_stack.pop();
             ld = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &ld_base;
@@ -765,6 +770,7 @@ fn DoElementPositioning(self: *GU) void {
             continue;
         }
 
+        // parent->child
         if (it_data.relation == .Child) {
             p = &self.element_tree.items[e.parent.?];
             stack.appendAssumeCapacity(zeroInit(LineData, .{})); // capacity set during initial tree gen
@@ -1623,7 +1629,6 @@ pub fn DoImage(self: *GU, texture: TextureHandle, color: ?u32, scale: f32) void 
     element.area.h = scale * texture_size.y;
 }
 
-// TODO: remove formatting version and expect user to allocate their own strings?
 // FIXME: remove color as input, use color stack (note: comments like these should
 //  also be interpreted as "implement layout/styling as stacks in general")
 /// create an element rendering text. see `MakeString` for string formatting
@@ -1637,7 +1642,6 @@ pub fn DoLabel(self: *GU, color: ?u32, str: []const u8) void {
     element.layout.color = color orelse 0xFFFFFFFF;
 }
 
-// NOTE: id hash uses input fmt, not resolved formatted string
 /// returns whether button was 'activated' (pressed). see `MakeString` for string
 /// formatting using the internal frame arena memory.
 pub fn DoButton(self: *GU, str: []const u8) bool {
@@ -1653,7 +1657,6 @@ pub fn DoButton(self: *GU, str: []const u8) bool {
     return self.GetElementClicked();
 }
 
-// NOTE: id hash uses input fmt, not resolved formatted string
 /// same general behaviour as DoButton, but updates an 'active' bool for you.
 /// if button is culled (due to not rendering, clip culling, etc.), the external
 /// bool will NOT be toggled
