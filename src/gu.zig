@@ -329,6 +329,7 @@ pub const ElementFeatures = packed struct(u32) {
 
     // Layout functionality
     bLineBreak: bool,
+    bTextSpacing: bool, // space children based on active font instead of gaps setting
 
     // Button functionality
     bClickable: bool,
@@ -340,7 +341,7 @@ pub const ElementFeatures = packed struct(u32) {
     // Misc. functionality
     bCustomCommand: bool,
 
-    _: u22,
+    _: u21,
 
     const none: ElementFeatures = @bitCast(@as(u32, 0));
     const all: ElementFeatures = @bitCast(maxInt(u32));
@@ -1126,6 +1127,14 @@ pub fn EndElement(self: *GU) void {
         element.area.w = label_size.x;
         element.area.h = label_size.y;
         element.label_font = font;
+    }
+
+    // TODO: ?? have a "GetTextSpacing" backend function, to directly inform
+    //  this, instead of measuring an actual space character?
+    if (element.features.bTextSpacing) {
+        const font = self.font_vstk.GetOrNull() orelse self.base_font;
+        const space_size = &self.backend.StringSize(font, " ");
+        element.layout.gaps.x = space_size.x;
     }
 }
 
