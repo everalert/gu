@@ -1678,27 +1678,32 @@ pub fn DoLabel(self: *GU, color: ?u32, str: []const u8) void {
     element.layout.color = color orelse 0xFFFFFFFF;
 }
 
+// TODO: better way to resolve font that factors in the push queue state?
+// TODO: ?? better way to get tabsize?
+// TODO: ?? paragraph-aware line break behaviour that inserts spacing
+// TODO: ?? emit '/' '\' '-' elements that consume pre- or post-gaps based on context?
 /// splits a given utf8 string into "words" and emits them as a series of label
 /// elements, to allow the layout engine to reflow multiline text
 pub fn DoLabelsFromString(self: *GU, str: []const u8) void {
-    const view = std.unicode.Utf8View.init(str) catch return;
-
+    const font = self.font_vstk.GetOrNull() orelse self.base_font;
+    const size_sp = &self.backend.StringSize(font, " ");
+    const size_tb = &self.backend.StringSize(font, "    ");
     const SplitChars = std.ascii.whitespace ++ "-/\\";
 
+    const view = std.unicode.Utf8View.init(str) catch return;
     var it = view.iterator();
     var i: usize = 0;
     while (it.nextCodepoint()) |cp| {
         defer i = it.i;
         switch (cp) {
             ' ' => {
-                self.DoSpacerH(10, 21); // FIXME: derive space size somehow
+                self.DoSpacerH(size_sp.x, size_sp.y);
                 continue;
             },
             '\t' => {
-                self.DoSpacerH(32, 21); // FIXME: derive tab size somehow
+                self.DoSpacerH(size_tb.x, size_tb.y);
                 continue;
             },
-            // TODO: ?? paragraph-aware line break behaviour that inserts spacing
             '\r' => {
                 if (std.mem.indexOfScalar(u8, it.peek(1), '\n')) |_| _ = it.nextCodepoint();
                 self.DoLineBreak();
@@ -1711,7 +1716,6 @@ pub fn DoLabelsFromString(self: *GU, str: []const u8) void {
             std.ascii.control_code.vt,
             std.ascii.control_code.ff,
             => continue,
-            // TODO: ?? emit elements that consume pre- or post-gaps based on context?
             '/', '\\', '-' => {},
             else => while (std.mem.indexOfNone(u8, it.peek(1), SplitChars)) |_| {
                 _ = it.nextCodepoint();
