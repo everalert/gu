@@ -33,8 +33,8 @@ const Rect = @import("m_rect.zig");
 const Color = @import("m_color.zig").Color;
 const sdf = @import("m_sdf.zig");
 
-const WINDOW_W = 800;
-const WINDOW_H = 600;
+const WINDOW_W = 1280;
+const WINDOW_H = 960;
 
 const TEXTURES: [2][]const u8 = .{ @embedFile("yuriko1"), @embedFile("yuriko2") };
 
@@ -1022,8 +1022,8 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
 
     if (gu.DoElement(&LAYOUT_WHITE_BREAK)) {
         defer gu.EndElement();
-        const element = gu.GetElement();
-        element.features.bTextSpacing = true;
+        //const element = gu.GetElement();
+        //element.features.bTextSpacing = true;
 
         gu.DoLabel(0x00C0C0FF, "testing... with auto linebreak!!");
         _ = gu.DoToggleButton(&app.btn_toggle, "ToggleButton");
@@ -1034,7 +1034,7 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
 
         gu.DoLineBreak();
         if (app.btn_toggle) gu.DoLabelsFromString("only visible if b2 is on.");
-        gu.DoLabelsFromString("The quick, brown fox jumps over a lazy dog. DJs flock by when MTV ax quiz prog. Junk MTV quiz graced by fox whelps. Bawds jog, flick quartz, vex nymphs. Waltz, bad nymph, for quick jigs vex! Fox nymphs grab quick-jived waltz. Brick quiz whangs jumpy veldt fox. Bright vixens jump; dozy fowl quack. Quick wafting zephyrs vex bold Jim. Quick zephyrs blow, vexing daft Jim. Sex-charged fop blew my junk TV quiz. How quickly daft jumping zebras vex.\nTwo driven jocks help fax my big quiz. Quick, Baz, get my woven flax jodhpurs! \"Now fax quiz Jack!\" my brave ghost pled. Five quacking zephyrs jolt my wax bed. Flummoxed by job, kvetching W. zaps Iraq. Cozy sphinx waves quart jug of bad milk. A very bad quack might jinx zippy fowls. Few quips galvanized the mock jury box. Quick brown dogs jump over the lazy fox. The jay, pig, fox, zebra, and my wolves quack! Blowzy red vixens fight for a quick jump. Joaquin Phoenix was gazed by MTV for luck. A wizard's job is to vex chumps quickly in fog. Watch \"Jeopardy!\", Alex Trebek's fun TV quiz game. Woven silk pyjamas exchanged for blue quartz.");
+        gu.DoLabelsFromString("\tThe quick, brown fox jumps over a lazy dog. DJs flock by when MTV ax quiz prog. Junk MTV quiz graced by fox whelps. Bawds jog, flick quartz, vex nymphs. Waltz, bad nymph, for quick jigs vex! Fox nymphs grab quick-jived waltz. Brick quiz whangs jumpy veldt fox. Bright vixens jump; dozy fowl quack. Quick wafting zephyrs vex bold Jim. Quick zephyrs blow, vexing daft Jim. Sex-charged fop blew my junk TV quiz. How quickly daft jumping zebras vex.\n    Two driven jocks help fax my big quiz. Quick, Baz, get my woven flax jodhpurs! \"Now fax quiz Jack!\" my brave ghost pled. Five quacking zephyrs jolt my wax bed. Flummoxed by job, kvetching W. zaps Iraq. Cozy sphinx waves quart jug of bad milk. A very bad quack might jinx zippy fowls. Few quips galvanized the mock jury box. Quick brown dogs jump over the lazy fox. The jay, pig, fox, zebra, and my wolves quack! Blowzy red vixens fight for a quick jump. Joaquin Phoenix was gazed by MTV for luck. A wizard's job is to vex chumps quickly in fog. Watch \"Jeopardy!\", Alex Trebek's fun TV quiz game. Woven silk pyjamas exchanged for blue quartz.");
     }
 
     if (gu.DoElement(&LAYOUT_WHITE)) {

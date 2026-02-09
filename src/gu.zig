@@ -318,7 +318,6 @@ pub const Element = struct {
 // TODO: texture treated as 9grid
 // TODO: text shadow
 // TODO: text outline
-// TODO: text wrapping (dynamic multiline text)
 // TODO: clickable element is draggable, on X and Y individually (require abs/rel pos)
 // TODO: enable clipping (i.e. "allow/disallow visual overflow")
 pub const ElementFeatures = packed struct(u32) {
@@ -329,19 +328,32 @@ pub const ElementFeatures = packed struct(u32) {
 
     // Layout functionality
     bLineBreak: bool,
-    bTextSpacing: bool, // space children based on active font instead of gaps setting
+    /// space children based on active font instead of gaps setting
+    bTextSpacing: bool,
+    /// set prev gap-x to 0
+    bConsumeGapX: bool, // FIXME: impl
+    /// set prev gap-y to 0 if current line only contains elements with this flag
+    bConsumeGapY: bool, // FIXME: impl
+    /// set next gap-x to 0
+    bConsumeNextGapX: bool, // FIXME: impl
+    /// set next gap-y to 0 if current line only contains elements with this flag
+    bConsumeNextGapY: bool, // FIXME: impl
+    /// if element would trigger a line break, collapse and make next element break instead
+    bOverflowCollapseX: bool,
 
     // Button functionality
     bClickable: bool,
-    bClickDown: bool,
-    bClickHover: bool,
-    bClickDepressed: bool, // button visually "idles" in down-state
-    bClickNoStyle: bool, // button visually looks like a regular element
+    bClickDown: bool, // FIXME: does nothing
+    bClickHover: bool, // FIXME: does nothing
+    /// button visually "idles" in down-state
+    bClickDepressed: bool,
+    /// button visually looks like a regular element (does not apply button styling)
+    bClickNoStyle: bool,
 
     // Misc. functionality
     bCustomCommand: bool,
 
-    _: u21,
+    _: u16,
 
     const none: ElementFeatures = @bitCast(@as(u32, 0));
     const all: ElementFeatures = @bitCast(maxInt(u32));
@@ -479,6 +491,7 @@ const LineData = struct {
     current_h: f32,
     current_items: u32,
     current_w: f32,
+    line_break_queued: bool,
     max_w: f32, // incl padding/gaps
 
     // TODO: impl axis def in Layout and derive
@@ -735,7 +748,18 @@ fn DoElementLineBreakParsing(self: *GU) void {
             p.?.layout.widths.len == 0 and
             p.?.layout.mode_w.IsPreComputable() and
             ld.current_w + this_gap_x + e.area.w > p.?.area.w - ld.parent_padding.x * 2)
+        {
+            if (e.features.bOverflowCollapseX and !e.features.bLineBreak) {
+                e.area.w = 0;
+                e.area.h = 0;
+                ld.line_break_queued = true;
+                continue;
+            }
             e.features.bLineBreak = true;
+        }
+
+        if (ld.line_break_queued) e.features.bLineBreak = true;
+        ld.line_break_queued = false;
 
         if (it_data.relation == .Child or e.features.bLineBreak) {
             ld.max_w = @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items));
@@ -1654,6 +1678,64 @@ pub fn DoLabel(self: *GU, color: ?u32, str: []const u8) void {
     element.layout.color = color orelse 0xFFFFFFFF;
 }
 
+/// splits a given utf8 string into "words" and emits them as a series of label
+/// elements, to allow the layout engine to reflow multiline text
+pub fn DoLabelsFromString(self: *GU, str: []const u8) void {
+    const view = std.unicode.Utf8View.init(str) catch return;
+
+    const SplitChars = std.ascii.whitespace ++ "-/\\";
+
+    var it = view.iterator();
+    var i: usize = 0;
+    while (it.nextCodepoint()) |cp| {
+        defer i = it.i;
+        switch (cp) {
+            ' ' => {
+                self.DoSpacerH(10, 21); // FIXME: derive space size somehow
+                continue;
+            },
+            '\t' => {
+                self.DoSpacerH(32, 21); // FIXME: derive tab size somehow
+                continue;
+            },
+            // TODO: ?? paragraph-aware line break behaviour that inserts spacing
+            '\r' => {
+                if (std.mem.indexOfScalar(u8, it.peek(1), '\n')) |_| _ = it.nextCodepoint();
+                self.DoLineBreak();
+                continue;
+            },
+            '\n' => {
+                self.DoLineBreak();
+                continue;
+            },
+            std.ascii.control_code.vt,
+            std.ascii.control_code.ff,
+            => continue,
+            // TODO: ?? emit elements that consume pre- or post-gaps based on context?
+            '/', '\\', '-' => {},
+            else => while (std.mem.indexOfNone(u8, it.peek(1), SplitChars)) |_| {
+                _ = it.nextCodepoint();
+            },
+        }
+        self.DoLabel(null, str[i..it.i]);
+    }
+}
+
+/// horizontal spacing element that overrides gap between surrounding elements.
+/// spacer is ignored if it falls on the end of a line.
+pub fn DoSpacerH(self: *GU, w: f32, h: f32) void {
+    if (!self.DoElement(null)) return;
+    defer self.EndElement();
+    const element = self.GetElement();
+    element.features.bConsumeGapX = true;
+    element.features.bConsumeNextGapX = true;
+    element.features.bOverflowCollapseX = true;
+    element.layout.mode_w = .Fixed;
+    element.layout.mode_h = .Fixed;
+    element.area.w = w;
+    element.area.h = h;
+}
+
 /// returns whether button was 'activated' (pressed). see `MakeString` for string
 /// formatting using the internal frame arena memory.
 pub fn DoButton(self: *GU, str: []const u8) bool {
@@ -1695,48 +1777,4 @@ pub fn DoToggleButton(self: *GU, active: *bool, str: []const u8) bool {
 //  actually push the content down beyond ensuring the next element is at line start
 pub fn DoLineBreak(self: *GU) void {
     self.element_queue_line_break = true;
-}
-
-//------------------------------------------------------------------------------
-// MULTI-LINE TEXT EXPERIMENTATION
-// FIXME: move/refactor once decent idea for api figured out
-
-const SplitChars = std.ascii.whitespace ++ "-/\\";
-
-pub fn DoLabelsFromString(self: *GU, str: []const u8) void {
-    const view = std.unicode.Utf8View.init(str) catch return; // FIXME: stopgap, investigate better handling
-    var it = view.iterator();
-    var i: usize = 0;
-    while (it.nextCodepoint()) |cp| {
-        defer i = it.i;
-        switch (cp) {
-            // TODO: ?? option to emit space-sized spacer?
-            // TODO: impl "use font space size for gaps" feature on element
-            ' ' => continue,
-            // TODO: emit tab-sized spacer. spacer impl should consume the next gap
-            '\t' => continue,
-            // TODO: ?? paragraph-aware line break behaviour that inserts spacing
-            '\r' => {
-                if (std.mem.indexOfScalar(u8, it.peek(1), '\n')) |_|
-                    _ = it.nextCodepoint();
-                self.DoLineBreak();
-                continue;
-            },
-            '\n' => {
-                self.DoLineBreak();
-                continue;
-            },
-            std.ascii.control_code.vt,
-            std.ascii.control_code.ff,
-            => continue,
-            // separated so they can linebreak
-            '/', '\\', '-' => {},
-            else => {
-                while (std.mem.indexOfNone(u8, it.peek(1), SplitChars)) |_|
-                    _ = it.nextCodepoint();
-                // TODO: emit word
-            },
-        }
-        self.DoLabel(null, str[i..it.i]);
-    }
 }
