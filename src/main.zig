@@ -7,7 +7,6 @@ const clamp = std.math.clamp;
 const log2_int_ceil = std.math.log2_int_ceil;
 const pow = std.math.pow;
 const sign = std.math.sign;
-const maxInt = std.math.maxInt;
 
 const c = @import("c.zig").c;
 const SDLE = @import("c.zig").SDLE;
@@ -36,10 +35,17 @@ const sdf = @import("m_sdf.zig");
 const WINDOW_W = 1280;
 const WINDOW_H = 960;
 
+const BASE_FONT_STYLE = FONT_DEPARTURE;
+
 const TEXTURES: [2][]const u8 = .{ @embedFile("yuriko1"), @embedFile("yuriko2") };
 
-//                                   embed                        sz   adv  area
-const FONTS_ASCII_MONO = [2]struct { []const u8, c.SDL_ScaleMode, []const struct { u32, f32, Rect } }{
+const FONT_NOTO = 0;
+const FONT_DEPARTURE = 1;
+const FONTS_ASCII_MONO = [2]struct {
+    []const u8,
+    c.SDL_ScaleMode,
+    []const struct { u32, f32, Rect }, // size, advance, region
+}{
     .{ @embedFile("font-notomono-lod"), c.SDL_SCALEMODE_LINEAR, &.{
         .{ 16, 7, .init(512, 192, 128, 96) },
         .{ 32, 14, .init(512, 0, 256, 192) },
@@ -50,14 +56,11 @@ const FONTS_ASCII_MONO = [2]struct { []const u8, c.SDL_ScaleMode, []const struct
     } },
 };
 const FONT_STYLES = [2]struct { usize, f32 }{
-    .{ 0, 21 },
-    .{ 1, 14 },
+    .{ FONT_NOTO, 21 },
+    .{ FONT_DEPARTURE, 14 },
 };
-const FONT_NOTO: GUFontHandle = 0;
-const FONT_DEPARTURE: GUFontHandle = 1;
-const BASE_FONT = FONT_DEPARTURE;
 
-// FIXME: do proper ZII approach and see how it pans out
+// TODO: log warnings when emitting a null handle? (for debugging/tuning help)
 // TODO: tracking of number of attempted assignments, to help tune buffer sizes
 // TODO: ?? externally managed textures? (decouple texture lifetime)
 // NOTE: to keep things simple for now, no delete functions; must free entire thing
@@ -68,6 +71,11 @@ fn FontRenderer(
     comptime NumGly: usize,
     comptime NumLOD: usize,
 ) type {
+    comptime assert(NumFnt > 0);
+    comptime assert(NumSty > 0);
+    comptime assert(NumLOD > 0);
+    comptime assert(NumGly > 0);
+    comptime assert(NumTex > 0);
     const SIZE_FNT = NumFnt * @sizeOf(Font);
     const SIZE_STY = NumSty * @sizeOf(FontStyle);
     const SIZE_LOD = NumLOD * @sizeOf(FontLOD);
@@ -96,9 +104,12 @@ fn FontRenderer(
 
         const FontRendererT = @This();
 
+        pub const RequiredBytes = REQUIRED_BYTES;
+
+        // FIXME: seems alignCast fails for some buffer sizes?
         pub fn Init(alloc: Allocator, renderer: ?*c.SDL_Renderer) Allocator.Error!FontRendererT {
             const buf = try alloc.alloc(u8, REQUIRED_BYTES);
-            return FontRendererT{
+            const fr = FontRendererT{
                 .Renderer = renderer,
                 .BackingMemory = buf,
                 .BufFnt = @alignCast(bytesAsSlice(Font, buf[OFFSET_FNT .. OFFSET_FNT + SIZE_FNT])),
@@ -106,12 +117,19 @@ fn FontRenderer(
                 .BufLOD = @alignCast(bytesAsSlice(FontLOD, buf[OFFSET_LOD .. OFFSET_LOD + SIZE_LOD])),
                 .BufGly = @alignCast(bytesAsSlice(Glyph, buf[OFFSET_GLY .. OFFSET_GLY + SIZE_GLY])),
                 .BufTex = @alignCast(bytesAsSlice(*c.SDL_Texture, buf[OFFSET_TEX .. OFFSET_TEX + SIZE_TEX])),
-                .BufFntCount = 0,
-                .BufStyCount = 0,
-                .BufLODCount = 0,
-                .BufGlyCount = 0,
-                .BufTexCount = 0,
+                .BufFntCount = 1, // 0-index used for "null"
+                .BufStyCount = 1,
+                .BufLODCount = 1,
+                .BufGlyCount = 1,
+                .BufTexCount = 1,
             };
+            fr.BufFnt[0] = std.mem.zeroes(Font);
+            fr.BufSty[0] = std.mem.zeroes(FontStyle);
+            fr.BufLOD[0] = std.mem.zeroes(FontLOD);
+            fr.BufGly[0] = std.mem.zeroes(Glyph);
+            // apparently SDL is ok with being given invalid texture pointers?
+            // fr.BufTex[0] = std.mem.zeroes(*c.SDL_Texture);
+            return fr;
         }
 
         /// must use same allocator as used to init
@@ -129,20 +147,18 @@ fn FontRenderer(
         // if your photo app can't export BMP
         /// returns handle to texture, or a null/safe handle on failure
         pub fn TextureAdd(self: *FontRendererT, bmp: []const u8, scaling: c.SDL_ScaleMode) usize {
-            const next_i = self.BufTexCount;
-            if (next_i >= NumTex) return maxInt(usize); // null handle
+            if (self.BufTexCount >= NumTex) return 0;
 
-            const stream = SDLE(c.SDL_IOFromConstMem(bmp.ptr, bmp.len)) catch return maxInt(usize);
-            const surface = SDLE(c.SDL_LoadBMP_IO(stream, true)) catch return maxInt(usize);
+            const stream = SDLE(c.SDL_IOFromConstMem(bmp.ptr, bmp.len)) catch return 0;
+            const surface = SDLE(c.SDL_LoadBMP_IO(stream, true)) catch return 0;
             defer c.SDL_DestroySurface(surface);
-            const texture = SDLE(c.SDL_CreateTextureFromSurface(self.Renderer, surface)) catch
-                return maxInt(usize);
+            const texture = SDLE(c.SDL_CreateTextureFromSurface(self.Renderer, surface)) catch return 0;
             SDLEP(c.SDL_SetTextureScaleMode(texture, scaling));
             //errdefer comptime unreachable;
 
-            self.BufTex[next_i] = texture;
-            self.BufTexCount += 1;
-            return next_i;
+            defer self.BufTexCount += 1;
+            self.BufTex[self.BufTexCount] = texture;
+            return self.BufTexCount;
         }
 
         /// returns handle to font lod, or a null/safe handle on failure
@@ -155,53 +171,37 @@ fn FontRenderer(
             glyph_count: usize,
             size: usize,
         ) usize {
-            //assert(std.math.isPowerOfTwo(size));
-            const next_i = self.BufLODCount;
+            if (self.BufLODCount >= NumLOD or
+                glyph_start + glyph_count > self.BufGlyCount) return 0;
 
-            if (@intFromBool(next_i < NumLOD) &
-                @intFromBool(glyph_start + glyph_count <= self.BufGlyCount) == 0)
-                return maxInt(usize); // null handle;
-
-            self.BufLOD[next_i] = FontLOD{
+            defer self.BufLODCount += 1;
+            self.BufLOD[self.BufLODCount] = FontLOD{
                 .Pixels = pixels,
                 .GlyphStart = glyph_start,
                 .GlyphCount = glyph_count,
                 .Size = size,
             };
-
-            self.BufLODCount += 1;
-            return next_i;
+            return self.BufLODCount;
         }
 
         /// returns handle to glyph, or a null/safe handle on failure
         pub fn GlyphAdd(self: *FontRendererT, advance_x: f32, region: Rect) usize {
-            const next_i = self.BufGlyCount;
+            if (self.BufGlyCount >= NumGly) return 0;
 
-            if (@intFromBool(next_i < NumGly) == 0)
-                return maxInt(usize); // null handle;
-
-            self.BufGly[next_i] = Glyph{
-                .AdvanceX = advance_x,
-                .PixelRegion = region,
-            };
-
-            self.BufGlyCount += 1;
-            return next_i;
+            defer self.BufGlyCount += 1;
+            self.BufGly[self.BufGlyCount] = Glyph{ .AdvanceX = advance_x, .PixelRegion = region };
+            return self.BufGlyCount;
         }
 
         /// returns handle to font config, or a null/safe handle on failure
         pub fn StyleAdd(self: *FontRendererT, font: usize, size: f32) usize {
             assert(size > 0);
-            const next_i = self.BufStyCount;
+            if (self.BufStyCount >= NumSty or
+                font == 0) return 0;
 
-            if (@intFromBool(next_i < NumSty) &
-                @intFromBool(font < self.BufFntCount) == 0)
-                return maxInt(usize); // null handle;
-
-            self.BufSty[next_i] = FontStyle{ .Font = font, .Size = size };
-
-            self.BufStyCount += 1;
-            return next_i;
+            defer self.BufStyCount += 1;
+            self.BufSty[self.BufStyCount] = FontStyle{ .Font = font, .Size = size };
+            return self.BufStyCount;
         }
 
         /// returns handle to font, or a null/safe handle on failure
@@ -212,86 +212,72 @@ fn FontRenderer(
             lod_start: usize,
             lod_count: usize,
         ) usize {
-            assert(codepoint_max > codepoint_min);
+            assert(codepoint_min >= 0x20); // NOTE: assuming ascii for now, refactor later
+            assert(codepoint_max <= 0x7F); // NOTE: assuming ascii for now, refactor later
+            assert(codepoint_max >= codepoint_min);
             assert(lod_count > 0);
-            const next_i = self.BufFntCount;
-
-            if (@intFromBool(next_i < NumFnt) &
-                @intFromBool(lod_start + lod_count <= self.BufLODCount) == 0)
-                return maxInt(usize); // null handle;
-
-            assert(self.BufLOD[lod_start].GlyphCount == codepoint_max - codepoint_min + 1);
+            const codepoint_count = codepoint_max - codepoint_min + 1;
+            assert(self.BufLOD[lod_start].GlyphCount == codepoint_count);
             for (lod_start + 1..lod_start + lod_count) |li| {
-                assert(self.BufLOD[li].GlyphCount == codepoint_max - codepoint_min + 1);
-                assert(self.BufLOD[li].Size == self.BufLOD[li - 1].Size * 2); // sequential powers of 2
+                assert(self.BufLOD[li].GlyphCount == codepoint_count);
+                assert(self.BufLOD[li].Size > self.BufLOD[li - 1].Size); // ordered by size
             }
+            if (self.BufFntCount >= NumFnt or
+                lod_start + lod_count > self.BufLODCount) return 0;
 
-            self.BufFnt[next_i] = Font{
+            defer self.BufFntCount += 1;
+            self.BufFnt[self.BufFntCount] = Font{
                 .CodepointMin = codepoint_min,
                 .CodepointMax = codepoint_max,
                 .LODStart = lod_start,
                 .LODCount = lod_count,
             };
-
-            self.BufFntCount += 1;
-            return next_i;
+            return self.BufFntCount;
         }
 
         /// creates a monospace ascii font from a standard input structure, and
         /// returns the associated font handle. each LOD is assumed to be a 16*6
         /// grid of characters from 0x20 through 0x7F (96 chars).
         /// @bmp            bmp-formatted bytes containing pixels for all LODs
-        /// @base_size      line height of the lowest LOD, doubled for every
-        ///                 successive LOD, which must be a power of 2
-        /// @base_advance   advance of the lowest LOD, doubled for every
-        ///                 successive LOD
-        /// @base_area      texture area of the lowest LOD, doubled for every
-        ///                 successive LOD. area must have a width divisible by
-        ///                 16, and a height 6 times @base_size
-        /// @regions        top-left coordinates of each LOD region in order
-        //const FONTS_ASCII_MONO = [2]struct { []const u8, []const struct { u32, f32, Rect } }
+        /// @scaling        texture scaling mode
+        /// @lods           fields: size, advance, texture region
         pub fn FontAddAsciiMono(
             self: *FontRendererT,
             bmp: []const u8,
             scaling: c.SDL_ScaleMode,
-            lods: []const struct { u32, f32, Rect }, // size, advance, area
+            lods: []const struct { u32, f32, Rect },
         ) usize {
-            //assert(std.math.isPowerOfTwo(base_size));
             assert(lods.len > 0);
 
             const texture = self.TextureAdd(bmp, scaling);
-            if (texture == maxInt(usize)) return maxInt(usize);
-            assert(self.BufTex[texture].w > 0);
-            assert(self.BufTex[texture].h > 0);
+            if (texture == 0) return 0;
 
             const tw_f = @as(f32, @floatFromInt(self.BufTex[texture].w));
             const th_f = @as(f32, @floatFromInt(self.BufTex[texture].h));
-            for (lods) |lod| {
+
+            for (lods) |*lod| {
                 const size = lod.@"0";
                 const advance = lod.@"1";
-                const area = lod.@"2";
-                assert(@as(u32, @intFromFloat(area.w)) % @as(u32, 16) == 0);
-                assert(@as(u32, @intFromFloat(area.h)) == size * 6);
-                assert(area.x >= 0);
-                assert(area.y >= 0);
-                assert(tw_f >= area.x + area.w);
-                assert(th_f >= area.y + area.h);
+                const region = lod.@"2";
+                assert(region.x >= 0);
+                assert(region.y >= 0);
+                assert(tw_f >= region.x + region.w);
+                assert(th_f >= region.y + region.h);
+                assert(@as(u32, @intFromFloat(region.w)) % @as(u32, 16) == 0);
+                assert(@as(u32, @intFromFloat(region.h)) == size * 6);
 
-                const area_w_u = @as(u32, @intFromFloat(area.w));
-                const area_h_u = @as(u32, @intFromFloat(area.h));
+                const area_w_u = @as(u32, @intFromFloat(region.w));
+                const area_h_u = @as(u32, @intFromFloat(region.h));
                 const step_x = area_w_u / 16;
                 const step_y = area_h_u / 6;
-                for (0..96) |gi| {
-                    const glyph = self.GlyphAdd(advance, .{
-                        .x = area.x + @as(f32, @floatFromInt(step_x * (gi % 16))),
-                        .y = area.y + @as(f32, @floatFromInt(step_y * (gi / 16))),
-                        .w = @as(f32, @floatFromInt(step_x)),
-                        .h = @as(f32, @floatFromInt(step_y)),
-                    });
-                    if (glyph == maxInt(usize)) return maxInt(usize);
-                }
-                const h_lod = self.FontLODAdd(texture, self.BufGlyCount - 96, 96, size);
-                if (h_lod == maxInt(usize)) return maxInt(usize);
+                for (0..96) |gi| if (self.GlyphAdd(advance, .{
+                    .x = region.x + @as(f32, @floatFromInt(step_x * (gi % 16))),
+                    .y = region.y + @as(f32, @floatFromInt(step_y * (gi / 16))),
+                    .w = @as(f32, @floatFromInt(step_x)),
+                    .h = @as(f32, @floatFromInt(step_y)),
+                }) == 0) return 0;
+
+                if (self.FontLODAdd(texture, self.BufGlyCount - 96, 96, size) == 0) return 0;
             }
 
             return self.FontAdd(0x20, 0x7F, self.BufLODCount - lods.len, lods.len);
@@ -308,14 +294,13 @@ fn FontRenderer(
         // TODO: use CharSize??
 
         pub fn DrawString(self: *FontRendererT, font_config: usize, str: []const u8, pos: *const Vec2) void {
-            if (font_config >= self.BufStyCount) return;
+            assert(font_config < self.BufStyCount);
             const config = &self.BufSty[font_config];
             const font_lod = &self.BufLOD[self.ResolveLOD(font_config)];
             const font = &self.BufFnt[self.BufSty[font_config].Font];
 
-            assert(font.CodepointMax < 0x80); // NOTE: assuming ascii for now, refactor later
-            assert(std.mem.min(u8, str) >= @as(u8, @truncate(font.CodepointMin)));
-            assert(std.mem.max(u8, str) <= @as(u8, @truncate(font.CodepointMax)));
+            if (std.mem.min(u8, str) < font.CodepointMin or
+                std.mem.max(u8, str) > font.CodepointMax) return;
 
             const scaling = config.Size / @as(f32, @floatFromInt(font_lod.Size));
             const glyphs = self.BufGly[font_lod.GlyphStart .. font_lod.GlyphStart + font_lod.GlyphCount];
@@ -337,14 +322,13 @@ fn FontRenderer(
         }
 
         pub fn MeasureString(self: *const FontRendererT, font_config: usize, str: []const u8) Vec2 {
-            if (font_config >= self.BufStyCount) return .zero;
+            assert(font_config < self.BufStyCount);
             const config = &self.BufSty[font_config];
             const font_lod = &self.BufLOD[self.ResolveLOD(font_config)];
             const font = &self.BufFnt[self.BufSty[font_config].Font];
 
-            assert(font.CodepointMax < 0x80); // NOTE: assuming ascii for now, refactor later
-            assert(std.mem.min(u8, str) >= @as(u8, @truncate(font.CodepointMin)));
-            assert(std.mem.max(u8, str) <= @as(u8, @truncate(font.CodepointMax)));
+            if (std.mem.min(u8, str) < font.CodepointMin or
+                std.mem.max(u8, str) > font.CodepointMax) return .zero;
 
             const scaling = config.Size / @as(f32, @floatFromInt(font_lod.Size));
             const glyphs = self.BufGly[font_lod.GlyphStart .. font_lod.GlyphStart + font_lod.GlyphCount];
@@ -359,19 +343,19 @@ fn FontRenderer(
         }
 
         pub fn ResolveLOD(self: *const FontRendererT, font_config: usize) usize {
-            if (font_config >= self.BufStyCount) return maxInt(usize);
+            assert(font_config < self.BufStyCount);
             const config = &self.BufSty[font_config];
             const font = &self.BufFnt[config.Font];
 
             for (0..font.LODCount) |i|
                 if (config.Size <= @as(f32, @floatFromInt(self.BufLOD[font.LODStart + i].Size)))
                     return font.LODStart + i;
-            return font.LODStart + font.LODCount - 1;
+            return (font.LODStart + font.LODCount) -| 1; // null value will underflow
         }
 
         // TODO: use alpha from input color
         pub fn SetColor(self: *FontRendererT, font_config: usize, color: u32) void {
-            if (font_config >= self.BufStyCount) return;
+            assert(font_config < self.BufStyCount);
             const rgba = Color.fromInt(color);
             const texture_handle = self.BufLOD[self.ResolveLOD(font_config)].Pixels;
             SDLEP(c.SDL_SetTextureColorMod(self.BufTex[texture_handle], rgba.r, rgba.g, rgba.b));
@@ -833,8 +817,8 @@ fn generate_layout_shaped_box(shape: GUCornerShape) GULayout {
 
 const BASE_BUTTON_STYLE = GUButtonStyle{
     .PaddingVer = 1,
-    .PaddingHor = 8,
-    .CornerRad = 6,
+    .PaddingHor = 6,
+    .CornerRad = 4,
     .CornerShape = RenderData.CNR_ROUND,
     .ColorIdle = 0x008000FF,
     .ColorHover = 0x00C000FF,
@@ -886,17 +870,6 @@ pub export fn SDL_AppInit(app: **App, argc: c_int, argv: [*][:0]u8) c.SDL_AppRes
 
     // UI-RELATED
 
-    app_global.gu = GU.Init(alloc, app_global.rd.GetBackend(), BASE_LAYOUT, BASE_BUTTON_STYLE, BASE_FONT);
-
-    for (0..app_global.textures.len) |ti| {
-        app_global.textures[ti] =
-            ImageTexture.Init(app_global.rd.renderer, TEXTURES[ti]) catch |e|
-                std.debug.panic("initializing AsciiFont failed: {s}", .{@errorName(e)});
-        app_global.texture_handles[ti] =
-            app_global.gu.AddTexture(app_global.textures[ti].GetTextureAtlas()) catch |e|
-                std.debug.panic("AddTexture failed: {s}", .{@errorName(e)});
-    }
-
     app_global.gradient_texture = SDLEP(c.SDL_CreateTexture(
         app_global.rd.renderer,
         c.SDL_PIXELFORMAT_RGBA8888,
@@ -909,7 +882,27 @@ pub export fn SDL_AppInit(app: **App, argc: c_int, argv: [*][:0]u8) c.SDL_AppRes
         app_global.fonts[i] = app_global.rd.fonts.FontAddAsciiMono(fd.@"0", fd.@"1", fd.@"2");
 
     for (&FONT_STYLES, 0..) |*fs, i|
-        app_global.font_styles[i] = app_global.rd.fonts.StyleAdd(fs.@"0", fs.@"1");
+        app_global.font_styles[i] = app_global.rd.fonts.StyleAdd(app_global.fonts[fs.@"0"], fs.@"1");
+
+    app_global.gu = GU.Init(
+        alloc,
+        app_global.rd.GetBackend(),
+        BASE_LAYOUT,
+        BASE_BUTTON_STYLE,
+        app_global.font_styles[BASE_FONT_STYLE],
+    );
+
+    // TODO: move to before GU init after textures become user-managed
+    for (0..app_global.textures.len) |ti| {
+        app_global.textures[ti] =
+            ImageTexture.Init(app_global.rd.renderer, TEXTURES[ti]) catch |e|
+                std.debug.panic("initializing AsciiFont failed: {s}", .{@errorName(e)});
+        app_global.texture_handles[ti] =
+            app_global.gu.AddTexture(app_global.textures[ti].GetTextureAtlas()) catch |e|
+                std.debug.panic("AddTexture failed: {s}", .{@errorName(e)});
+    }
+
+    // DEMO RELATED
 
     app_global.btn_toggle = false;
     app_global.btn_counter = 0;
@@ -1051,7 +1044,7 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoLineBreak();
         gu.DoCustomSurface(RenderData.ACT_DEMO_GRADIENT, 192, 48);
 
-        const fnt_ptr = &app.rd.fonts.BufSty[FONT_DEPARTURE];
+        const fnt_ptr = &app.rd.fonts.BufSty[app_global.font_styles[FONT_DEPARTURE]];
         gu.DoLineBreak();
         gu.SetNextButtonColor(0x800000FF, 0xC00000FF, 0x400000FF);
         if (gu.DoButton("Font DN")) fnt_ptr.Size = @max(1, fnt_ptr.Size - 1);
@@ -1060,12 +1053,12 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         const str_font_size = gu.MakeString("{d:0>3}", .{fnt_ptr.Size});
         gu.DoLabel(0xCCCCFFFF, str_font_size);
 
-        const new_font_lod = app.rd.fonts.ResolveLOD(FONT_DEPARTURE);
+        const new_font_lod = app.rd.fonts.ResolveLOD(app_global.font_styles[FONT_DEPARTURE]);
         gu.DoLineBreak();
         const str_font_lod = gu.MakeString("LOD: {d}", .{new_font_lod});
         gu.DoLabel(0xCCCCFFFF, str_font_lod);
 
-        const measure_size = app.rd.fonts.MeasureString(FONT_DEPARTURE, "Measure");
+        const measure_size = app.rd.fonts.MeasureString(app_global.font_styles[FONT_DEPARTURE], "Measure");
         gu.DoLineBreak();
         gu.DoLabel(0xCCCCFFFF, "'Measure' Size:");
         gu.DoLineBreak();
