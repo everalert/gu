@@ -12,6 +12,10 @@ h: f32,
 
 pub const zero = Rect{ .x = 0, .y = 0, .w = 0, .h = 0 };
 
+pub fn init(x: f32, y: f32, w: f32, h: f32) Rect {
+    return Rect{ .x = x, .y = y, .w = w, .h = h };
+}
+
 pub fn toPos(r: *const Rect) Vec2 {
     return .{ .x = r.x, .y = r.y };
 }
