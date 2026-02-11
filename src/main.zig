@@ -34,12 +34,13 @@ const sdf = @import("m_sdf.zig");
 
 const WINDOW_W = 1280;
 const WINDOW_H = 960;
-const BASE_FONT_STYLE = FONT_DEPARTURE;
+const PIXELFORMAT = c.SDL_PIXELFORMAT_RGBA8888;
 
-const TEXTURES: [2][]const u8 = .{ @embedFile("yuriko1"), @embedFile("yuriko2") };
+const BASE_FONT_STYLE = FONT_DEPARTURE;
 
 const TEXTURE_YURIKO1: GUTextureHandle = 0;
 const TEXTURE_YURIKO2: GUTextureHandle = 1;
+const TEXTURES: [2][]const u8 = .{ @embedFile("yuriko1"), @embedFile("yuriko2") };
 
 const FONT_NOTO = 0;
 const FONT_DEPARTURE = 1;
@@ -508,7 +509,7 @@ const CornerTexture = struct {
         assert(std.math.isPowerOfTwo(width));
         assert(px_data.len == width * width);
 
-        const px_fmt = c.SDL_PIXELFORMAT_RGBA8888;
+        const px_fmt = PIXELFORMAT;
         const sfc: *c.SDL_Surface =
             SDLEP(c.SDL_CreateSurfaceFrom(width, width, px_fmt, @constCast(px_data.ptr), width * 4));
         defer c.SDL_DestroySurface(sfc);
@@ -551,6 +552,7 @@ const RenderData = struct {
     tex_corners: [NUM_CNR_SHAPES - 1][NUM_LOD_LEVELS]CornerTexture, // 4, 8, 16 and 32px radii
     fonts: FontRenderer(NUM_FONTS, 8, NUM_FONTS * 3, NUM_FONTS * 3 * 96, NUM_FONTS * 3),
     textures: TextureRenderer(NUM_TEXTURES),
+    gradient_texture: *c.SDL_Texture, // for ACT_DEMO_GRADIENT
 
     const NUM_LOD_LEVELS = 4;
     const NUM_CNR_SHAPES = 7;
@@ -573,13 +575,14 @@ const RenderData = struct {
         .tex_corners = undefined,
         .fonts = undefined,
         .textures = undefined,
+        .gradient_texture = undefined,
     };
 
     pub fn Init(alloc: Allocator) !RenderData {
         var rd: RenderData = .empty;
 
         SDLE(c.SDL_SetHint(c.SDL_HINT_RENDER_VSYNC, "1")) catch {};
-        try SDLE(c.SDL_CreateWindowAndRenderer("GU", WINDOW_W, WINDOW_H, 0, &rd.window, &rd.renderer));
+        try SDLE(c.SDL_CreateWindowAndRenderer("libgu demo", WINDOW_W, WINDOW_H, 0, &rd.window, &rd.renderer));
 
         comptime assert(CNR_PX_LODS.len == NUM_CNR_SHAPES - 1);
         for (0..NUM_CNR_SHAPES - 1) |ci| {
@@ -592,6 +595,9 @@ const RenderData = struct {
 
         rd.fonts = try .Init(alloc, rd.renderer);
         rd.textures = try .Init(alloc, rd.renderer);
+        rd.gradient_texture = SDLEP(
+            c.SDL_CreateTexture(rd.renderer, PIXELFORMAT, c.SDL_TEXTUREACCESS_STREAMING, 64, 64),
+        );
 
         errdefer comptime unreachable;
         SDLEP(c.SDL_SetRenderDrawBlendMode(rd.renderer, c.SDL_BLENDMODE_BLEND));
@@ -669,8 +675,8 @@ const RenderData = struct {
             ACT_DEMO_GRADIENT => {
                 var pixels: [*]u32 = undefined;
                 var pitch: c_int = undefined; // in bytes, not values
-                if (c.SDL_LockTexture(app_global.gradient_texture, null, @ptrCast(&pixels), &pitch)) {
-                    defer c.SDL_UnlockTexture(app_global.gradient_texture);
+                if (c.SDL_LockTexture(self.gradient_texture, null, @ptrCast(&pixels), &pitch)) {
+                    defer c.SDL_UnlockTexture(self.gradient_texture);
                     var t: i64 = 0;
                     SDLEP(c.SDL_GetCurrentTime(&t));
                     const xo: usize = 0xFF - @as(usize, @intCast(@mod(t >> 24, 0x3F)));
@@ -686,7 +692,7 @@ const RenderData = struct {
                     SDLEP(c.SDL_SetRenderDrawColor(self.renderer, c1.r, c1.g, c1.b, c1.a));
                     SDLEP(c.SDL_RenderTextureTiled(
                         self.renderer,
-                        app_global.gradient_texture,
+                        self.gradient_texture,
                         null,
                         1.0,
                         &.{ .x = cmd.rect.x, .y = cmd.rect.y, .w = cmd.rect.w, .h = cmd.rect.h },
@@ -883,8 +889,9 @@ const BASE_BUTTON_STYLE = GUButtonStyle{
 
 //------------------------------------------------------------------------------
 
+// TODO: drop gpa and use std.heap.smp_allocator on alloc field for release builds
 const App = struct {
-    gpa: std.heap.GeneralPurposeAllocator(.{}),
+    gpa: std.heap.DebugAllocator(.{}),
     alloc: std.mem.Allocator,
 
     rd: RenderData,
@@ -898,67 +905,71 @@ const App = struct {
     btn_toggle: bool,
     btn_counter: usize,
     btn_color_loop: usize,
-
-    gradient_texture: *c.SDL_Texture,
-
     step: bool,
+
+    pub fn Init(self: *App) void {
+        c.SDL_SetMainReady();
+        SDLEP(c.SDL_SetAppMetadata("GU", "0.0.0", "com.galeforce.gu"));
+        SDLEP(c.SDL_Init(c.SDL_INIT_VIDEO));
+
+        self.gpa = .{};
+        self.alloc = self.gpa.allocator();
+        const alloc = self.alloc;
+
+        // SDL VIDEO INIT
+
+        self.rd = RenderData.Init(alloc) catch |e|
+            std.debug.panic("initializing RenderData failed: {s}", .{@errorName(e)});
+
+        // UI-RELATED
+
+        for (&FONTS_ASCII_MONO, 0..) |*fd, i|
+            self.fonts[i] = self.rd.fonts.FontAddAsciiMono(fd.@"0", fd.@"1", fd.@"2");
+
+        for (&FONT_STYLES, 0..) |*fs, i|
+            self.font_styles[i] = self.rd.fonts.StyleAdd(self.fonts[fs.@"0"], fs.@"1");
+
+        for (&TEXTURES, 0..) |*tex, ti|
+            self.textures[ti] = self.rd.textures.TextureAdd(tex.*, c.SDL_SCALEMODE_LINEAR);
+
+        self.gu = GU.Init(
+            alloc,
+            self.rd.GetBackend(),
+            BASE_LAYOUT,
+            BASE_BUTTON_STYLE,
+            self.font_styles[BASE_FONT_STYLE],
+        );
+
+        // DEMO RELATED
+
+        self.btn_toggle = false;
+        self.btn_counter = 0;
+        self.btn_color_loop = 0;
+        self.step = true;
+    }
+
+    // NOTE: SDL_Quit not needed if using SDL_AppQuit
+    pub fn Deinit(self: *App) void {
+        self.gu.Deinit();
+        self.rd.Deinit(self.alloc); // FIXME: don't like this alloc so much
+    }
 };
 
-var app_global: App = undefined;
+var APP: App = undefined;
+
+//------------------------------------------------------------------------------
 
 pub export fn SDL_AppInit(app: **App, argc: c_int, argv: [*][:0]u8) c.SDL_AppResult {
     _ = argc;
     _ = argv;
 
-    app_global.gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    app_global.alloc = app_global.gpa.allocator();
-    const alloc = app_global.alloc;
-
-    c.SDL_SetMainReady();
-    SDLEP(c.SDL_SetAppMetadata("GU", "0.0.0", "com.galeforce.gu"));
-    SDLEP(c.SDL_Init(c.SDL_INIT_VIDEO));
-
-    // SDL VIDEO INIT
-
-    app_global.rd = RenderData.Init(alloc) catch |e|
-        std.debug.panic("initializing RenderData failed: {s}", .{@errorName(e)});
-
-    // UI-RELATED
-
-    app_global.gradient_texture = SDLEP(c.SDL_CreateTexture(
-        app_global.rd.renderer,
-        c.SDL_PIXELFORMAT_RGBA8888,
-        c.SDL_TEXTUREACCESS_STREAMING,
-        64,
-        64,
-    ));
-
-    for (&FONTS_ASCII_MONO, 0..) |*fd, i|
-        app_global.fonts[i] = app_global.rd.fonts.FontAddAsciiMono(fd.@"0", fd.@"1", fd.@"2");
-
-    for (&FONT_STYLES, 0..) |*fs, i|
-        app_global.font_styles[i] = app_global.rd.fonts.StyleAdd(app_global.fonts[fs.@"0"], fs.@"1");
-
-    for (&TEXTURES, 0..) |*tex, ti|
-        app_global.textures[ti] = app_global.rd.textures.TextureAdd(tex.*, c.SDL_SCALEMODE_LINEAR);
-
-    app_global.gu = GU.Init(
-        alloc,
-        app_global.rd.GetBackend(),
-        BASE_LAYOUT,
-        BASE_BUTTON_STYLE,
-        app_global.font_styles[BASE_FONT_STYLE],
-    );
-
-    // DEMO RELATED
-
-    app_global.btn_toggle = false;
-    app_global.btn_counter = 0;
-    app_global.btn_color_loop = 0;
-    app_global.step = true;
-
-    app.* = &app_global;
+    APP.Init();
+    app.* = &APP;
     return c.SDL_APP_CONTINUE;
+}
+
+pub export fn SDL_AppQuit(app: *App, _: c.SDL_AppResult) void {
+    app.Deinit();
 }
 
 // normally WM_PAINT would be handled here to smoothly re-render during resize,
@@ -1117,11 +1128,6 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     SDLEP(c.SDL_RenderPresent(rd.renderer));
 
     return c.SDL_APP_CONTINUE;
-}
-
-pub export fn SDL_AppQuit(app: *App, _: c.SDL_AppResult) void {
-    app.gu.Deinit();
-    app.rd.Deinit(app.alloc); // FIXME: don't like this alloc so much
 }
 
 pub fn main() !void {
