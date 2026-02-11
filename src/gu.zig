@@ -22,6 +22,7 @@ pub const Backend = struct {
     fnRectDraw: *const fn (*anyopaque, *const RCRect) void,
     fnStringDraw: *const fn (*anyopaque, *const RCText) void,
     fnStringSize: *const fn (*anyopaque, font: FontHandle, []const u8) Vec2,
+    fnTextureSize: *const fn (*anyopaque, font: TextureHandle) Vec2,
     fnClipSet: *const fn (*anyopaque, *const RCClip) void,
     fnRenderBegin: *const fn (*anyopaque) void,
     fnRenderEnd: *const fn (*anyopaque) void,
@@ -45,6 +46,10 @@ pub const Backend = struct {
 
     pub fn StringSize(self: *Backend, font: FontHandle, str: []const u8) Vec2 {
         return self.fnStringSize(self.ptr, font, str);
+    }
+
+    pub fn TextureSize(self: *Backend, texture: TextureHandle) Vec2 {
+        return self.fnTextureSize(self.ptr, texture);
     }
 
     pub fn ClipSet(self: *Backend, cmd: *const RCClip) void {
@@ -97,6 +102,9 @@ pub const RenderCommand = struct {
     }
 };
 
+// TODO: user-defined resource handle types
+pub const FontHandle = usize;
+pub const TextureHandle = usize;
 pub const CustomActionHandle = usize;
 
 // TODO: ?? add field for data ptr/handle? with only action id, the implementation
@@ -119,7 +127,7 @@ pub const RCRect = struct {
     corner_radius: f32,
     corner_shape: CornerShape,
     color: u32,
-    texture: ?*TextureAtlas,
+    texture: TextureHandle,
     tile: ?u32, // for texture atlases
 };
 
@@ -132,33 +140,6 @@ pub const RCText = struct {
 
 pub const RCClip = struct {
     area: Rect,
-};
-
-//------------------------------------------------------------------------------
-
-pub const FontHandle = usize;
-pub const TextureHandle = usize;
-
-// TODO: tiling; i.e. actually make it an atlas
-// FIXME: not sure this needs to be in ui core, maybe adding these to backend
-//  vtable is enough? so we only remember handles (provided by backend)
-pub const TextureAtlas = struct {
-    ptr: *anyopaque,
-    fnDraw: *const fn (*anyopaque, *const Vec2) void,
-    fnSize: *const fn (*anyopaque) Vec2,
-    fnSetColor: *const fn (*anyopaque, u32) void,
-
-    pub fn Draw(self: *TextureAtlas, pos: *const Vec2) void {
-        self.fnDraw(self.ptr, pos);
-    }
-
-    pub fn Size(self: *TextureAtlas) Vec2 {
-        return self.fnSize(self.ptr);
-    }
-
-    pub fn SetColor(self: *TextureAtlas, color: u32) void {
-        return self.fnSetColor(self.ptr, color);
-    }
 };
 
 //------------------------------------------------------------------------------
@@ -298,10 +279,10 @@ pub const Element = struct {
         .sibling_next = null,
         .sibling_prev = null,
         .features = .none,
-        .texture = maxInt(usize),
+        .texture = 0,
         .name = &.{},
         .label_str = &.{},
-        .label_font = maxInt(usize),
+        .label_font = 0,
         .custom_action = maxInt(usize),
     };
 };
@@ -516,8 +497,7 @@ allocator: Allocator,
 
 backend: Backend,
 
-font_vstk: ValueStack(FontHandle), // TODO: user-defined font handle type
-textures: ArrayList(TextureAtlas), // TODO: impl with handles, update TextureHandle
+font_vstk: ValueStack(FontHandle),
 
 element_tree: ArrayList(Element),
 element_stack: ArrayList(usize),
@@ -565,7 +545,6 @@ pub fn Init(
         .allocator = alloc,
         .label_arena = .init(alloc),
         .backend = backend,
-        .textures = .empty,
         .element_tree = .empty,
         .element_stack = .empty,
         .element_line_stack = .empty,
@@ -617,17 +596,7 @@ pub fn Deinit(self: *GU) void {
     self.element_line_stack.deinit(self.allocator);
     self.element_stack.deinit(self.allocator);
     self.element_tree.deinit(self.allocator);
-    self.textures.deinit(self.allocator);
     self.font_vstk.Deinit();
-}
-
-//------------------------------------------------------------------------------
-// RESOURCES
-
-// TODO: impl handle-based system
-pub fn AddTexture(self: *GU, texture: TextureAtlas) !usize {
-    try self.textures.append(self.allocator, texture);
-    return self.textures.items.len - 1;
 }
 
 //------------------------------------------------------------------------------
@@ -917,7 +886,7 @@ fn DoElementEmitRenderCommands(self: *GU) void {
                 .corner_radius = e.layout.corner_radius,
                 .corner_shape = e.layout.corner_shape,
                 .color = e.layout.color,
-                .texture = if (e.features.bShowTexture) &self.textures.items[e.texture] else null,
+                .texture = e.texture,
                 .tile = null,
             });
         }
@@ -1131,7 +1100,6 @@ pub fn EndElement(self: *GU) void {
     // "draw image = match texture size with fixed sizing") is left to the widget impl
     if (element.features.bShowTexture) {
         assert(element.features.bShowRect == true);
-        assert(element.texture != maxInt(usize)); // TODO: proper/safe "null texture" value
     }
 
     // Text
@@ -1145,7 +1113,6 @@ pub fn EndElement(self: *GU) void {
     if (element.features.bShowLabel) {
         const font = self.font_vstk.GetOrNull() orelse self.base_font;
         assert(element.features.bShowRect == false);
-        assert(font != maxInt(usize)); // TODO: proper/safe "null font" value
         //assert(element.label_str.len > 0);
 
         const label_size = &self.backend.StringSize(font, element.label_str);
@@ -1660,9 +1627,9 @@ pub fn DoImage(self: *GU, texture: TextureHandle, color: ?u32, scale: f32) void 
     element.layout.color = color orelse 0xFFFFFFFF;
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
-    const texture_size = &self.textures.items[element.texture].Size();
-    element.area.w = scale * texture_size.x;
-    element.area.h = scale * texture_size.y;
+    const texture_size = self.backend.TextureSize(texture).MULS(scale);
+    element.area.w = texture_size.x;
+    element.area.h = texture_size.y;
 }
 
 // FIXME: remove color as input, use color stack (note: comments like these should

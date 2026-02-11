@@ -34,10 +34,12 @@ const sdf = @import("m_sdf.zig");
 
 const WINDOW_W = 1280;
 const WINDOW_H = 960;
-
 const BASE_FONT_STYLE = FONT_DEPARTURE;
 
 const TEXTURES: [2][]const u8 = .{ @embedFile("yuriko1"), @embedFile("yuriko2") };
+
+const TEXTURE_YURIKO1: GUTextureHandle = 0;
+const TEXTURE_YURIKO2: GUTextureHandle = 1;
 
 const FONT_NOTO = 0;
 const FONT_DEPARTURE = 1;
@@ -392,57 +394,105 @@ const FontStyle = struct {
 
 //------------------------------------------------------------------------------
 
-const ImageTexture = struct {
-    texture: *c.SDL_Texture,
-    renderer: ?*c.SDL_Renderer,
+// TODO: log warnings when emitting a null handle? (for debugging/tuning help)
+// TODO: tracking of number of attempted assignments, to help tune buffer sizes
+// NOTE: to keep things simple for now, no delete functions; must free entire thing
+fn TextureRenderer(comptime NumTex: usize) type {
+    comptime assert(NumTex > 0);
+    const OFFSET_TEX = 0;
+    const SIZE_TEX = NumTex * @sizeOf(*c.SDL_Texture);
+    const REQUIRED_BYTES = SIZE_TEX;
 
-    // NOTE: BMP can be transparent; convert from PNG using online converter if
-    // your photo app can't export BMP
-    pub fn Init(renderer: ?*c.SDL_Renderer, bmp: []const u8) !ImageTexture {
-        const stream: *c.SDL_IOStream = try SDLE(c.SDL_IOFromConstMem(bmp.ptr, bmp.len));
-        const surface: *c.SDL_Surface = try SDLE(c.SDL_LoadBMP_IO(stream, true));
-        defer c.SDL_DestroySurface(surface);
-        const texture: *c.SDL_Texture = try SDLE(c.SDL_CreateTextureFromSurface(renderer, surface));
-        errdefer comptime unreachable;
-        return ImageTexture{ .texture = texture, .renderer = renderer };
-    }
+    return struct {
+        Renderer: ?*c.SDL_Renderer,
+        BackingMemory: []u8,
+        BufTex: []*c.SDL_Texture,
+        BufTexCount: usize,
 
-    pub fn Deinit(self: *ImageTexture) void {
-        c.SDL_DestroyTexture(self.texture);
-    }
+        const TextureRendererT = @This();
 
-    // TODO: use alpha from input color
-    fn SetColor(ptr: *anyopaque, color: u32) void {
-        const self: *ImageTexture = @ptrCast(@alignCast(ptr));
-        const rgba = Color.fromInt(color);
-        SDLEP(c.SDL_SetTextureColorMod(self.texture, rgba.r, rgba.g, rgba.b));
-    }
+        pub const RequiredBytes = REQUIRED_BYTES;
 
-    fn Draw(ptr: *anyopaque, pos: *const Vec2) void {
-        const self: *ImageTexture = @ptrCast(@alignCast(ptr));
-        const size = Size(ptr);
-        SDLEP(c.SDL_RenderTexture(
-            self.renderer,
-            self.texture,
-            null,
-            &.{ .x = pos.x, .y = pos.y, .w = size.x, .h = size.y },
-        ));
-    }
+        // FIXME: seems alignCast fails for some buffer sizes?
+        pub fn Init(alloc: Allocator, renderer: ?*c.SDL_Renderer) Allocator.Error!TextureRendererT {
+            const buf = try alloc.alloc(u8, REQUIRED_BYTES);
+            const tr = TextureRendererT{
+                .Renderer = renderer,
+                .BackingMemory = buf,
+                .BufTex = @alignCast(bytesAsSlice(*c.SDL_Texture, buf[OFFSET_TEX .. OFFSET_TEX + SIZE_TEX])),
+                .BufTexCount = 1, // 0-index used for "null"
+            };
+            // apparently SDL is ok with being given invalid texture pointers?
+            // fr.BufTex[0] = std.mem.zeroes(*c.SDL_Texture);
+            return tr;
+        }
 
-    fn Size(ptr: *anyopaque) Vec2 {
-        const self: *ImageTexture = @ptrCast(@alignCast(ptr));
-        return Vec2{ .x = @floatFromInt(self.texture.w), .y = @floatFromInt(self.texture.h) };
-    }
+        /// must use same allocator as used to init
+        pub fn Deinit(self: *TextureRendererT, alloc: Allocator) void {
+            for (0..self.BufTexCount) |ti| c.SDL_DestroyTexture(self.BufTex[ti]);
+            alloc.free(self.BackingMemory);
+        }
 
-    pub fn GetTextureAtlas(self: *ImageTexture) GUTextureAtlas {
-        return GUTextureAtlas{
-            .ptr = self,
-            .fnDraw = Draw,
-            .fnSize = Size,
-            .fnSetColor = SetColor,
-        };
-    }
-};
+        //-----------------------------
+        // setup code
+
+        // NOTE: BMP can be transparent; convert from PNG using online converter
+        // if your photo app can't export BMP
+        /// returns handle to texture, or a null/safe handle on failure
+        pub fn TextureAdd(self: *TextureRendererT, bmp: []const u8, scaling: c.SDL_ScaleMode) usize {
+            if (self.BufTexCount >= NumTex) return 0;
+
+            const stream = SDLE(c.SDL_IOFromConstMem(bmp.ptr, bmp.len)) catch return 0;
+            const surface = SDLE(c.SDL_LoadBMP_IO(stream, true)) catch return 0;
+            defer c.SDL_DestroySurface(surface);
+            const texture = SDLE(c.SDL_CreateTextureFromSurface(self.Renderer, surface)) catch return 0;
+            SDLEP(c.SDL_SetTextureScaleMode(texture, scaling));
+            //errdefer comptime unreachable;
+
+            defer self.BufTexCount += 1;
+            self.BufTex[self.BufTexCount] = texture;
+            return self.BufTexCount;
+        }
+
+        //-----------------------------
+        // usage code
+
+        // NOTE: usage code below assumes that the resources were "allocated"
+        //  correctly, as long as the input handle is valid, due to the aggressive
+        //  null handle usage in the setup code. in other words, a valid handle
+        //  implies there will be no invalid dependent handles in correct usage.
+        //  if any failed assertions arise, prefer fixing the setup code above.
+
+        fn DrawStretched(self: *TextureRendererT, texture: usize, rect: *const Rect) void {
+            assert(texture < self.BufTexCount);
+            SDLEP(c.SDL_RenderTexture(
+                self.Renderer,
+                self.BufTex[texture],
+                null,
+                &.{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h },
+            ));
+        }
+
+        fn Draw(self: *TextureRendererT, texture: usize, pos: *const Vec2) void {
+            assert(texture < self.BufTexCount);
+            const size = self.Size(texture);
+            self.DrawStretched(texture, &.init(pos.x, pos.y, size.x, size.y));
+        }
+
+        fn Size(self: *TextureRendererT, texture: usize) Vec2 {
+            assert(texture < self.BufTexCount);
+            if (texture == 0) return .zero;
+            return .init(@floatFromInt(self.BufTex[texture].w), @floatFromInt(self.BufTex[texture].h));
+        }
+
+        // TODO: use alpha from input color
+        pub fn SetColor(self: *TextureRendererT, texture: usize, color: u32) void {
+            assert(texture < self.BufTexCount);
+            const rgba = Color.fromInt(color);
+            SDLEP(c.SDL_SetTextureColorMod(self.BufTex[texture], rgba.r, rgba.g, rgba.b));
+        }
+    };
+}
 
 //------------------------------------------------------------------------------
 
@@ -500,10 +550,12 @@ const RenderData = struct {
     stored_clip: ?c.SDL_Rect,
     tex_corners: [NUM_CNR_SHAPES - 1][NUM_LOD_LEVELS]CornerTexture, // 4, 8, 16 and 32px radii
     fonts: FontRenderer(NUM_FONTS, 8, NUM_FONTS * 3, NUM_FONTS * 3 * 96, NUM_FONTS * 3),
+    textures: TextureRenderer(NUM_TEXTURES),
 
     const NUM_LOD_LEVELS = 4;
     const NUM_CNR_SHAPES = 7;
     const NUM_FONTS = 4;
+    const NUM_TEXTURES = 8;
     pub const CNR_RECT: GUCornerShape = 0;
     pub const CNR_ROUND: GUCornerShape = 1;
     pub const CNR_ANGULAR: GUCornerShape = 2;
@@ -520,6 +572,7 @@ const RenderData = struct {
         .stored_clip = null,
         .tex_corners = undefined,
         .fonts = undefined,
+        .textures = undefined,
     };
 
     pub fn Init(alloc: Allocator) !RenderData {
@@ -538,6 +591,7 @@ const RenderData = struct {
         }
 
         rd.fonts = try .Init(alloc, rd.renderer);
+        rd.textures = try .Init(alloc, rd.renderer);
 
         errdefer comptime unreachable;
         SDLEP(c.SDL_SetRenderDrawBlendMode(rd.renderer, c.SDL_BLENDMODE_BLEND));
@@ -549,6 +603,7 @@ const RenderData = struct {
     pub fn Deinit(self: *RenderData, alloc: Allocator) void {
         for (0..NUM_CNR_SHAPES - 1) |ci| for (0..NUM_LOD_LEVELS) |li| self.tex_corners[ci][li].Deinit();
         self.fonts.Deinit(alloc);
+        self.textures.Deinit(alloc);
         c.SDL_DestroyWindow(self.window);
         c.SDL_DestroyRenderer(self.renderer);
     }
@@ -648,16 +703,11 @@ const RenderData = struct {
         SDLEP(c.SDL_SetRenderDrawColor(self.renderer, c1.r, c1.g, c1.b, c1.a));
 
         // FIXME: integrate this in with the rest, so that textured rects can
-        //  take advantage of things like corner rounding
-        if (cmd.texture) |img| {
-            const atlas: *ImageTexture = @ptrCast(@alignCast(img.ptr));
-            SDLEP(c.SDL_SetTextureColorMod(atlas.texture, c1.r, c1.g, c1.b));
-            SDLEP(c.SDL_RenderTexture(
-                atlas.renderer,
-                atlas.texture,
-                null,
-                &.{ .x = cmd.rect.x, .y = cmd.rect.y, .w = cmd.rect.w, .h = cmd.rect.h },
-            ));
+        //  take advantage of things like corner rounding, and don't need to
+        //  filter out index 0 (because won't need to early return)
+        if (cmd.texture > 0) {
+            self.textures.SetColor(cmd.texture, cmd.color);
+            self.textures.DrawStretched(cmd.texture, &cmd.rect);
             return;
         }
 
@@ -704,6 +754,11 @@ const RenderData = struct {
         return self.fonts.MeasureString(font, str);
     }
 
+    fn fn_texture_size(ptr: *anyopaque, texture: GUTextureHandle) Vec2 {
+        const self: *RenderData = @ptrCast(@alignCast(ptr));
+        return self.textures.Size(texture);
+    }
+
     fn fn_render_begin(ptr: *anyopaque) void {
         const self: *RenderData = @ptrCast(@alignCast(ptr));
         assert(self.stored_clip == null);
@@ -731,6 +786,7 @@ const RenderData = struct {
             .fnRectDraw = fn_rect_draw,
             .fnStringDraw = fn_string_draw,
             .fnStringSize = fn_string_size,
+            .fnTextureSize = fn_texture_size,
             .fnClipSet = fn_clip_set,
             .fnRenderBegin = fn_render_begin,
             .fnRenderEnd = fn_render_end,
@@ -834,8 +890,7 @@ const App = struct {
     rd: RenderData,
     gu: GU,
 
-    textures: [2]ImageTexture,
-    texture_handles: [2]GUTextureHandle,
+    textures: [2]usize,
 
     fonts: [2]usize,
     font_styles: [2]usize,
@@ -884,6 +939,9 @@ pub export fn SDL_AppInit(app: **App, argc: c_int, argv: [*][:0]u8) c.SDL_AppRes
     for (&FONT_STYLES, 0..) |*fs, i|
         app_global.font_styles[i] = app_global.rd.fonts.StyleAdd(app_global.fonts[fs.@"0"], fs.@"1");
 
+    for (&TEXTURES, 0..) |*tex, ti|
+        app_global.textures[ti] = app_global.rd.textures.TextureAdd(tex.*, c.SDL_SCALEMODE_LINEAR);
+
     app_global.gu = GU.Init(
         alloc,
         app_global.rd.GetBackend(),
@@ -891,16 +949,6 @@ pub export fn SDL_AppInit(app: **App, argc: c_int, argv: [*][:0]u8) c.SDL_AppRes
         BASE_BUTTON_STYLE,
         app_global.font_styles[BASE_FONT_STYLE],
     );
-
-    // TODO: move to before GU init after textures become user-managed
-    for (0..app_global.textures.len) |ti| {
-        app_global.textures[ti] =
-            ImageTexture.Init(app_global.rd.renderer, TEXTURES[ti]) catch |e|
-                std.debug.panic("initializing AsciiFont failed: {s}", .{@errorName(e)});
-        app_global.texture_handles[ti] =
-            app_global.gu.AddTexture(app_global.textures[ti].GetTextureAtlas()) catch |e|
-                std.debug.panic("AddTexture failed: {s}", .{@errorName(e)});
-    }
 
     // DEMO RELATED
 
@@ -942,8 +990,6 @@ pub export fn SDL_AppEvent(app: *App, event: *c.SDL_Event) c.SDL_AppResult {
 pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     const rd = &app.rd;
     const gu = &app.gu;
-    const img1 = app.texture_handles[0];
-    const img2 = app.texture_handles[1];
 
     const color_loop = [_]u32{ 0xC00000FF, 0x00C000FF, 0x0000C0FF };
 
@@ -969,7 +1015,7 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         if (gu.DoButton("ReleaseButton"))
             app.btn_color_loop = (app.btn_color_loop + 1) % color_loop.len;
         gu.DoLineBreak();
-        gu.DoImage(img1, color_loop[app.btn_color_loop], 0.1);
+        gu.DoImage(app.textures[TEXTURE_YURIKO1], color_loop[app.btn_color_loop], 0.1);
     }
 
     if (gu.DoElement(&LAYOUT_WHITE)) {
@@ -979,8 +1025,8 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         const str_toggle_button = gu.MakeString("ToggleButton: {any}", .{app.btn_toggle});
         _ = gu.DoToggleButton(&app.btn_toggle, str_toggle_button);
         if (app.btn_toggle) gu.DoLabel(null, "only visible if b2 is on");
-        gu.DoImage(img2, 0xC000C0FF, 0.15);
-        gu.DoImage(img1, null, 0.15);
+        gu.DoImage(app.textures[TEXTURE_YURIKO2], 0xC000C0FF, 0.15);
+        gu.DoImage(app.textures[TEXTURE_YURIKO1], null, 0.15);
     }
 
     if (gu.DoElement(&LAYOUT_WHITE)) {
@@ -1023,8 +1069,8 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         _ = gu.DoToggleButton(&app.btn_toggle, "ToggleButton");
 
         gu.DoLineBreak();
-        gu.DoImage(img1, null, 0.35);
-        gu.DoImage(img2, null, 0.35);
+        gu.DoImage(app.textures[TEXTURE_YURIKO1], null, 0.35);
+        gu.DoImage(app.textures[TEXTURE_YURIKO2], null, 0.35);
 
         gu.DoLineBreak();
         if (app.btn_toggle) gu.DoLabelsFromString("only visible if b2 is on.");
@@ -1044,7 +1090,7 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoLineBreak();
         gu.DoCustomSurface(RenderData.ACT_DEMO_GRADIENT, 192, 48);
 
-        const fnt_ptr = &app.rd.fonts.BufSty[app_global.font_styles[FONT_DEPARTURE]];
+        const fnt_ptr = &app.rd.fonts.BufSty[app.font_styles[FONT_DEPARTURE]];
         gu.DoLineBreak();
         gu.SetNextButtonColor(0x800000FF, 0xC00000FF, 0x400000FF);
         if (gu.DoButton("Font DN")) fnt_ptr.Size = @max(1, fnt_ptr.Size - 1);
@@ -1053,12 +1099,12 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         const str_font_size = gu.MakeString("{d:0>3}", .{fnt_ptr.Size});
         gu.DoLabel(0xCCCCFFFF, str_font_size);
 
-        const new_font_lod = app.rd.fonts.ResolveLOD(app_global.font_styles[FONT_DEPARTURE]);
+        const new_font_lod = app.rd.fonts.ResolveLOD(app.font_styles[FONT_DEPARTURE]);
         gu.DoLineBreak();
         const str_font_lod = gu.MakeString("LOD: {d}", .{new_font_lod});
         gu.DoLabel(0xCCCCFFFF, str_font_lod);
 
-        const measure_size = app.rd.fonts.MeasureString(app_global.font_styles[FONT_DEPARTURE], "Measure");
+        const measure_size = app.rd.fonts.MeasureString(app.font_styles[FONT_DEPARTURE], "Measure");
         gu.DoLineBreak();
         gu.DoLabel(0xCCCCFFFF, "'Measure' Size:");
         gu.DoLineBreak();
