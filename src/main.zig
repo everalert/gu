@@ -1034,7 +1034,7 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
 
         gu.DoLabel(0xC000C0FF, "testblock2");
         const str_toggle_button = gu.MakeString("ToggleButton: {any}", .{app.btn_toggle});
-        _ = gu.DoToggleButton(&app.btn_toggle, str_toggle_button);
+        _ = gu.DoToggleButtonNamed(&app.btn_toggle, str_toggle_button, "ToggleButton1");
         if (app.btn_toggle) gu.DoLabel(null, "only visible if b2 is on");
         gu.DoImage(app.textures[TEXTURE_YURIKO2], 0xC000C0FF, 0.15);
         gu.DoImage(app.textures[TEXTURE_YURIKO1], null, 0.15);
@@ -1077,7 +1077,7 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         //element.features.bTextSpacing = true;
 
         gu.DoLabel(0x00C0C0FF, "testing... with auto linebreak!!");
-        _ = gu.DoToggleButton(&app.btn_toggle, "ToggleButton");
+        _ = gu.DoToggleButton(&app.btn_toggle, "ToggleButton2");
 
         gu.DoLineBreak();
         gu.DoImage(app.textures[TEXTURE_YURIKO1], null, 0.35);

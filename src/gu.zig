@@ -262,7 +262,8 @@ pub const Element = struct {
     clip: Rect, // the clipping region this element applies to its children
     fill: Vec2, // how big the element is for layout calculations
     texture: TextureHandle,
-    name: []const u8,
+    name: []const u8, // primary key used for hashing element for cross-frame identification
+    data: usize, // secondary key used in the absence of `name`, typically a unique pointer
     label_str: []const u8,
     label_font: FontHandle,
     custom_action: CustomActionHandle, // impl-defined action associated with custom command
@@ -283,8 +284,16 @@ pub const Element = struct {
         .name = &.{},
         .label_str = &.{},
         .label_font = 0,
+        .data = 0,
         .custom_action = maxInt(usize),
     };
+
+    inline fn HashKey(element: *const Element) []const u8 {
+        if (element.name.len > 0) return element.name;
+
+        assert(element.data != 0);
+        return std.mem.asBytes(&element.data);
+    }
 };
 
 // TODO: ?? rename bShowRect -> bShowBody or bShowBackground
@@ -1147,22 +1156,12 @@ pub inline fn GetElementAt(self: *GU, i: usize) *Element {
     return &self.element_tree.items[i];
 }
 
-// TODO: more robust hashing strategy that doesn't cause hover state to break on
-//  buttons that change where the button is in the element tree (e.g. by inserting
-//  or removing an element above the button)
-inline fn HashElementKey(self: *GU, id: usize, name: []const u8) []const u8 {
-    const alloc = self.label_arena.allocator();
-    return std.fmt.allocPrint(alloc, "{X:0>16}{s}", .{ id, name }) catch &.{};
-}
-
 fn GetElementKey(self: *GU) []const u8 {
-    const element = self.GetElement();
-    return self.HashElementKey(element.id, element.name);
+    return self.GetElement().HashKey();
 }
 
 fn GetElementKeyAt(self: *GU, i: usize) []const u8 {
-    const element = self.GetElementAt(i);
-    return self.HashElementKey(element.id, element.name);
+    return self.GetElementAt(i).HashKey();
 }
 
 fn GetElementClicked(self: *GU) bool {
@@ -1708,38 +1707,60 @@ pub fn DoSpacerH(self: *GU, w: f32, h: f32) void {
 }
 
 /// returns whether button was 'activated' (pressed). see `MakeString` for string
-/// formatting using the internal frame arena memory.
-pub fn DoButton(self: *GU, str: []const u8) bool {
+/// formatting using the internal frame arena memory. uses `label` for the hashing
+/// key; if a key collision occurs, use `DoButtonNamed`.
+pub fn DoButton(self: *GU, label: []const u8) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
     const element = self.GetElement();
     element.features.bClickable = true;
     element.features.bShowRect = true;
-    element.name = str;
+    element.name = label;
 
-    self.DoLabel(null, str);
+    self.DoLabel(null, label);
+
+    return self.GetElementClicked();
+}
+
+/// same as DoButton, but exposes `name` to allow for hash disambiguation
+pub fn DoButtonNamed(self: *GU, label: []const u8, name: []const u8) bool {
+    if (!self.DoElement(null)) return false;
+    defer self.EndElement();
+    const element = self.GetElement();
+    element.features.bClickable = true;
+    element.features.bShowRect = true;
+    element.name = name;
+
+    self.DoLabel(null, label);
 
     return self.GetElementClicked();
 }
 
 /// same general behaviour as DoButton, but updates an 'active' bool for you.
 /// if button is culled (due to not rendering, clip culling, etc.), the external
-/// bool will NOT be toggled
+/// bool will NOT be toggled. uses `label` for the hashing key; if a key collision
+/// occurs, use `DoToggleButtonNamed`.
 /// returns whether button was 'activated' (pressed and subsequently toggled). see
 /// `MakeString` for string formatting using the internal frame arena memory.
-pub fn DoToggleButton(self: *GU, active: *bool, str: []const u8) bool {
+pub fn DoToggleButton(self: *GU, active: *bool, label: []const u8) bool {
+    return self.DoToggleButtonNamed(active, label, label);
+}
+
+/// same as DoToggleButton, but exposes `name` to allow for hash disambiguation
+pub fn DoToggleButtonNamed(self: *GU, active: *bool, label: []const u8, name: []const u8) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
     const element = self.GetElement();
     element.features.bClickable = true;
     element.features.bShowRect = true;
-    element.name = str;
+    element.name = name;
+    element.data = @intFromPtr(active);
 
     const activated = self.GetElementClicked();
     if (active.*) element.features.bClickDepressed = true;
     if (activated) active.* = !active.*;
 
-    self.DoLabel(null, str);
+    self.DoLabel(null, label);
 
     return activated;
 }
