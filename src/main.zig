@@ -1074,9 +1074,10 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     if (gu.DoElement(&LAYOUT_WHITE_BREAK)) {
         defer gu.EndElement();
         const element = gu.GetElement();
+        gu.SetElementGaps(4, 4);
         element.features.bTextSpacing = true;
 
-        gu.DoLabel(0x00C0C0FF, "testing... with auto linebreak!!");
+        gu.DoLabelsFromString("testing... with auto linebreak!!");
         _ = gu.DoToggleButton(&app.btn_toggle, "ToggleButton2");
 
         gu.DoLineBreak();

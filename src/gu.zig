@@ -476,6 +476,7 @@ const DimensionMode = enum {
 
 // TODO: reorganize? this is layouting pass stuff, not layout definition stuff
 const LineData = struct {
+    element: usize, // starting element
     parent_padding: Vec2,
     parent_gaps: Vec2,
     line: u32,
@@ -483,8 +484,9 @@ const LineData = struct {
     current_h: f32,
     current_items: u32,
     current_w: f32,
-    queue_line_break: bool,
     queue_consume_gap_x: bool,
+    queue_consume_gap_y: bool, // FIXME: not used yet
+    queue_line_break: bool,
     max_w: f32, // incl padding/gaps
 
     // TODO: impl axis def in Layout and derive
@@ -674,8 +676,17 @@ pub fn EndFrame(self: *GU) void {
 //------------------------------------------------------------------------------
 // LAYOUT PASSES
 
-// FIXME: cleanup/streamline, maybe split into multiple passes if that makes sense
-// TODO: rename to DoElementResizeAndParseLineBreaks ??
+// TODO: ?? rename to DoElementResizeAndParseLineBreaks? or some other name that
+//  reflects the direction outlined below.
+// FIXME: for logic that needs to work on lines without considering the parental
+//  relations, "line passes" should fit here nicely when the newline is resolved.
+//  the current structure isn't quite suited to this, because it revolves around
+//  pushing/popping "line trackers" rather than line resolution directly, so it
+//  can't iterate over a line at any single point and catch all the line resolution
+//  cases (e.g. child->parent isn't covered by the current "do newline" case).
+//  however, restructuring to optimize for line resolution should allow some of
+//  the existing iteration logic to become a "line pass", and maybe consolidate
+//  with DoElementPositioning, so it might be worth doing regardless.
 /// inserts line break markers where needed, and updates parent dimensions in
 /// case of line breaks occurring
 fn DoElementLineBreakParsing(self: *GU) void {
@@ -690,9 +701,9 @@ fn DoElementLineBreakParsing(self: *GU) void {
     while (it.Next()) |it_data| {
         const e = it_data.element;
         const p: ?*Element = if (e.parent) |pa_i| &self.element_tree.items[pa_i] else null;
-        const this_gap_y = ld.parent_gaps.y;
-        var this_gap_x = ld.parent_gaps.x;
-        if (e.features.bConsumeGapX or ld.queue_consume_gap_x) this_gap_x = 0;
+
+        const consume_gap_x = e.features.bConsumeGapX or ld.queue_consume_gap_x;
+        const this_gap: Vec2 = .init(if (consume_gap_x) 0 else ld.parent_gaps.x, ld.parent_gaps.y);
         ld.queue_consume_gap_x = e.features.bConsumeNextGapX;
 
         // parent->child
@@ -717,7 +728,7 @@ fn DoElementLineBreakParsing(self: *GU) void {
 
         // root OR parent->child OR sibling->sibling
         if (it_data.relation != .Parent) {
-            e.gap = .init(this_gap_x, this_gap_y);
+            e.gap = this_gap;
             if (e.layout.mode_w == .Stretch)
                 e.area.w = @max(p.?.area.w + e.area.w - ld.AxisSpacing(.Main, p.?.layout.widths.len), 0);
             if (e.layout.mode_h == .Stretch)
@@ -749,6 +760,10 @@ fn DoElementLineBreakParsing(self: *GU) void {
             ld.current_w = e.area.w;
             ld.current_h = e.area.h;
             ld.current_items = 1;
+            ld.element = e.id;
+            //ld.queue_consume_gap_y = false; // not used yet
+            //ld.queue_consume_gap_x = false; // already set
+            //ld.queue_line_break = false; // already set
             continue;
         }
 
