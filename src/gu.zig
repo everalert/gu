@@ -260,7 +260,8 @@ pub const Element = struct {
     layout: Layout,
     area: Rect,
     clip: Rect, // the clipping region this element applies to its children
-    fill: Vec2, // how big the element is for layout calculations
+    gap: Vec2, // calculated space between this element and the previous sibling (x) and line (y)
+    fill: Vec2, // FIXME: unused; how big the element is for layout calculations
     texture: TextureHandle,
     name: []const u8, // primary key used for hashing element for cross-frame identification
     data: usize, // secondary key used in the absence of `name`, typically a unique pointer
@@ -273,6 +274,7 @@ pub const Element = struct {
         .area = .zero,
         .clip = .zero,
         .fill = .zero,
+        .gap = .zero,
         .id = 0,
         .parent = null,
         .children = 0,
@@ -321,11 +323,11 @@ pub const ElementFeatures = packed struct(u32) {
     /// space children based on active font instead of gaps setting
     bTextSpacing: bool,
     /// set prev gap-x to 0
-    bConsumeGapX: bool, // FIXME: impl
+    bConsumeGapX: bool,
     /// set prev gap-y to 0 if current line only contains elements with this flag
     bConsumeGapY: bool, // FIXME: impl
     /// set next gap-x to 0
-    bConsumeNextGapX: bool, // FIXME: impl
+    bConsumeNextGapX: bool,
     /// set next gap-y to 0 if current line only contains elements with this flag
     bConsumeNextGapY: bool, // FIXME: impl
     /// if element would trigger a line break, collapse and make next element break instead
@@ -481,7 +483,8 @@ const LineData = struct {
     current_h: f32,
     current_items: u32,
     current_w: f32,
-    line_break_queued: bool,
+    queue_line_break: bool,
+    queue_consume_gap_x: bool,
     max_w: f32, // incl padding/gaps
 
     // TODO: impl axis def in Layout and derive
@@ -673,8 +676,6 @@ pub fn EndFrame(self: *GU) void {
 
 // FIXME: cleanup/streamline, maybe split into multiple passes if that makes sense
 // TODO: rename to DoElementResizeAndParseLineBreaks ??
-// TODO: update for text wrapping; will need to assert no padding/gaps, and remove
-// .Fixed assertion for labels in EndElement
 /// inserts line break markers where needed, and updates parent dimensions in
 /// case of line breaks occurring
 fn DoElementLineBreakParsing(self: *GU) void {
@@ -689,7 +690,10 @@ fn DoElementLineBreakParsing(self: *GU) void {
     while (it.Next()) |it_data| {
         const e = it_data.element;
         const p: ?*Element = if (e.parent) |pa_i| &self.element_tree.items[pa_i] else null;
+        const this_gap_y = ld.parent_gaps.y;
         var this_gap_x = ld.parent_gaps.x;
+        if (e.features.bConsumeGapX or ld.queue_consume_gap_x) this_gap_x = 0;
+        ld.queue_consume_gap_x = e.features.bConsumeNextGapX;
 
         // parent->child
         if (it_data.relation == .Child) {
@@ -709,12 +713,11 @@ fn DoElementLineBreakParsing(self: *GU) void {
 
             _ = self.element_line_stack.pop();
             ld = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &ld_base;
-            this_gap_x = 0; // don't need for newline calc, already added to running len
-
         }
 
         // root OR parent->child OR sibling->sibling
         if (it_data.relation != .Parent) {
+            e.gap = .init(this_gap_x, this_gap_y);
             if (e.layout.mode_w == .Stretch)
                 e.area.w = @max(p.?.area.w + e.area.w - ld.AxisSpacing(.Main, p.?.layout.widths.len), 0);
             if (e.layout.mode_h == .Stretch)
@@ -725,19 +728,19 @@ fn DoElementLineBreakParsing(self: *GU) void {
             p.?.layout.auto_line_break and
             p.?.layout.widths.len == 0 and
             p.?.layout.mode_w.IsPreComputable() and
-            ld.current_w + this_gap_x + e.area.w > p.?.area.w - ld.parent_padding.x * 2)
+            ld.current_w + e.gap.x + e.area.w > p.?.area.w - ld.parent_padding.x * 2)
         {
             if (e.features.bOverflowCollapseX and !e.features.bLineBreak) {
                 e.area.w = 0;
                 e.area.h = 0;
-                ld.line_break_queued = true;
+                ld.queue_line_break = true;
                 continue;
             }
             e.features.bLineBreak = true;
         }
 
-        if (ld.line_break_queued) e.features.bLineBreak = true;
-        ld.line_break_queued = false;
+        if (ld.queue_line_break) e.features.bLineBreak = true;
+        ld.queue_line_break = false;
 
         if (it_data.relation == .Child or e.features.bLineBreak) {
             ld.max_w = @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items));
@@ -750,11 +753,13 @@ fn DoElementLineBreakParsing(self: *GU) void {
         }
 
         ld.current_items += 1;
-        ld.current_w += e.area.w + this_gap_x;
+        ld.current_w += e.area.w + e.gap.x;
         ld.current_h = @max(ld.current_h, e.area.h);
     }
 }
 
+// NOTE: simply assembles the final positions of everything; all the "calculated"
+//  components that go into this should already be final before this runs.
 fn DoElementPositioning(self: *GU) void {
     assert(self.element_line_stack.items.len == 0);
     defer assert(self.element_line_stack.items.len == 0);
@@ -788,18 +793,16 @@ fn DoElementPositioning(self: *GU) void {
             continue;
         }
 
-        const gaps = if (p != null) p.?.layout.gaps else Vec2.zero;
-
         if (e.features.bLineBreak) {
             const pos = if (p != null) p.?.area.toPos() else Vec2.zero;
             const padding = if (p != null) p.?.layout.padding else Vec2.zero;
             e.area.x = pos.x + padding.x;
-            e.area.y = ld.current_y + ld.current_h + gaps.y;
+            e.area.y = ld.current_y + ld.current_h + e.gap.y;
             ld.current_y = e.area.y;
             ld.current_h = e.area.h;
         } else {
             const area = if (e.sibling_prev) |s| self.element_tree.items[s].area else Rect.zero;
-            e.area.x = area.x + area.w + gaps.x;
+            e.area.x = area.x + area.w + e.gap.x;
             e.area.y = ld.current_y;
             ld.current_h = @max(ld.current_h, e.area.h);
         }
