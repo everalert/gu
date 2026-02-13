@@ -1662,20 +1662,21 @@ pub fn DoLabel(self: *GU, color: ?u32, str: []const u8) void {
     element.layout.color = color orelse 0xFFFFFFFF;
 }
 
-// TODO: better way to resolve font that factors in the push queue state? maybe
-//  make GetOrNull flush the queue on the spot? either way using SetNext here
-//  would be weird, since even if it wasn't used for the spacers it would only
-//  apply to the 1st word. maybe also push the font again here after getting it?
 // TODO: ?? better way to get tabsize?
 // TODO: ?? paragraph-aware line break behaviour that inserts spacing
 /// splits a given utf8 string into "words" and emits them as a series of label
 /// elements, to allow the layout engine to reflow multiline text
 pub fn DoLabelsFromString(self: *GU, str: []const u8) void {
+    // make sure a SetNext font is applied to all emitted values
+    const push_id = maxInt(usize) - self.element_tree.items.len;
+    self.font_vstk.PushDequeue(push_id);
+    defer self.font_vstk.PopAuto(push_id);
+
+    const SplitChars = std.ascii.whitespace ++ "-/\\";
+    const Whitespace = &std.ascii.whitespace;
     const font = self.font_vstk.GetOrNull() orelse self.base_font;
     const size_sp = &self.backend.StringSize(font, " ");
     const size_tb = &self.backend.StringSize(font, "    ");
-    const SplitChars = std.ascii.whitespace ++ "-/\\";
-    const Whitespace = &std.ascii.whitespace;
 
     const view = std.unicode.Utf8View.init(str) catch return;
     var it = view.iterator();

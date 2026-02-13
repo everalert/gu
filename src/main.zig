@@ -1102,18 +1102,18 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoLineBreak();
         if (app.btn_toggle) gu.DoLabelsFromString("only visible if b2 is on.");
         gu.DoLabelsFromString("\tThe quick, brown fox jumps over a lazy dog. DJs flock by when MTV ax quiz prog. Junk MTV quiz graced by fox whelps. Bawds jog, flick quartz, vex nymphs. Waltz, bad nymph, for quick jigs vex! Fox nymphs grab quick-jived waltz. Brick quiz whangs jumpy veldt fox. Bright vixens jump; dozy fowl quack. Quick wafting zephyrs vex bold Jim. Quick zephyrs blow, vexing daft Jim. Sex-charged fop blew my junk TV quiz. How quickly daft jumping zebras vex.\n  Two driven jocks help fax my big quiz. Quick, Baz, get my woven flax jodhpurs! \"Now fax quiz Jack!\" my brave ghost pled. Five quacking zephyrs jolt my wax bed. Flummoxed by job, kvetching W. zaps Iraq. Cozy sphinx waves quart jug of bad milk. A very bad quack might jinx zippy fowls. Few quips galvanized the mock jury box. Quick brown dogs jump over the lazy fox. The jay, pig, fox, zebra, and my wolves quack! Blowzy red vixens fight for a quick jump. Joaquin Phoenix was gazed by MTV for luck. A wizard's job is to vex chumps quickly in fog. Watch \"Jeopardy!\", Alex Trebek's fun TV quiz game. Woven silk pyjamas exchanged for blue quartz.");
+
         gu.DoLineBreak();
-        gu.PushFont(app.font_styles[FONT_NAMEHERE]);
+        gu.SetNextFont(app.font_styles[FONT_NAMEHERE]);
         gu.DoLabelsFromString("The quick, brown fox jumps over a lazy dog.");
-        gu.PopFont();
+
         gu.DoLineBreak();
-        gu.PushFont(app.font_styles[FONT_NAMEHERE_BOLD]);
+        gu.SetNextFont(app.font_styles[FONT_NAMEHERE_BOLD]);
         gu.DoLabelsFromString("DJs flock by when MTV ax quiz prog.");
-        gu.PopFont();
+
         gu.DoLineBreak();
-        gu.PushFont(app.font_styles[FONT_MAGO3]);
+        gu.SetNextFont(app.font_styles[FONT_MAGO3]);
         gu.DoLabelsFromString("Junk MTV quiz graced by fox whelps.");
-        gu.PopFont();
     }
 
     if (gu.DoElement(&LAYOUT_WHITE)) {
