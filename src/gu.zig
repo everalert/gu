@@ -1662,10 +1662,12 @@ pub fn DoLabel(self: *GU, color: ?u32, str: []const u8) void {
     element.layout.color = color orelse 0xFFFFFFFF;
 }
 
-// TODO: better way to resolve font that factors in the push queue state?
+// TODO: better way to resolve font that factors in the push queue state? maybe
+//  make GetOrNull flush the queue on the spot? either way using SetNext here
+//  would be weird, since even if it wasn't used for the spacers it would only
+//  apply to the 1st word. maybe also push the font again here after getting it?
 // TODO: ?? better way to get tabsize?
 // TODO: ?? paragraph-aware line break behaviour that inserts spacing
-// TODO: ?? emit '/' '\' '-' elements that consume pre- or post-gaps based on context?
 /// splits a given utf8 string into "words" and emits them as a series of label
 /// elements, to allow the layout engine to reflow multiline text
 pub fn DoLabelsFromString(self: *GU, str: []const u8) void {
@@ -1673,11 +1675,15 @@ pub fn DoLabelsFromString(self: *GU, str: []const u8) void {
     const size_sp = &self.backend.StringSize(font, " ");
     const size_tb = &self.backend.StringSize(font, "    ");
     const SplitChars = std.ascii.whitespace ++ "-/\\";
+    const Whitespace = &std.ascii.whitespace;
 
     const view = std.unicode.Utf8View.init(str) catch return;
     var it = view.iterator();
     var i: usize = 0;
+    var prev_whitespace = false;
     while (it.nextCodepoint()) |cp| {
+        const whitespace = cp < 0xF0 and std.mem.indexOfScalar(u8, Whitespace, @truncate(cp)) != null;
+        defer prev_whitespace = whitespace;
         defer i = it.i;
         switch (cp) {
             ' ' => {
@@ -1700,7 +1706,19 @@ pub fn DoLabelsFromString(self: *GU, str: []const u8) void {
             std.ascii.control_code.vt,
             std.ascii.control_code.ff,
             => continue,
-            '/', '\\', '-' => {},
+            '/', '\\', '-' => blk: {
+                const next_whitespace = std.mem.indexOfAny(u8, it.peek(1), Whitespace) != null;
+                // manual mashup of DoLabel and DoSpacerH
+                if (!self.DoElement(null)) break :blk;
+                defer self.EndElement();
+                const element = self.GetElement();
+                element.features.bConsumeGapX = !prev_whitespace;
+                element.features.bConsumeNextGapX = !next_whitespace;
+                element.features.bShowLabel = true;
+                element.label_str = str[i..it.i];
+                element.layout.color = 0xFFFFFFFF;
+                continue;
+            },
             else => while (std.mem.indexOfNone(u8, it.peek(1), SplitChars)) |_| {
                 _ = it.nextCodepoint();
             },
