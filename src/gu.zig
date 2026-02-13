@@ -14,46 +14,57 @@ const Vec2 = @import("m_vec2.zig");
 const Rect = @import("m_rect.zig");
 const Color = @import("m_color.zig").Color;
 
+// TODO: ?? add CanDrawString to check against supported character range in font impl
 pub const Backend = struct {
     ptr: *anyopaque,
-    fnGetSurfaceDimensions: *const fn (*anyopaque) Vec2,
-    fnEmitCustomCommand: *const fn (*anyopaque, *const RCCustom) void,
-    fnDrawRect: *const fn (*anyopaque, *const RCRect) void,
-    fnDrawString: *const fn (*anyopaque, *const RCText) void,
-    fnSetClip: *const fn (*anyopaque, *const RCClip) void,
-    fnBeginRendering: *const fn (*anyopaque) void,
-    fnEndRendering: *const fn (*anyopaque) void,
+    fnSurfaceSize: *const fn (*anyopaque) Vec2,
+    fnCustomCommandEmit: *const fn (*anyopaque, *const RCCustom) void,
+    fnRectDraw: *const fn (*anyopaque, *const RCRect) void,
+    fnStringDraw: *const fn (*anyopaque, *const RCText) void,
+    fnStringSize: *const fn (*anyopaque, font: FontHandle, []const u8) Vec2,
+    fnTextureSize: *const fn (*anyopaque, font: TextureHandle) Vec2,
+    fnClipSet: *const fn (*anyopaque, *const RCClip) void,
+    fnRenderBegin: *const fn (*anyopaque) void,
+    fnRenderEnd: *const fn (*anyopaque) void,
 
-    pub fn GetSurfaceDimensions(self: *Backend) Vec2 {
-        return self.fnGetSurfaceDimensions(self.ptr);
+    pub fn SurfaceSize(self: *Backend) Vec2 {
+        return self.fnSurfaceSize(self.ptr);
     }
 
-    pub fn EmitCustomCommand(self: *Backend, cmd: *const RCCustom) void {
-        self.fnEmitCustomCommand(self.ptr, cmd);
+    pub fn CustomCommandEmit(self: *Backend, cmd: *const RCCustom) void {
+        self.fnCustomCommandEmit(self.ptr, cmd);
     }
 
     // TODO: impl texture tile drawing, see RenderCommand->Rect
-    pub fn DrawRect(self: *Backend, cmd: *const RCRect) void {
-        self.fnDrawRect(self.ptr, cmd);
+    pub fn RectDraw(self: *Backend, cmd: *const RCRect) void {
+        self.fnRectDraw(self.ptr, cmd);
     }
 
-    pub fn DrawString(self: *Backend, cmd: *const RCText) void {
-        self.fnDrawString(self.ptr, cmd);
+    pub fn StringDraw(self: *Backend, cmd: *const RCText) void {
+        self.fnStringDraw(self.ptr, cmd);
     }
 
-    pub fn SetClip(self: *Backend, cmd: *const RCClip) void {
-        self.fnSetClip(self.ptr, cmd);
+    pub fn StringSize(self: *Backend, font: FontHandle, str: []const u8) Vec2 {
+        return self.fnStringSize(self.ptr, font, str);
+    }
+
+    pub fn TextureSize(self: *Backend, texture: TextureHandle) Vec2 {
+        return self.fnTextureSize(self.ptr, texture);
+    }
+
+    pub fn ClipSet(self: *Backend, cmd: *const RCClip) void {
+        self.fnClipSet(self.ptr, cmd);
     }
 
     /// called as a way to signal to the backend that we are about to render a
     /// frame, and give it a 'hook' to do any related setup (store clip state, etc.)
-    pub fn BeginRendering(self: *Backend) void {
-        self.fnBeginRendering(self.ptr);
+    pub fn RenderBegin(self: *Backend) void {
+        self.fnRenderBegin(self.ptr);
     }
 
     /// a 'hook' for the backend to cleanup after we're done with a frame
-    pub fn EndRendering(self: *Backend) void {
-        self.fnEndRendering(self.ptr);
+    pub fn RenderEnd(self: *Backend) void {
+        self.fnRenderEnd(self.ptr);
     }
 };
 
@@ -91,6 +102,9 @@ pub const RenderCommand = struct {
     }
 };
 
+// TODO: user-defined resource handle types
+pub const FontHandle = usize;
+pub const TextureHandle = usize;
 pub const CustomActionHandle = usize;
 
 // TODO: ?? add field for data ptr/handle? with only action id, the implementation
@@ -113,78 +127,19 @@ pub const RCRect = struct {
     corner_radius: f32,
     corner_shape: CornerShape,
     color: u32,
-    texture: ?*TextureAtlas,
+    texture: TextureHandle,
     tile: ?u32, // for texture atlases
 };
 
 pub const RCText = struct {
     str: []const u8,
-    font: *FontAtlas,
+    font: FontHandle,
     pos: Vec2,
     color: u32,
 };
 
 pub const RCClip = struct {
     area: Rect,
-};
-
-//------------------------------------------------------------------------------
-
-pub const FontHandle = usize;
-pub const TextureHandle = usize;
-
-// FIXME: not sure this needs to be in ui core, maybe adding these to backend
-//  vtable is enough? so we only remember handles (provided by backend)
-// TODO: add CanDrawString to check against supported character range in font impl
-pub const FontAtlas = struct {
-    ptr: *anyopaque,
-    fnDrawString: *const fn (*anyopaque, []const u8, *const Vec2) void,
-    fnDrawChar: *const fn (*anyopaque, u8, *const Vec2) void,
-    fnStringSize: *const fn (*anyopaque, []const u8) Vec2,
-    fnCharSize: *const fn (*anyopaque, u8) Vec2,
-    fnSetColor: *const fn (*anyopaque, u32) void,
-
-    pub fn DrawString(self: *FontAtlas, str: []const u8, pos: *const Vec2) void {
-        self.fnDrawString(self.ptr, str, pos);
-    }
-
-    pub fn DrawChar(self: *FontAtlas, char: u8, pos: *const Vec2) void {
-        self.fnDrawChar(self.ptr, char, pos);
-    }
-
-    pub fn StringSize(self: *FontAtlas, str: []const u8) Vec2 {
-        return self.fnStringSize(self.ptr, str);
-    }
-
-    pub fn CharSize(self: *FontAtlas, char: u8) Vec2 {
-        return self.fnCharSize(self.ptr, char);
-    }
-
-    pub fn SetColor(self: *FontAtlas, color: u32) void {
-        return self.fnSetColor(self.ptr, color);
-    }
-};
-
-// TODO: tiling; i.e. actually make it an atlas
-// FIXME: not sure this needs to be in ui core, maybe adding these to backend
-//  vtable is enough? so we only remember handles (provided by backend)
-pub const TextureAtlas = struct {
-    ptr: *anyopaque,
-    fnDraw: *const fn (*anyopaque, *const Vec2) void,
-    fnSize: *const fn (*anyopaque) Vec2,
-    fnSetColor: *const fn (*anyopaque, u32) void,
-
-    pub fn Draw(self: *TextureAtlas, pos: *const Vec2) void {
-        self.fnDraw(self.ptr, pos);
-    }
-
-    pub fn Size(self: *TextureAtlas) Vec2 {
-        return self.fnSize(self.ptr);
-    }
-
-    pub fn SetColor(self: *TextureAtlas, color: u32) void {
-        return self.fnSetColor(self.ptr, color);
-    }
 };
 
 //------------------------------------------------------------------------------
@@ -305,9 +260,11 @@ pub const Element = struct {
     layout: Layout,
     area: Rect,
     clip: Rect, // the clipping region this element applies to its children
-    fill: Vec2, // how big the element is for layout calculations
+    gap: Vec2, // calculated space between this element and the previous sibling (x) and line (y)
+    fill: Vec2, // FIXME: unused; how big the element is for layout calculations
     texture: TextureHandle,
-    name: []const u8,
+    name: []const u8, // primary key used for hashing element for cross-frame identification
+    data: usize, // secondary key used in the absence of `name`, typically a unique pointer
     label_str: []const u8,
     label_font: FontHandle,
     custom_action: CustomActionHandle, // impl-defined action associated with custom command
@@ -317,6 +274,7 @@ pub const Element = struct {
         .area = .zero,
         .clip = .zero,
         .fill = .zero,
+        .gap = .zero,
         .id = 0,
         .parent = null,
         .children = 0,
@@ -324,12 +282,20 @@ pub const Element = struct {
         .sibling_next = null,
         .sibling_prev = null,
         .features = .none,
-        .texture = maxInt(usize),
+        .texture = 0,
         .name = &.{},
         .label_str = &.{},
-        .label_font = maxInt(usize),
+        .label_font = 0,
+        .data = 0,
         .custom_action = maxInt(usize),
     };
+
+    inline fn HashKey(element: *const Element) []const u8 {
+        if (element.name.len > 0) return element.name;
+
+        assert(element.data != 0);
+        return std.mem.asBytes(&element.data);
+    }
 };
 
 // TODO: ?? rename bShowRect -> bShowBody or bShowBackground
@@ -344,7 +310,6 @@ pub const Element = struct {
 // TODO: texture treated as 9grid
 // TODO: text shadow
 // TODO: text outline
-// TODO: text wrapping (dynamic multiline text)
 // TODO: clickable element is draggable, on X and Y individually (require abs/rel pos)
 // TODO: enable clipping (i.e. "allow/disallow visual overflow")
 pub const ElementFeatures = packed struct(u32) {
@@ -355,18 +320,32 @@ pub const ElementFeatures = packed struct(u32) {
 
     // Layout functionality
     bLineBreak: bool,
+    /// space children based on active font instead of gaps setting
+    bTextSpacing: bool,
+    /// set prev gap-x to 0
+    bConsumeGapX: bool,
+    /// set prev gap-y to 0 if current line only contains elements with this flag
+    bConsumeGapY: bool, // FIXME: impl
+    /// set next gap-x to 0
+    bConsumeNextGapX: bool,
+    /// set next gap-y to 0 if current line only contains elements with this flag
+    bConsumeNextGapY: bool, // FIXME: impl
+    /// if element would trigger a line break, collapse and make next element break instead
+    bOverflowCollapseX: bool,
 
     // Button functionality
     bClickable: bool,
-    bClickDown: bool,
-    bClickHover: bool,
-    bClickDepressed: bool, // button visually "idles" in down-state
-    bClickNoStyle: bool, // button visually looks like a regular element
+    bClickDown: bool, // FIXME: does nothing
+    bClickHover: bool, // FIXME: does nothing
+    /// button visually "idles" in down-state
+    bClickDepressed: bool,
+    /// button visually looks like a regular element (does not apply button styling)
+    bClickNoStyle: bool,
 
     // Misc. functionality
     bCustomCommand: bool,
 
-    _: u22,
+    _: u16,
 
     const none: ElementFeatures = @bitCast(@as(u32, 0));
     const all: ElementFeatures = @bitCast(maxInt(u32));
@@ -497,6 +476,7 @@ const DimensionMode = enum {
 
 // TODO: reorganize? this is layouting pass stuff, not layout definition stuff
 const LineData = struct {
+    element: usize, // starting element
     parent_padding: Vec2,
     parent_gaps: Vec2,
     line: u32,
@@ -504,6 +484,9 @@ const LineData = struct {
     current_h: f32,
     current_items: u32,
     current_w: f32,
+    queue_consume_gap_x: bool,
+    queue_consume_gap_y: bool, // FIXME: not used yet
+    queue_line_break: bool,
     max_w: f32, // incl padding/gaps
 
     // TODO: impl axis def in Layout and derive
@@ -528,8 +511,7 @@ allocator: Allocator,
 
 backend: Backend,
 
-fonts: ArrayList(FontAtlas), // TODO: impl with handles, update FontHandle
-textures: ArrayList(TextureAtlas), // TODO: impl with handles, update TextureHandle
+font_vstk: ValueStack(FontHandle),
 
 element_tree: ArrayList(Element),
 element_stack: ArrayList(usize),
@@ -542,6 +524,7 @@ label_arena: ArenaAllocator,
 
 base_layout: Layout,
 base_button_style: ButtonStyle,
+base_font: FontHandle,
 
 buttons: StringHashMap(Button),
 button_delete_queue: ArrayList([]const u8),
@@ -570,13 +553,12 @@ pub fn Init(
     backend: Backend,
     base_layout: Layout,
     base_button_style: ButtonStyle,
+    base_font: FontHandle,
 ) GU {
     return GU{
         .allocator = alloc,
         .label_arena = .init(alloc),
         .backend = backend,
-        .fonts = .empty,
-        .textures = .empty,
         .element_tree = .empty,
         .element_stack = .empty,
         .element_line_stack = .empty,
@@ -592,6 +574,7 @@ pub fn Init(
         .btn_style_vstk_color_idle = .Init(alloc),
         .btn_style_vstk_color_hover = .Init(alloc),
         .btn_style_vstk_color_down = .Init(alloc),
+        .font_vstk = .Init(alloc),
         .render_commands = .empty,
         .render_commands_cust = .empty,
         .render_commands_rect = .empty,
@@ -599,6 +582,7 @@ pub fn Init(
         .render_commands_clip = .empty,
         .base_layout = base_layout,
         .base_button_style = base_button_style,
+        .base_font = base_font,
         .mouse_pt = .{ .x = -1, .y = -1 },
         .element_queue_line_break = false,
         .element_sibling = null,
@@ -626,23 +610,7 @@ pub fn Deinit(self: *GU) void {
     self.element_line_stack.deinit(self.allocator);
     self.element_stack.deinit(self.allocator);
     self.element_tree.deinit(self.allocator);
-    self.textures.deinit(self.allocator);
-    self.fonts.deinit(self.allocator);
-}
-
-//------------------------------------------------------------------------------
-// RESOURCES
-
-// TODO: impl handle-based system
-pub fn AddFont(self: *GU, font: FontAtlas) !usize {
-    try self.fonts.append(self.allocator, font);
-    return self.fonts.items.len - 1;
-}
-
-// TODO: impl handle-based system
-pub fn AddTexture(self: *GU, texture: TextureAtlas) !usize {
-    try self.textures.append(self.allocator, texture);
-    return self.textures.items.len - 1;
+    self.font_vstk.Deinit();
 }
 
 //------------------------------------------------------------------------------
@@ -652,8 +620,9 @@ pub fn BeginFrame(self: *GU) !void {
     assert(self.element_stack.items.len == 0);
     assert(self.element_line_stack.items.len == 0);
     assert(self.btn_mode_vstk.count == 0);
+    assert(self.font_vstk.count == 0);
 
-    const surface_size = self.backend.GetSurfaceDimensions();
+    const surface_size = self.backend.SurfaceSize();
 
     _ = self.label_arena.reset(.retain_capacity);
     self.btn_style_arena.clearRetainingCapacity();
@@ -683,7 +652,7 @@ pub fn EndFrame(self: *GU) void {
     _ = self.element_line_stack.pop();
     self.ButtonStyleStackEnd();
 
-    self.backend.BeginRendering();
+    self.backend.RenderBegin();
 
     self.DoElementLineBreakParsing();
     self.DoElementPositioning();
@@ -694,23 +663,30 @@ pub fn EndFrame(self: *GU) void {
 
     for (self.render_commands.items) |cmd| {
         switch (cmd.kind) {
-            .custom => self.backend.EmitCustomCommand(&self.render_commands_cust.items[cmd.handle]),
-            .rect => self.backend.DrawRect(&self.render_commands_rect.items[cmd.handle]),
-            .text => self.backend.DrawString(&self.render_commands_text.items[cmd.handle]),
-            .clip => self.backend.SetClip(&self.render_commands_clip.items[cmd.handle]),
+            .custom => self.backend.CustomCommandEmit(&self.render_commands_cust.items[cmd.handle]),
+            .rect => self.backend.RectDraw(&self.render_commands_rect.items[cmd.handle]),
+            .text => self.backend.StringDraw(&self.render_commands_text.items[cmd.handle]),
+            .clip => self.backend.ClipSet(&self.render_commands_clip.items[cmd.handle]),
         }
     }
 
-    self.backend.EndRendering();
+    self.backend.RenderEnd();
 }
 
 //------------------------------------------------------------------------------
 // LAYOUT PASSES
 
-// FIXME: cleanup/streamline, maybe split into multiple passes if that makes sense
-// TODO: rename to DoElementResizeAndParseLineBreaks ??
-// TODO: update for text wrapping; will need to assert no padding/gaps, and remove
-// .Fixed assertion for labels in EndElement
+// TODO: ?? rename to DoElementResizeAndParseLineBreaks? or some other name that
+//  reflects the direction outlined below.
+// FIXME: for logic that needs to work on lines without considering the parental
+//  relations, "line passes" should fit here nicely when the newline is resolved.
+//  the current structure isn't quite suited to this, because it revolves around
+//  pushing/popping "line trackers" rather than line resolution directly, so it
+//  can't iterate over a line at any single point and catch all the line resolution
+//  cases (e.g. child->parent isn't covered by the current "do newline" case).
+//  however, restructuring to optimize for line resolution should allow some of
+//  the existing iteration logic to become a "line pass", and maybe consolidate
+//  with DoElementPositioning, so it might be worth doing regardless.
 /// inserts line break markers where needed, and updates parent dimensions in
 /// case of line breaks occurring
 fn DoElementLineBreakParsing(self: *GU) void {
@@ -726,6 +702,11 @@ fn DoElementLineBreakParsing(self: *GU) void {
         const e = it_data.element;
         const p: ?*Element = if (e.parent) |pa_i| &self.element_tree.items[pa_i] else null;
 
+        const consume_gap_x = e.features.bConsumeGapX or ld.queue_consume_gap_x;
+        const this_gap: Vec2 = .init(if (consume_gap_x) 0 else ld.parent_gaps.x, ld.parent_gaps.y);
+        ld.queue_consume_gap_x = e.features.bConsumeNextGapX;
+
+        // parent->child
         if (it_data.relation == .Child) {
             stack.appendAssumeCapacity(zeroInit(LineData, .{
                 .parent_padding = p.?.layout.padding,
@@ -734,6 +715,7 @@ fn DoElementLineBreakParsing(self: *GU) void {
             ld = &stack.items[stack.items.len - 1];
         }
 
+        // child->parent
         if (it_data.relation == .Parent) {
             if (!e.layout.mode_w.IsPreComputable())
                 e.area.w = @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items));
@@ -744,7 +726,9 @@ fn DoElementLineBreakParsing(self: *GU) void {
             ld = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &ld_base;
         }
 
+        // root OR parent->child OR sibling->sibling
         if (it_data.relation != .Parent) {
+            e.gap = this_gap;
             if (e.layout.mode_w == .Stretch)
                 e.area.w = @max(p.?.area.w + e.area.w - ld.AxisSpacing(.Main, p.?.layout.widths.len), 0);
             if (e.layout.mode_h == .Stretch)
@@ -755,24 +739,42 @@ fn DoElementLineBreakParsing(self: *GU) void {
             p.?.layout.auto_line_break and
             p.?.layout.widths.len == 0 and
             p.?.layout.mode_w.IsPreComputable() and
-            ld.current_w + ld.parent_gaps.x + e.area.w > p.?.area.w - ld.parent_padding.x * 2)
+            ld.current_w + e.gap.x + e.area.w > p.?.area.w - ld.parent_padding.x * 2)
+        {
+            if (e.features.bOverflowCollapseX and !e.features.bLineBreak) {
+                e.area.w = 0;
+                e.area.h = 0;
+                ld.queue_line_break = true;
+                continue;
+            }
             e.features.bLineBreak = true;
+        }
+
+        if (ld.queue_line_break) e.features.bLineBreak = true;
+        ld.queue_line_break = false;
 
         if (it_data.relation == .Child or e.features.bLineBreak) {
             ld.max_w = @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items));
             ld.line += 1;
             ld.current_y += ld.current_h;
-            ld.current_w = 0;
-            ld.current_h = 0;
-            ld.current_items = 0;
+            ld.current_w = e.area.w;
+            ld.current_h = e.area.h;
+            ld.current_items = 1;
+            ld.element = e.id;
+            //ld.queue_consume_gap_y = false; // not used yet
+            //ld.queue_consume_gap_x = false; // already set
+            //ld.queue_line_break = false; // already set
+            continue;
         }
 
         ld.current_items += 1;
-        ld.current_w += e.area.w;
+        ld.current_w += e.area.w + e.gap.x;
         ld.current_h = @max(ld.current_h, e.area.h);
     }
 }
 
+// NOTE: simply assembles the final positions of everything; all the "calculated"
+//  components that go into this should already be final before this runs.
 fn DoElementPositioning(self: *GU) void {
     assert(self.element_line_stack.items.len == 0);
     defer assert(self.element_line_stack.items.len == 0);
@@ -786,6 +788,7 @@ fn DoElementPositioning(self: *GU) void {
     while (it.Next()) |it_data| {
         const e = it_data.element;
 
+        // child->parent
         if (it_data.relation == .Parent) {
             _ = self.element_line_stack.pop();
             ld = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &ld_base;
@@ -793,6 +796,7 @@ fn DoElementPositioning(self: *GU) void {
             continue;
         }
 
+        // parent->child
         if (it_data.relation == .Child) {
             p = &self.element_tree.items[e.parent.?];
             stack.appendAssumeCapacity(zeroInit(LineData, .{})); // capacity set during initial tree gen
@@ -804,18 +808,16 @@ fn DoElementPositioning(self: *GU) void {
             continue;
         }
 
-        const gaps = if (p != null) p.?.layout.gaps else Vec2.zero;
-
         if (e.features.bLineBreak) {
             const pos = if (p != null) p.?.area.toPos() else Vec2.zero;
             const padding = if (p != null) p.?.layout.padding else Vec2.zero;
             e.area.x = pos.x + padding.x;
-            e.area.y = ld.current_y + ld.current_h + gaps.y;
+            e.area.y = ld.current_y + ld.current_h + e.gap.y;
             ld.current_y = e.area.y;
             ld.current_h = e.area.h;
         } else {
             const area = if (e.sibling_prev) |s| self.element_tree.items[s].area else Rect.zero;
-            e.area.x = area.x + area.w + gaps.x;
+            e.area.x = area.x + area.w + e.gap.x;
             e.area.y = ld.current_y;
             ld.current_h = @max(ld.current_h, e.area.h);
         }
@@ -829,7 +831,7 @@ fn DoElementClipping(self: *GU) void {
     defer assert(self.clip_stack.items.len == 0);
 
     const c_stack = &self.clip_stack;
-    const sd = self.backend.GetSurfaceDimensions();
+    const sd = self.backend.SurfaceSize();
     const c_base = Rect{ .x = 0, .y = 0, .w = sd.x, .h = sd.y };
     var c = c_base;
 
@@ -878,7 +880,7 @@ fn EmitRenderCommand(
 }
 
 fn DoElementEmitRenderCommands(self: *GU) void {
-    const sd = self.backend.GetSurfaceDimensions();
+    const sd = self.backend.SurfaceSize();
     const c_base = Rect{ .x = 0, .y = 0, .w = sd.x, .h = sd.y };
     var c = c_base;
 
@@ -911,7 +913,7 @@ fn DoElementEmitRenderCommands(self: *GU) void {
                 .corner_radius = e.layout.corner_radius,
                 .corner_shape = e.layout.corner_shape,
                 .color = e.layout.color,
-                .texture = if (e.features.bShowTexture) &self.textures.items[e.texture] else null,
+                .texture = e.texture,
                 .tile = null,
             });
         }
@@ -935,7 +937,7 @@ fn DoElementEmitRenderCommands(self: *GU) void {
             //  a half-value extra so that they are intereted as upper layer.
             self.EmitRenderCommand(.text, RCText{
                 .pos = e.area.toPos(),
-                .font = &self.fonts.items[e.label_font],
+                .font = e.label_font,
                 .color = e.layout.color,
                 .str = e.label_str,
             });
@@ -1010,6 +1012,7 @@ pub fn DoElement(self: *GU, layout: ?*const Layout) bool {
     // TODO: manage this elsewhere and make this a single function call, else
     //  the upcoming billion stacks will overrun this fn
     // process SetNext api
+    self.font_vstk.PushDequeue(element_i);
     self.btn_mode_vstk.PushDequeue(element_i);
     self.btn_style_vstk_padding_ver.PushDequeue(element_i);
     self.btn_style_vstk_padding_hor.PushDequeue(element_i);
@@ -1068,6 +1071,7 @@ pub fn EndElement(self: *GU) void {
     //  the upcoming billion stacks will overrun this fn
     // process SetNext api
     defer {
+        self.font_vstk.PopAuto(element_i);
         self.btn_mode_vstk.PopAuto(element_i);
         self.btn_style_vstk_padding_ver.PopAuto(element_i);
         self.btn_style_vstk_padding_hor.PopAuto(element_i);
@@ -1123,7 +1127,6 @@ pub fn EndElement(self: *GU) void {
     // "draw image = match texture size with fixed sizing") is left to the widget impl
     if (element.features.bShowTexture) {
         assert(element.features.bShowRect == true);
-        assert(element.texture != maxInt(usize)); // TODO: proper/safe "null texture" value
     }
 
     // Text
@@ -1135,9 +1138,24 @@ pub fn EndElement(self: *GU) void {
     //  - behaviour of sizing the element with relation to string size is left
     //    to the widget impl
     if (element.features.bShowLabel) {
+        const font = self.font_vstk.GetOrNull() orelse self.base_font;
         assert(element.features.bShowRect == false);
-        assert(element.label_font != maxInt(usize)); // TODO: proper/safe "null font" value
         //assert(element.label_str.len > 0);
+
+        const label_size = &self.backend.StringSize(font, element.label_str);
+        element.layout.mode_w = .Fixed;
+        element.layout.mode_h = .Fixed;
+        element.area.w = label_size.x;
+        element.area.h = label_size.y;
+        element.label_font = font;
+    }
+
+    // TODO: ?? have a "GetTextSpacing" backend function, to directly inform
+    //  this, instead of measuring an actual space character?
+    if (element.features.bTextSpacing) {
+        const font = self.font_vstk.GetOrNull() orelse self.base_font;
+        const space_size = &self.backend.StringSize(font, " ");
+        element.layout.gaps.x = space_size.x;
     }
 }
 
@@ -1156,22 +1174,12 @@ pub inline fn GetElementAt(self: *GU, i: usize) *Element {
     return &self.element_tree.items[i];
 }
 
-// TODO: more robust hashing strategy that doesn't cause hover state to break on
-//  buttons that change where the button is in the element tree (e.g. by inserting
-//  or removing an element above the button)
-inline fn HashElementKey(self: *GU, id: usize, name: []const u8) []const u8 {
-    const alloc = self.label_arena.allocator();
-    return std.fmt.allocPrint(alloc, "{X:0>16}{s}", .{ id, name }) catch &.{};
-}
-
 fn GetElementKey(self: *GU) []const u8 {
-    const element = self.GetElement();
-    return self.HashElementKey(element.id, element.name);
+    return self.GetElement().HashKey();
 }
 
 fn GetElementKeyAt(self: *GU, i: usize) []const u8 {
-    const element = self.GetElementAt(i);
-    return self.HashElementKey(element.id, element.name);
+    return self.GetElementAt(i).HashKey();
 }
 
 fn GetElementClicked(self: *GU) bool {
@@ -1394,6 +1402,21 @@ fn ButtonStyleAllEmpty(self: *GU) bool {
 // PUSH/POP/SETNEXT API
 
 //--------------------------------------
+// FONT
+
+pub fn SetNextFont(self: *GU, font: FontHandle) void {
+    self.font_vstk.PushEnqueue(font);
+}
+
+pub fn PushFont(self: *GU, font: FontHandle) void {
+    self.font_vstk.Push(font);
+}
+
+pub fn PopFont(self: *GU) void {
+    self.font_vstk.Pop();
+}
+
+//--------------------------------------
 // BUTTON MODE
 
 pub fn SetNextButtonMode(self: *GU, mode: ButtonMode) void {
@@ -1574,7 +1597,13 @@ pub fn PopButtonColorDown(self: *GU) void {
 }
 
 //------------------------------------------------------------------------------
-// WIDGETS
+// WIDGET API
+
+/// format a string using the internal frame arena. guaranteed to succeed; returns
+/// an empty string when allocation is not possible.
+pub fn MakeString(self: *GU, comptime fmt: []const u8, args: anytype) []const u8 {
+    return std.fmt.allocPrint(self.label_arena.allocator(), fmt, args) catch &.{};
+}
 
 /// Emit a custom action associated with a region. Typical use cases are drawing
 /// a rendered scene to a specific part of the UI, drawing data-driven contents
@@ -1615,71 +1644,159 @@ pub fn DoImage(self: *GU, texture: TextureHandle, color: ?u32, scale: f32) void 
     element.layout.color = color orelse 0xFFFFFFFF;
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
-    const texture_size = &self.textures.items[element.texture].Size();
-    element.area.w = scale * texture_size.x;
-    element.area.h = scale * texture_size.y;
+    const texture_size = self.backend.TextureSize(texture).MULS(scale);
+    element.area.w = texture_size.x;
+    element.area.h = texture_size.y;
 }
 
-// FIXME: remove font as input, use font stack (note: comments like these should
+// FIXME: remove color as input, use color stack (note: comments like these should
 //  also be interpreted as "implement layout/styling as stacks in general")
-// FIXME: remove color as input, use color stack
-// TODO: add formatting, like standard string formatting functions
-pub fn DoLabel(self: *GU, font: ?FontHandle, color: ?u32, comptime fmt: []const u8, args: anytype) void {
+/// create an element rendering text. see `MakeString` for string formatting
+/// using the internal frame arena memory.
+pub fn DoLabel(self: *GU, color: ?u32, str: []const u8) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
-    const str = std.fmt.allocPrint(self.label_arena.allocator(), fmt, args) catch |err|
-        std.debug.panic("DoLabel failed to allocate string: ({s})", .{@errorName(err)});
     element.features.bShowLabel = true;
-    element.label_font = font orelse 0;
     element.label_str = str;
     element.layout.color = color orelse 0xFFFFFFFF;
-    element.layout.mode_w = .Fixed;
-    element.layout.mode_h = .Fixed;
-    const label_size = &self.fonts.items[element.label_font].StringSize(element.label_str);
-    element.area.w = label_size.x;
-    element.area.h = label_size.y;
 }
 
-// FIXME: remove font as input, use font stack
-// NOTE: id hash uses input fmt, not resolved formatted string
-/// returns whether button was 'activated' (pressed)
-pub fn DoButton(self: *GU, font: ?FontHandle, comptime fmt: []const u8, args: anytype) bool {
+// TODO: ?? better way to get tabsize? really the backend should handle this, the
+//  only reason it's an issue is because the example backend artificially only
+//  allows characters in range 0x20-0x7F as a temp simplicity move
+// TODO: ?? paragraph-aware line break behaviour that inserts spacing
+/// splits a given utf8 string into "words" and emits them as a series of label
+/// elements, to allow the layout engine to reflow multiline text naturally
+pub fn DoLabelsFromString(self: *GU, str: []const u8) void {
+    // make sure a SetNext font is applied to all emitted values
+    const push_id = maxInt(usize) - self.element_tree.items.len;
+    self.font_vstk.PushDequeue(push_id);
+    defer self.font_vstk.PopAuto(push_id);
+
+    const SplitChars = std.ascii.whitespace ++ "-/\\";
+    const Whitespace = &std.ascii.whitespace;
+    const font = self.font_vstk.GetOrNull() orelse self.base_font;
+    const size_sp = &self.backend.StringSize(font, " ");
+    const size_tb = &self.backend.StringSize(font, "    ");
+
+    const view = std.unicode.Utf8View.init(str) catch return;
+    var it = view.iterator();
+    var i: usize = 0;
+    var prev_whitespace = false;
+    while (it.nextCodepoint()) |cp| {
+        const whitespace = cp < 0x80 and std.mem.indexOfScalar(u8, Whitespace, @truncate(cp)) != null;
+        defer prev_whitespace = whitespace;
+        defer i = it.i;
+
+        if (whitespace) {
+            switch (cp) {
+                ' ' => self.DoSpacerH(size_sp.x, size_sp.y),
+                '\t' => self.DoSpacerH(size_tb.x, size_tb.y),
+                '\r' => _ = if (std.mem.indexOfScalar(u8, it.peek(1), '\n')) |_| it.nextCodepoint(),
+                else => {}, // '\n', std.ascii.control_code.vt, std.ascii.control_code.ff
+            }
+            if (cp == '\n' or cp == '\r') self.DoLineBreak();
+            continue;
+        }
+
+        switch (cp) {
+            '/', '\\', '-' => blk: {
+                const next_whitespace = std.mem.indexOfAny(u8, it.peek(1), Whitespace) != null;
+                // manual mashup of DoLabel and DoSpacerH
+                if (!self.DoElement(null)) break :blk;
+                defer self.EndElement();
+                const element = self.GetElement();
+                element.features.bConsumeGapX = !prev_whitespace;
+                element.features.bConsumeNextGapX = !next_whitespace;
+                element.features.bShowLabel = true;
+                element.label_str = str[i..it.i];
+                element.layout.color = 0xFFFFFFFF;
+            },
+            else => {
+                while (std.mem.indexOfNone(u8, it.peek(1), SplitChars)) |_| _ = it.nextCodepoint();
+                self.DoLabel(null, str[i..it.i]);
+            },
+        }
+    }
+}
+
+/// horizontal spacing element that overrides gap between surrounding elements.
+/// spacer is ignored if it falls on the end of a line.
+pub fn DoSpacerH(self: *GU, w: f32, h: f32) void {
+    if (!self.DoElement(null)) return;
+    defer self.EndElement();
+    const element = self.GetElement();
+    element.features.bConsumeGapX = true;
+    element.features.bConsumeNextGapX = true;
+    element.features.bOverflowCollapseX = true;
+    element.layout.mode_w = .Fixed;
+    element.layout.mode_h = .Fixed;
+    element.area.w = w;
+    element.area.h = h;
+}
+
+/// returns whether button was 'activated' (pressed). see `MakeString` for string
+/// formatting using the internal frame arena memory. uses `label` for the hashing
+/// key; if a key collision occurs, use `DoButtonNamed`.
+pub fn DoButton(self: *GU, label: []const u8) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
     const element = self.GetElement();
     element.features.bClickable = true;
     element.features.bShowRect = true;
-    element.name = fmt;
+    element.name = label;
 
-    self.DoLabel(font, null, fmt, args);
+    self.DoLabel(null, label);
 
     return self.GetElementClicked();
 }
 
-// FIXME: remove font as input, use font stack
-// NOTE: id hash uses input fmt, not resolved formatted string
-/// same general behaviour as DoButton, but updates an 'active' bool for you.
-/// if button is culled (due to not rendering, clip culling, etc.), the external
-/// bool will NOT be toggled
-/// returns whether button was 'activated' (pressed and subsequently toggled)
-pub fn DoToggleButton(self: *GU, active: *bool, font: ?FontHandle, comptime fmt: []const u8, args: anytype) bool {
+/// same as DoButton, but exposes `name` to allow for hash disambiguation
+pub fn DoButtonNamed(self: *GU, label: []const u8, name: []const u8) bool {
     if (!self.DoElement(null)) return false;
     defer self.EndElement();
     const element = self.GetElement();
     element.features.bClickable = true;
     element.features.bShowRect = true;
-    element.name = fmt;
+    element.name = name;
+
+    self.DoLabel(null, label);
+
+    return self.GetElementClicked();
+}
+
+/// same general behaviour as DoButton, but updates an 'active' bool for you.
+/// if button is culled (due to not rendering, clip culling, etc.), the external
+/// bool will NOT be toggled. uses `label` for the hashing key; if a key collision
+/// occurs, use `DoToggleButtonNamed`.
+/// returns whether button was 'activated' (pressed and subsequently toggled). see
+/// `MakeString` for string formatting using the internal frame arena memory.
+pub fn DoToggleButton(self: *GU, active: *bool, label: []const u8) bool {
+    return self.DoToggleButtonNamed(active, label, label);
+}
+
+/// same as DoToggleButton, but exposes `name` to allow for hash disambiguation
+pub fn DoToggleButtonNamed(self: *GU, active: *bool, label: []const u8, name: []const u8) bool {
+    if (!self.DoElement(null)) return false;
+    defer self.EndElement();
+    const element = self.GetElement();
+    element.features.bClickable = true;
+    element.features.bShowRect = true;
+    element.name = name;
+    element.data = @intFromPtr(active);
 
     const activated = self.GetElementClicked();
     if (active.*) element.features.bClickDepressed = true;
     if (activated) active.* = !active.*;
 
-    self.DoLabel(font, null, fmt, args);
+    self.DoLabel(null, label);
 
     return activated;
 }
 
+// TODO: rename to something like "line clear", to reflect the fact that it doesn't
+//  actually push the content down beyond ensuring the next element is at line start
 pub fn DoLineBreak(self: *GU) void {
     self.element_queue_line_break = true;
 }

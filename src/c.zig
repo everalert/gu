@@ -9,7 +9,7 @@ pub const c = @cImport({
 
 pub const SDLError = error{SDL_ERROR};
 
-// errify SDL return values
+/// errify SDL return values
 pub inline fn SDLE(value: anytype) SDLError!switch (@typeInfo(@TypeOf(value))) {
     .bool => void,
     .pointer, .optional, .int => @TypeOf(value.?),
@@ -26,7 +26,7 @@ pub inline fn SDLE(value: anytype) SDLError!switch (@typeInfo(@TypeOf(value))) {
     };
 }
 
-// SDLE Panic
+/// SDLE Panic
 pub inline fn SDLEP(value: anytype) switch (@typeInfo(@TypeOf(value))) {
     .bool => void,
     .pointer, .optional, .int => @TypeOf(value.?),
