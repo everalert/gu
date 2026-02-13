@@ -44,7 +44,10 @@ const TEXTURES: [2][]const u8 = .{ @embedFile("yuriko1"), @embedFile("yuriko2") 
 
 const FONT_NOTO = 0;
 const FONT_DEPARTURE = 1;
-const FONTS_ASCII_MONO = [2]struct {
+const FONT_NAMEHERE = 2;
+const FONT_NAMEHERE_BOLD = 3;
+const FONT_MAGO3 = 4;
+const FONTS_ASCII_MONO = [5]struct {
     []const u8,
     c.SDL_ScaleMode,
     []const struct { u32, f32, Rect }, // size, advance, region
@@ -57,10 +60,22 @@ const FONTS_ASCII_MONO = [2]struct {
     .{ @embedFile("font-departuremono"), c.SDL_SCALEMODE_PIXELART, &.{
         .{ 14, 7, .init(0, 0, 112, 84) },
     } },
+    .{ @embedFile("font-nameheremono"), c.SDL_SCALEMODE_PIXELART, &.{
+        .{ 16, 7, .init(0, 0, 112, 96) },
+    } },
+    .{ @embedFile("font-nameheremono-bold"), c.SDL_SCALEMODE_PIXELART, &.{
+        .{ 16, 8, .init(0, 0, 128, 96) },
+    } },
+    .{ @embedFile("font-mago3mono"), c.SDL_SCALEMODE_PIXELART, &.{
+        .{ 13, 8, .init(0, 0, 128, 78) },
+    } },
 };
-const FONT_STYLES = [2]struct { usize, f32 }{
+const FONT_STYLES = [5]struct { usize, f32 }{
     .{ FONT_NOTO, 21 },
     .{ FONT_DEPARTURE, 14 },
+    .{ FONT_NAMEHERE, 16 },
+    .{ FONT_NAMEHERE_BOLD, 16 },
+    .{ FONT_MAGO3, 13 },
 };
 
 // TODO: log warnings when emitting a null handle? (for debugging/tuning help)
@@ -556,7 +571,7 @@ const RenderData = struct {
 
     const NUM_LOD_LEVELS = 4;
     const NUM_CNR_SHAPES = 7;
-    const NUM_FONTS = 4;
+    const NUM_FONTS = 6;
     const NUM_TEXTURES = 8;
     pub const CNR_RECT: GUCornerShape = 0;
     pub const CNR_ROUND: GUCornerShape = 1;
@@ -899,8 +914,8 @@ const App = struct {
 
     textures: [2]usize,
 
-    fonts: [2]usize,
-    font_styles: [2]usize,
+    fonts: [5]usize,
+    font_styles: [5]usize,
 
     btn_toggle: bool,
     btn_counter: usize,
@@ -1087,6 +1102,18 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoLineBreak();
         if (app.btn_toggle) gu.DoLabelsFromString("only visible if b2 is on.");
         gu.DoLabelsFromString("\tThe quick, brown fox jumps over a lazy dog. DJs flock by when MTV ax quiz prog. Junk MTV quiz graced by fox whelps. Bawds jog, flick quartz, vex nymphs. Waltz, bad nymph, for quick jigs vex! Fox nymphs grab quick-jived waltz. Brick quiz whangs jumpy veldt fox. Bright vixens jump; dozy fowl quack. Quick wafting zephyrs vex bold Jim. Quick zephyrs blow, vexing daft Jim. Sex-charged fop blew my junk TV quiz. How quickly daft jumping zebras vex.\n  Two driven jocks help fax my big quiz. Quick, Baz, get my woven flax jodhpurs! \"Now fax quiz Jack!\" my brave ghost pled. Five quacking zephyrs jolt my wax bed. Flummoxed by job, kvetching W. zaps Iraq. Cozy sphinx waves quart jug of bad milk. A very bad quack might jinx zippy fowls. Few quips galvanized the mock jury box. Quick brown dogs jump over the lazy fox. The jay, pig, fox, zebra, and my wolves quack! Blowzy red vixens fight for a quick jump. Joaquin Phoenix was gazed by MTV for luck. A wizard's job is to vex chumps quickly in fog. Watch \"Jeopardy!\", Alex Trebek's fun TV quiz game. Woven silk pyjamas exchanged for blue quartz.");
+        gu.DoLineBreak();
+        gu.PushFont(app.font_styles[FONT_NAMEHERE]);
+        gu.DoLabelsFromString("The quick, brown fox jumps over a lazy dog.");
+        gu.PopFont();
+        gu.DoLineBreak();
+        gu.PushFont(app.font_styles[FONT_NAMEHERE_BOLD]);
+        gu.DoLabelsFromString("DJs flock by when MTV ax quiz prog.");
+        gu.PopFont();
+        gu.DoLineBreak();
+        gu.PushFont(app.font_styles[FONT_MAGO3]);
+        gu.DoLabelsFromString("Junk MTV quiz graced by fox whelps.");
+        gu.PopFont();
     }
 
     if (gu.DoElement(&LAYOUT_WHITE)) {

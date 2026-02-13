@@ -46,6 +46,9 @@ fn bin_example(b: *Build, opts: *const GlobalOptions) *StepCompile {
         .{ "font-notomono-lod-black", "assets/font-notomono-lod-black.bmp" },
         .{ "font-notomono-lod", "assets/font-notomono-lod.bmp" },
         .{ "font-departuremono", "assets/font-departuremono.bmp" },
+        .{ "font-nameheremono", "assets/font-nameheremono.bmp" },
+        .{ "font-nameheremono-bold", "assets/font-nameheremono-bold.bmp" },
+        .{ "font-mago3mono", "assets/font-mago3mono.bmp" },
         .{ "yuriko1", "assets/yuriko1.bmp" },
         .{ "yuriko2", "assets/yuriko2.bmp" },
     };
