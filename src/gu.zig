@@ -1662,10 +1662,12 @@ pub fn DoLabel(self: *GU, color: ?u32, str: []const u8) void {
     element.layout.color = color orelse 0xFFFFFFFF;
 }
 
-// TODO: ?? better way to get tabsize?
+// TODO: ?? better way to get tabsize? really the backend should handle this, the
+//  only reason it's an issue is because the example backend artificially only
+//  allows characters in range 0x20-0x7F as a temp simplicity move
 // TODO: ?? paragraph-aware line break behaviour that inserts spacing
 /// splits a given utf8 string into "words" and emits them as a series of label
-/// elements, to allow the layout engine to reflow multiline text
+/// elements, to allow the layout engine to reflow multiline text naturally
 pub fn DoLabelsFromString(self: *GU, str: []const u8) void {
     // make sure a SetNext font is applied to all emitted values
     const push_id = maxInt(usize) - self.element_tree.items.len;
@@ -1683,30 +1685,22 @@ pub fn DoLabelsFromString(self: *GU, str: []const u8) void {
     var i: usize = 0;
     var prev_whitespace = false;
     while (it.nextCodepoint()) |cp| {
-        const whitespace = cp < 0xF0 and std.mem.indexOfScalar(u8, Whitespace, @truncate(cp)) != null;
+        const whitespace = cp < 0x80 and std.mem.indexOfScalar(u8, Whitespace, @truncate(cp)) != null;
         defer prev_whitespace = whitespace;
         defer i = it.i;
+
+        if (whitespace) {
+            switch (cp) {
+                ' ' => self.DoSpacerH(size_sp.x, size_sp.y),
+                '\t' => self.DoSpacerH(size_tb.x, size_tb.y),
+                '\r' => _ = if (std.mem.indexOfScalar(u8, it.peek(1), '\n')) |_| it.nextCodepoint(),
+                else => {}, // '\n', std.ascii.control_code.vt, std.ascii.control_code.ff
+            }
+            if (cp == '\n' or cp == '\r') self.DoLineBreak();
+            continue;
+        }
+
         switch (cp) {
-            ' ' => {
-                self.DoSpacerH(size_sp.x, size_sp.y);
-                continue;
-            },
-            '\t' => {
-                self.DoSpacerH(size_tb.x, size_tb.y);
-                continue;
-            },
-            '\r' => {
-                if (std.mem.indexOfScalar(u8, it.peek(1), '\n')) |_| _ = it.nextCodepoint();
-                self.DoLineBreak();
-                continue;
-            },
-            '\n' => {
-                self.DoLineBreak();
-                continue;
-            },
-            std.ascii.control_code.vt,
-            std.ascii.control_code.ff,
-            => continue,
             '/', '\\', '-' => blk: {
                 const next_whitespace = std.mem.indexOfAny(u8, it.peek(1), Whitespace) != null;
                 // manual mashup of DoLabel and DoSpacerH
@@ -1718,13 +1712,12 @@ pub fn DoLabelsFromString(self: *GU, str: []const u8) void {
                 element.features.bShowLabel = true;
                 element.label_str = str[i..it.i];
                 element.layout.color = 0xFFFFFFFF;
-                continue;
             },
-            else => while (std.mem.indexOfNone(u8, it.peek(1), SplitChars)) |_| {
-                _ = it.nextCodepoint();
+            else => {
+                while (std.mem.indexOfNone(u8, it.peek(1), SplitChars)) |_| _ = it.nextCodepoint();
+                self.DoLabel(null, str[i..it.i]);
             },
         }
-        self.DoLabel(null, str[i..it.i]);
     }
 }
 
@@ -1802,7 +1795,7 @@ pub fn DoToggleButtonNamed(self: *GU, active: *bool, label: []const u8, name: []
     return activated;
 }
 
-// FIXME: rename to something like "line clear", to reflect the fact that it doesn't
+// TODO: rename to something like "line clear", to reflect the fact that it doesn't
 //  actually push the content down beyond ensuring the next element is at line start
 pub fn DoLineBreak(self: *GU) void {
     self.element_queue_line_break = true;
