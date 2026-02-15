@@ -1019,6 +1019,9 @@ pub export fn SDL_AppEvent(app: *App, event: *c.SDL_Event) c.SDL_AppResult {
             const down = event.type == c.SDL_EVENT_MOUSE_BUTTON_DOWN;
             app.gu.mouse_left.Accumulate(down);
         },
+        c.SDL_EVENT_MOUSE_WHEEL => {
+            app.gu.mouse_scroll.Accumulate(event.wheel.x, event.wheel.y);
+        },
         c.SDL_EVENT_KEY_DOWN => {
             if (event.key.scancode == c.SDL_SCANCODE_RETURN)
                 app.step = true;
@@ -1162,8 +1165,8 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoLabel(0xCCCCFFFF, str_font_size);
 
         const new_font_lod = app.rd.fonts.ResolveLOD(app.font_styles[FONT_DEPARTURE]);
-        gu.DoLineBreak();
         const str_font_lod = gu.MakeString("LOD: {d}", .{new_font_lod});
+        gu.DoLineBreak();
         gu.DoLabel(0xCCCCFFFF, str_font_lod);
 
         const measure_size = app.rd.fonts.MeasureString(app.font_styles[FONT_DEPARTURE], "Measure");
@@ -1172,6 +1175,13 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoLineBreak();
         const str_measure_size = gu.MakeString("  {d:3.1} x {d:3.1}", .{ measure_size.x, measure_size.y });
         gu.DoLabel(0xCCCCFFFF, str_measure_size);
+
+        const str_scroll = gu.MakeString(
+            "Scroll:  x:{d:3.1} y:{d:3.1}",
+            .{ gu.mouse_scroll.scroll.x, gu.mouse_scroll.scroll.y },
+        );
+        gu.DoLineBreak();
+        gu.DoLabel(0xCCCCFFFF, str_scroll);
     }
 
     gu.EndFrame();

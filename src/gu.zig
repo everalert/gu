@@ -248,6 +248,23 @@ pub const KeyState = struct {
     }
 };
 
+pub const ScrollState = struct {
+    scroll: Vec2,
+    accumulator: Vec2,
+
+    pub const start: ScrollState = .{ .scroll = .zero, .accumulator = .zero };
+
+    pub fn Accumulate(self: *ScrollState, x: f32, y: f32) void {
+        self.accumulator.x += x;
+        self.accumulator.y += y;
+    }
+
+    pub fn Update(self: *ScrollState) void {
+        self.scroll = self.accumulator;
+        self.accumulator = .zero;
+    }
+};
+
 //------------------------------------------------------------------------------
 
 pub const Element = struct {
@@ -336,6 +353,8 @@ pub const ElementFeatures = packed struct(u32) {
     bConsumeNextGapY: bool, // FIXME: impl
     /// if element would trigger a line break, collapse and make next element break instead
     bOverflowCollapseX: bool,
+    bScrollableX: bool, // FIXME: impl
+    bScrollableY: bool, // FIXME: impl
 
     // Button functionality
     bClickable: bool,
@@ -349,7 +368,7 @@ pub const ElementFeatures = packed struct(u32) {
     // Misc. functionality
     bCustomCommand: bool,
 
-    _: u16,
+    _: u14,
 
     const none: ElementFeatures = @bitCast(@as(u32, 0));
     const all: ElementFeatures = @bitCast(maxInt(u32));
@@ -551,6 +570,7 @@ render_commands_clip: ArrayList(RCClip),
 
 mouse_pt: Vec2,
 mouse_left: KeyState, // LMB
+mouse_scroll: ScrollState,
 
 pub fn Init(
     alloc: Allocator,
@@ -587,10 +607,11 @@ pub fn Init(
         .base_layout = base_layout,
         .base_button_style = base_button_style,
         .base_font = base_font,
-        .mouse_pt = .{ .x = -1, .y = -1 },
         .element_queue_line_break = false,
         .element_sibling = null,
+        .mouse_pt = .{ .x = -1, .y = -1 },
         .mouse_left = .start,
+        .mouse_scroll = .start,
     };
 }
 
@@ -639,6 +660,7 @@ pub fn BeginFrame(self: *GU) !void {
     self.element_tree.clearRetainingCapacity();
     self.element_sibling = null;
     self.mouse_left.Update();
+    self.mouse_scroll.Update();
 
     self.element_line_stack.append(self.allocator, zeroInit(LineData, .{ .line = 1 })) catch unreachable;
     if (!self.DoElement(&self.base_layout)) unreachable;
@@ -949,6 +971,7 @@ fn DoElementEmitRenderCommands(self: *GU) void {
     }
 }
 
+// FIXME: rename to DoInputPostProcessing or DoInterFrameProcessing
 fn DoButtonPostProcessing(self: *GU) void {
     assert(self.button_delete_queue.items.len == 0);
 
