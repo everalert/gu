@@ -16,7 +16,6 @@ const SDLTryErrorPrint = @import("c.zig").SDLTryErrorPrint;
 const GU = @import("gu.zig");
 const GUBackend = GU.Backend;
 const GUCornerShape = GU.CornerShape;
-const GUTextureAtlas = GU.TextureAtlas;
 const GUTextureHandle = GU.TextureHandle;
 const GUFontHandle = GU.FontHandle;
 const GULayout = GU.Layout;
@@ -582,6 +581,7 @@ const RenderData = struct {
     pub const CNR_RHOMBUS: GUCornerShape = 6;
     pub const ACT_DEMO_SINE: GUCustomActionHandle = 0;
     pub const ACT_DEMO_GRADIENT: GUCustomActionHandle = 1;
+    pub const ACT_DEMO_PCM8: GUCustomActionHandle = 2; // pulse-code modulation wave with 8-bit depth
 
     pub const empty: RenderData = .{
         .window = null,
@@ -713,6 +713,21 @@ const RenderData = struct {
                         &.{ .x = cmd.rect.x, .y = cmd.rect.y, .w = cmd.rect.w, .h = cmd.rect.h },
                     ));
                 }
+            },
+            ACT_DEMO_PCM8 => {
+                const data = @as(*[]const i8, @ptrFromInt(cmd.data)).*;
+                assert(data.len > 1);
+                assert(data.len <= 128);
+                var pts: [128]c.SDL_FPoint = undefined;
+                for (pts[0..data.len], 0..) |*p, i| {
+                    const scale_w = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(data.len - 1));
+                    const scale_h = @as(f32, @floatFromInt(data[i])) / 128;
+                    p.x = cmd.rect.x + cmd.rect.w * scale_w;
+                    p.y = cmd.rect.y + cmd.rect.h / 2 + cmd.rect.h / 2 * scale_h;
+                }
+                const c1 = Color.fromInt(cmd.color);
+                SDLEP(c.SDL_SetRenderDrawColor(self.renderer, c1.r, c1.g, c1.b, c1.a));
+                SDLEP(c.SDL_RenderLines(self.renderer, &pts, @intCast(data.len)));
             },
             else => unreachable,
         }
@@ -918,7 +933,7 @@ const App = struct {
     font_styles: [5]usize,
 
     btn_toggle: bool,
-    btn_counter: usize,
+    btn_pcm8: usize,
     btn_color_loop: usize,
     step: bool,
 
@@ -958,7 +973,7 @@ const App = struct {
         // DEMO RELATED
 
         self.btn_toggle = false;
-        self.btn_counter = 0;
+        self.btn_pcm8 = 16;
         self.btn_color_loop = 0;
         self.step = true;
     }
@@ -1019,6 +1034,10 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
 
     const color_loop = [_]u32{ 0xC00000FF, 0x00C000FF, 0x0000C0FF };
 
+    // "external data" for custom render command demo
+    var pcm8_data: [128]i8 = undefined;
+    const pcm8_data_sl: []i8 = pcm8_data[0..128];
+
     // NOTE: frame advance helper for debugging
     //if (!app.step) return c.SDL_APP_CONTINUE;
     //app.step = false;
@@ -1059,16 +1078,20 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         defer gu.EndElement();
         gu.SetElementGaps(4, 4);
 
+        for (&pcm8_data, 0..) |*d, i| d.* = if ((i / app.btn_pcm8) % 2 == 1) 127 else -127;
+        gu.DoLineBreak();
+        gu.DoCustomSurfaceEx(RenderData.ACT_DEMO_PCM8, @intFromPtr(&pcm8_data_sl), 192, 48);
+
         gu.DoLineBreak();
         gu.PushButtonPadding(12, 2);
         defer gu.PopButtonPadding();
         gu.PushButtonCorner(32, RenderData.CNR_SUPERELLIPSE);
         defer gu.PopButtonCorner();
         gu.SetNextButtonColor(0x800000FF, 0xC00000FF, 0x400000FF);
-        if (gu.DoButton("SUB")) app.btn_counter -|= 1;
-        if (gu.DoButton("ADD")) app.btn_counter +|= 1;
+        if (gu.DoButton("SUB")) app.btn_pcm8 = @max(4, app.btn_pcm8 - 1);
+        if (gu.DoButton("ADD")) app.btn_pcm8 = @min(32, app.btn_pcm8 + 1);
         gu.DoLineBreak();
-        const str_counter = gu.MakeString("{d:0>3}", .{app.btn_counter});
+        const str_counter = gu.MakeString("{d:0>3}", .{app.btn_pcm8});
         gu.DoLabel(0xCCCCFFFF, str_counter);
     }
 

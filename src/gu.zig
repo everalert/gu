@@ -102,10 +102,11 @@ pub const RenderCommand = struct {
     }
 };
 
-// TODO: user-defined resource handle types
+// TODO: user-defined resource/handle types
 pub const FontHandle = usize;
 pub const TextureHandle = usize;
 pub const CustomActionHandle = usize;
+pub const CustomActionData = usize;
 
 // TODO: ?? add field for data ptr/handle? with only action id, the implementation
 //  will need to register separate actions for equivalent behaviours operating
@@ -116,6 +117,7 @@ pub const CustomActionHandle = usize;
 //  the drawing essentially replaces what would be the body of an RCRect call.
 pub const RCCustom = struct {
     action: CustomActionHandle, // implementation-defined action id
+    data: CustomActionData, // implementation-defined action data
     rect: Rect,
     corner_radius: f32,
     corner_shape: CornerShape,
@@ -267,7 +269,8 @@ pub const Element = struct {
     data: usize, // secondary key used in the absence of `name`, typically a unique pointer
     label_str: []const u8,
     label_font: FontHandle,
-    custom_action: CustomActionHandle, // impl-defined action associated with custom command
+    action_id: CustomActionHandle, // impl-defined custom command action
+    action_data: CustomActionData, // impl-defined custom command data
 
     const empty: Element = .{
         .layout = .blank,
@@ -287,7 +290,8 @@ pub const Element = struct {
         .label_str = &.{},
         .label_font = 0,
         .data = 0,
-        .custom_action = maxInt(usize),
+        .action_id = 0,
+        .action_data = 0,
     };
 
     inline fn HashKey(element: *const Element) []const u8 {
@@ -919,9 +923,9 @@ fn DoElementEmitRenderCommands(self: *GU) void {
         }
 
         if (e.features.bCustomCommand) {
-            assert(e.custom_action != maxInt(usize)); // non-null value actually set
             self.EmitRenderCommand(.custom, RCCustom{
-                .action = e.custom_action,
+                .action = e.action_id,
+                .data = e.action_data,
                 .rect = e.area,
                 .corner_radius = e.layout.corner_radius,
                 .corner_shape = e.layout.corner_shape,
@@ -1609,11 +1613,18 @@ pub fn MakeString(self: *GU, comptime fmt: []const u8, args: anytype) []const u8
 /// a rendered scene to a specific part of the UI, drawing data-driven contents
 /// such as lines and graphs, etc.
 pub fn DoCustomSurface(self: *GU, action: CustomActionHandle, w: f32, h: f32) void {
+    self.DoCustomSurfaceEx(action, 0, w, h);
+}
+
+/// Emit a custom action associated with a region. Same as `DoCustomSurface`, but
+/// allows you to specify the action data.
+pub fn DoCustomSurfaceEx(self: *GU, action: CustomActionHandle, data: CustomActionData, w: f32, h: f32) void {
     if (!self.DoElement(null)) return;
     defer self.EndElement();
     const element = self.GetElement();
     element.features.bCustomCommand = true;
-    element.custom_action = action;
+    element.action_id = action;
+    element.action_data = data;
     element.area.w = w;
     element.area.h = h;
     element.layout.mode_w = .Fixed;
