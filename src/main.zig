@@ -1117,7 +1117,14 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         const element = gu.GetElement();
         gu.SetElementGaps(4, 4);
         element.features.bTextSpacing = true;
+        element.features.bScrollableY = true;
+        element.name = "MAIN_CONTAINER";
+        const scroll = gu.GetElementScroll();
 
+        const str_scroll = gu.MakeString("ElementScroll:  x:{d:3.1} y:{d:3.1}", .{ scroll.x, scroll.y });
+        gu.DoLabel(0xCCCCFFFF, str_scroll);
+
+        gu.DoLineBreak();
         gu.DoLabelsFromString("testing... with auto linebreak!!");
         _ = gu.DoToggleButton(&app.btn_toggle, "ToggleButton2");
 
