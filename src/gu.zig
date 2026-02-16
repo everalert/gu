@@ -204,10 +204,9 @@ pub const Button = struct {
     // TODO: scroll units per tick as param
     // TODO: scroll smoothness as param
     pub fn UpdateScroll(self: *Button, pt: *const Vec2, scroll: *const Vec2) void {
-        if (self.area.IsCollidingPoint(pt)) {
-            self.scroll_offset.x = std.math.clamp(self.scroll_offset.x + scroll.x * 24, 0, self.scroll_area.x);
-            self.scroll_offset.y = std.math.clamp(self.scroll_offset.y + scroll.y * 24, -self.scroll_area.y, 0);
-        }
+        if (self.area.IsCollidingPoint(pt)) self.scroll_offset = self.scroll_offset.ADD(scroll.MULS(24));
+        self.scroll_offset.x = std.math.clamp(self.scroll_offset.x, 0, self.scroll_area.x);
+        self.scroll_offset.y = std.math.clamp(self.scroll_offset.y, -self.scroll_area.y, 0);
     }
 };
 
