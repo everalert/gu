@@ -763,6 +763,10 @@ fn DoElementLineBreakParsing(self: *GU) void {
             if (!e.layout.mode_w.IsPreComputable()) e.area.w = child_size_x;
             if (!e.layout.mode_h.IsPreComputable()) e.area.h = child_size_y;
             e.scroll_area = .init(@max(child_size_x - e.area.w, 0), @max(child_size_y - e.area.h, 0));
+            e.scroll_offset = .init(
+                @min(e.scroll_offset.x, e.scroll_area.x),
+                @max(e.scroll_offset.y, -e.scroll_area.y),
+            );
 
             _ = self.element_line_stack.pop();
             ld = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &ld_base;
