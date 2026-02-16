@@ -324,7 +324,7 @@ fn FontRenderer(
             var rolling_pos = pos.*;
             for (str) |char| {
                 const n = char - @as(u8, @truncate(font.CodepointMin));
-                const size = glyphs[n].PixelRegion.toSize().MULS(scaling);
+                const size = glyphs[n].PixelRegion.getSize().MULS(scaling);
                 const advance = glyphs[n].AdvanceX * scaling;
                 const offset = (advance - size.x) / 2;
                 SDLEP(c.SDL_RenderTexture(
@@ -1068,6 +1068,9 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
 
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
+        const element = gu.GetElement();
+        element.features.bScrollableX = true;
+        element.name = "TOP_MIDDLE_CONTAINER";
 
         gu.DoLabel(0xC000C0FF, "testblock2");
         const str_toggle_button = gu.MakeString("ToggleButton: {any}", .{app.btn_toggle});

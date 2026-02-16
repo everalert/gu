@@ -205,8 +205,7 @@ pub const Button = struct {
     // TODO: scroll smoothness as param
     pub fn UpdateScroll(self: *Button, pt: *const Vec2, scroll: *const Vec2) void {
         if (self.area.IsCollidingPoint(pt)) self.scroll_offset = self.scroll_offset.ADD(scroll.MULS(24));
-        self.scroll_offset.x = std.math.clamp(self.scroll_offset.x, 0, self.scroll_area.x);
-        self.scroll_offset.y = std.math.clamp(self.scroll_offset.y, -self.scroll_area.y, 0);
+        self.scroll_offset = self.scroll_offset.CLAMP(self.scroll_area.inv(), .zero);
     }
 };
 
@@ -758,15 +757,14 @@ fn DoElementLineBreakParsing(self: *GU) void {
 
         // child->parent
         if (it_data.relation == .Parent) {
-            const child_size_x = @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items));
-            const child_size_y = ld.current_h + ld.current_y + ld.AxisSpacing(.Cross, ld.line);
-            if (!e.layout.mode_w.IsPreComputable()) e.area.w = child_size_x;
-            if (!e.layout.mode_h.IsPreComputable()) e.area.h = child_size_y;
-            e.scroll_area = .init(@max(child_size_x - e.area.w, 0), @max(child_size_y - e.area.h, 0));
-            e.scroll_offset = .init(
-                @min(e.scroll_offset.x, e.scroll_area.x),
-                @max(e.scroll_offset.y, -e.scroll_area.y),
+            const child_size: Vec2 = .init(
+                @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items)),
+                ld.current_h + ld.current_y + ld.AxisSpacing(.Cross, ld.line),
             );
+            if (!e.layout.mode_w.IsPreComputable()) e.area.w = child_size.x;
+            if (!e.layout.mode_h.IsPreComputable()) e.area.h = child_size.y;
+            e.scroll_area = child_size.SUB(e.area.getSize()).MAX(.zero);
+            e.scroll_offset = e.scroll_offset.MAX(e.scroll_area.inv());
 
             _ = self.element_line_stack.pop();
             ld = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &ld_base;
@@ -855,7 +853,7 @@ fn DoElementPositioning(self: *GU) void {
         }
 
         if (e.features.bLineBreak) {
-            const pos = if (p != null) p.?.area.toPos() else Vec2.zero;
+            const pos = if (p != null) p.?.area.getPos() else Vec2.zero;
             const padding = if (p != null) p.?.layout.padding else Vec2.zero;
             e.area.x = pos.x + padding.x;
             e.area.y = ld.current_y + ld.current_h + e.gap.y;
@@ -982,7 +980,7 @@ fn DoElementEmitRenderCommands(self: *GU) void {
             //  maybe add a "batch layer" value to draw cmd, and give labels
             //  a half-value extra so that they are intereted as upper layer.
             self.EmitRenderCommand(.text, RCText{
-                .pos = e.area.toPos(),
+                .pos = e.area.getPos(),
                 .font = e.label_font,
                 .color = e.layout.color,
                 .str = e.label_str,
