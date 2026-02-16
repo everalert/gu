@@ -156,7 +156,7 @@ pub const Button = struct {
     btn_state: ButtonState,
     btn_activated: bool,
     scroll_offset: Vec2,
-    //scroll_region: Vec2,
+    scroll_area: Vec2,
 
     pub const empty = Button{
         .element = maxInt(usize), // NOTE: maxInt is how the system identifies unused items to delete
@@ -165,7 +165,7 @@ pub const Button = struct {
         .btn_state = .Idle,
         .btn_activated = false,
         .scroll_offset = .zero,
-        //.scroll_region = .zero,
+        .scroll_area = .zero,
     };
 
     // FIXME: consolidate with scroll update, take generic mouse struct rather
@@ -201,9 +201,12 @@ pub const Button = struct {
         }
     }
 
+    // TODO: scroll units per tick as param
+    // TODO: scroll smoothness as param
     pub fn UpdateScroll(self: *Button, pt: *const Vec2, scroll: *const Vec2) void {
         if (self.area.IsCollidingPoint(pt)) {
-            self.scroll_offset = self.scroll_offset.ADD(scroll.MULS(24));
+            self.scroll_offset.x = std.math.clamp(self.scroll_offset.x + scroll.x * 24, 0, self.scroll_area.x);
+            self.scroll_offset.y = std.math.clamp(self.scroll_offset.y + scroll.y * 24, -self.scroll_area.y, 0);
         }
     }
 };
@@ -300,6 +303,7 @@ pub const Element = struct {
     action_id: CustomActionHandle, // impl-defined custom command action
     action_data: CustomActionData, // impl-defined custom command data
     scroll_offset: Vec2,
+    scroll_area: Vec2,
 
     const empty: Element = .{
         .layout = .blank,
@@ -322,6 +326,7 @@ pub const Element = struct {
         .action_id = 0,
         .action_data = 0,
         .scroll_offset = .zero,
+        .scroll_area = .zero,
     };
 
     inline fn HashKey(element: *const Element) []const u8 {
@@ -337,7 +342,6 @@ pub const Element = struct {
 // TODO: body outline
 // TODO: body absolute positioning (like CSS)
 // TODO: body relative positioning (like CSS)
-// TODO: body contents scrollable, on X and Y individually
 // TODO: texture tiling
 // TODO: texture scaling
 // TODO: texture stretch to rect size
@@ -366,8 +370,8 @@ pub const ElementFeatures = packed struct(u32) {
     bConsumeNextGapY: bool, // FIXME: impl
     /// if element would trigger a line break, collapse and make next element break instead
     bOverflowCollapseX: bool,
-    bScrollableX: bool, // FIXME: impl
-    bScrollableY: bool, // FIXME: impl
+    bScrollableX: bool,
+    bScrollableY: bool,
 
     // Button functionality
     bClickable: bool,
@@ -468,7 +472,6 @@ pub const Layout = struct {
     padding: Vec2,
     gaps: Vec2,
     auto_line_break: bool,
-    //scroll: ?
 
     const blank = zeroInit(Layout, .{});
 };
@@ -756,10 +759,11 @@ fn DoElementLineBreakParsing(self: *GU) void {
 
         // child->parent
         if (it_data.relation == .Parent) {
-            if (!e.layout.mode_w.IsPreComputable())
-                e.area.w = @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items));
-            if (!e.layout.mode_h.IsPreComputable())
-                e.area.h = ld.current_h + ld.current_y + ld.AxisSpacing(.Cross, ld.line);
+            const child_size_x = @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items));
+            const child_size_y = ld.current_h + ld.current_y + ld.AxisSpacing(.Cross, ld.line);
+            if (!e.layout.mode_w.IsPreComputable()) e.area.w = child_size_x;
+            if (!e.layout.mode_h.IsPreComputable()) e.area.h = child_size_y;
+            e.scroll_area = .init(@max(child_size_x - e.area.w, 0), @max(child_size_y - e.area.h, 0));
 
             _ = self.element_line_stack.pop();
             ld = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &ld_base;
@@ -992,9 +996,6 @@ fn DoButtonPostProcessing(self: *GU) void {
     while (it.next()) |btn_info| {
         const btn = btn_info.value_ptr;
 
-        btn.Update(&self.mouse_pt, self.mouse_left.just_down, self.mouse_left.just_up);
-        btn.UpdateScroll(&self.mouse_pt, &self.mouse_scroll.scroll);
-
         if (btn.element == maxInt(usize)) {
             self.button_delete_queue.append(self.allocator, btn_info.key_ptr.*) catch |err|
                 std.debug.panic("DoButtonPostProcessing ({s})", .{@errorName(err)});
@@ -1002,7 +1003,11 @@ fn DoButtonPostProcessing(self: *GU) void {
         }
 
         btn.area = self.element_tree.items[btn.element].clip;
+        btn.scroll_area = self.element_tree.items[btn.element].scroll_area;
         btn.element = maxInt(usize);
+
+        btn.Update(&self.mouse_pt, self.mouse_left.just_down, self.mouse_left.just_up);
+        btn.UpdateScroll(&self.mouse_pt, &self.mouse_scroll.scroll);
     }
 
     while (self.button_delete_queue.pop()) |item|
