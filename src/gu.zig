@@ -154,6 +154,7 @@ pub const FrameState = struct {
     btn_mode: ButtonMode,
     btn_state: ButtonState,
     btn_activated: bool,
+    scroll_target: Vec2,
     scroll_offset: Vec2,
     scroll_area: Vec2,
 
@@ -163,6 +164,7 @@ pub const FrameState = struct {
         .btn_mode = .default,
         .btn_state = .Idle,
         .btn_activated = false,
+        .scroll_target = .zero,
         .scroll_offset = .zero,
         .scroll_area = .zero,
     };
@@ -171,6 +173,7 @@ pub const FrameState = struct {
         self: *FrameState,
         element: *const Element,
         mouse: *const MouseInput,
+        scroll_lerp_factor: f32,
     ) void {
         // update/reset data
         self.area = element.clip;
@@ -204,8 +207,22 @@ pub const FrameState = struct {
 
         // scroll
         if (self.area.IsCollidingPoint(&mouse.pos))
-            self.scroll_offset = self.scroll_offset.ADD(mouse.scroll.scroll);
+            self.scroll_target = self.scroll_target.ADD(mouse.scroll.scroll);
+        self.scroll_target = self.scroll_target.CLAMP(self.scroll_area.inv(), .zero);
         self.scroll_offset = self.scroll_offset.CLAMP(self.scroll_area.inv(), .zero);
+
+        const scroll_dif = self.scroll_target.SUB(self.scroll_offset);
+        const scroll_eps = std.math.floatEpsAt(f32, 100);
+        if (@abs(scroll_dif.x) <= scroll_eps) {
+            self.scroll_offset.x = self.scroll_target.x;
+        } else {
+            self.scroll_offset.x = std.math.lerp(self.scroll_offset.x, self.scroll_target.x, scroll_lerp_factor);
+        }
+        if (@abs(scroll_dif.y) <= scroll_eps) {
+            self.scroll_offset.y = self.scroll_target.y;
+        } else {
+            self.scroll_offset.y = std.math.lerp(self.scroll_offset.y, self.scroll_target.y, scroll_lerp_factor);
+        }
     }
 };
 
@@ -616,6 +633,16 @@ render_commands_clip: ArrayList(RCClip),
 
 mouse: MouseInput,
 
+timestamp: i64, // NS
+timestamp_prev: i64,
+dt_f: f64,
+
+// TODO: include config stuff as part of initialization; when doing so, don't
+//  forget to remove manual setting of value in demo init
+/// best with very small values (e.g. 0.00001), set to 0 for no smoothing
+/// must be 0.0 <= value < 1.0 for correct behaviour
+config_scroll_smoothing: f32,
+
 pub fn Init(
     alloc: Allocator,
     backend: Backend,
@@ -654,6 +681,10 @@ pub fn Init(
         .element_queue_line_break = false,
         .element_sibling = null,
         .mouse = .start,
+        .timestamp = 0,
+        .timestamp_prev = 0,
+        .dt_f = 0,
+        .config_scroll_smoothing = 0,
     };
 }
 
@@ -683,13 +714,20 @@ pub fn Deinit(self: *GU) void {
 //------------------------------------------------------------------------------
 // FRAME
 
-pub fn BeginFrame(self: *GU) !void {
+/// @timestamp      nanoseconds
+pub fn BeginFrame(self: *GU, timestamp: i64) !void {
     assert(self.element_stack.items.len == 0);
     assert(self.element_line_stack.items.len == 0);
     assert(self.btn_mode_vstk.count == 0);
     assert(self.font_vstk.count == 0);
+    assert(timestamp > self.timestamp);
 
     const surface_size = self.backend.SurfaceSize();
+
+    self.timestamp_prev = self.timestamp;
+    self.timestamp = timestamp;
+    const dt_f = @as(f64, @floatFromInt(self.timestamp - self.timestamp_prev)) / @as(f64, 1_000_000_000);
+    self.dt_f = std.math.clamp(dt_f, 0.002, 0.10);
 
     _ = self.label_arena.reset(.retain_capacity);
     self.btn_style_arena.clearRetainingCapacity();
@@ -1019,6 +1057,8 @@ fn DoElementEmitRenderCommands(self: *GU) void {
 // TODO: make delete queue a ValueStack and get rid of the error?
 fn DoInterFrameProcessing(self: *GU) void {
     assert(self.persistent_data_delete_queue.items.len == 0);
+    assert(self.config_scroll_smoothing >= 0.0);
+    assert(self.config_scroll_smoothing < 1.0);
 
     var it = self.persistent_data.iterator();
     while (it.next()) |frame_info| {
@@ -1030,8 +1070,11 @@ fn DoInterFrameProcessing(self: *GU) void {
             continue;
         }
 
+        // https://www.rorydriscoll.com/2016/03/07/frame-rate-independent-damping-using-lerp/
+        const damp_lerp_factor = 1 - std.math.pow(f32, self.config_scroll_smoothing, @floatCast(self.dt_f));
+
         const element = &self.element_tree.items[frame.element];
-        frame.Update(element, &self.mouse);
+        frame.Update(element, &self.mouse, damp_lerp_factor);
     }
 
     while (self.persistent_data_delete_queue.pop()) |item|

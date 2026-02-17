@@ -971,10 +971,11 @@ const App = struct {
             BASE_BUTTON_STYLE,
             self.font_styles[BASE_FONT_STYLE],
         );
+        self.gu.config_scroll_smoothing = 0.00001;
 
         // DEMO RELATED
 
-        self.scroll_step_size = 24;
+        self.scroll_step_size = 48;
 
         self.btn_toggle = false;
         self.btn_pcm8 = 16;
@@ -1055,7 +1056,9 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     SDLEP(c.SDL_SetRenderDrawColor(rd.renderer, 0x00, 0x00, 0x22, 0xFF));
     SDLEP(c.SDL_RenderClear(rd.renderer));
 
-    try gu.BeginFrame();
+    var time: i64 = undefined;
+    SDLEP(c.SDL_GetCurrentTime(&time));
+    try gu.BeginFrame(time);
 
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
@@ -1163,11 +1166,12 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         defer gu.EndElement();
         gu.SetElementGaps(4, 4);
 
-        var time: i64 = 0;
-        SDLEP(c.SDL_GetCurrentTime(&time));
         const time_f = @as(f32, @floatFromInt(@mod(@divTrunc(time, c.SDL_NS_PER_MS), 2500)));
         const str_time = gu.MakeString("{d:0>5.3} {d:0>5.3}", .{ time_f / 1000, time_f / 2500 });
         gu.DoLabel(0xCCCCFFFF, str_time);
+        gu.DoLineBreak();
+        const str_dt = gu.MakeString("dt: {d:0>8.6}", .{gu.dt_f});
+        gu.DoLabel(0xCCCCFFFF, str_dt);
         gu.DoLineBreak();
         gu.DoCustomSurface(RenderData.ACT_DEMO_SINE, 192, 48);
         gu.DoLineBreak();
@@ -1198,8 +1202,8 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoSpacerV(32, 4);
 
         gu.SetNextButtonColor(0x800000FF, 0xC00000FF, 0x400000FF);
-        if (gu.DoButton("Scroll DN")) app.scroll_step_size = @max(2, app.scroll_step_size - 2);
-        if (gu.DoButton("Scroll UP")) app.scroll_step_size = @min(48, app.scroll_step_size + 2);
+        if (gu.DoButton("Scroll DN")) app.scroll_step_size = @max(4, app.scroll_step_size - 4);
+        if (gu.DoButton("Scroll UP")) app.scroll_step_size = @min(96, app.scroll_step_size + 4);
 
         gu.DoLineBreak();
         const str_scroll_size = gu.MakeString("{d:3.1}", .{app.scroll_step_size});
