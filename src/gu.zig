@@ -201,10 +201,9 @@ pub const Button = struct {
         }
     }
 
-    // TODO: scroll units per tick as param
     // TODO: scroll smoothness as param
     pub fn UpdateScroll(self: *Button, pt: *const Vec2, scroll: *const Vec2) void {
-        if (self.area.IsCollidingPoint(pt)) self.scroll_offset = self.scroll_offset.ADD(scroll.MULS(24));
+        if (self.area.IsCollidingPoint(pt)) self.scroll_offset = self.scroll_offset.ADD(scroll.*);
         self.scroll_offset = self.scroll_offset.CLAMP(self.scroll_area.inv(), .zero);
     }
 };
@@ -1807,6 +1806,22 @@ pub fn DoSpacerH(self: *GU, w: f32, h: f32) void {
     element.features.bConsumeGapX = true;
     element.features.bConsumeNextGapX = true;
     element.features.bOverflowCollapseX = true;
+    element.layout.mode_w = .Fixed;
+    element.layout.mode_h = .Fixed;
+    element.area.w = w;
+    element.area.h = h;
+}
+
+/// horizontal spacing element that overrides gap between surrounding elements.
+/// spacer is ignored if it falls on the end of a line.
+pub fn DoSpacerV(self: *GU, w: f32, h: f32) void {
+    defer self.element_queue_line_break = true;
+    if (!self.DoElement(null)) return;
+    defer self.EndElement();
+    const element = self.GetElement();
+    element.features.bLineBreak = true;
+    element.features.bConsumeGapY = true;
+    element.features.bConsumeNextGapY = true;
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
     element.area.w = w;

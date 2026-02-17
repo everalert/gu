@@ -932,6 +932,8 @@ const App = struct {
     fonts: [5]usize,
     font_styles: [5]usize,
 
+    scroll_step_size: f32,
+
     btn_toggle: bool,
     btn_pcm8: usize,
     btn_color_loop: usize,
@@ -971,6 +973,8 @@ const App = struct {
         );
 
         // DEMO RELATED
+
+        self.scroll_step_size = 24;
 
         self.btn_toggle = false;
         self.btn_pcm8 = 16;
@@ -1020,7 +1024,10 @@ pub export fn SDL_AppEvent(app: *App, event: *c.SDL_Event) c.SDL_AppResult {
             app.gu.mouse_left.Accumulate(down);
         },
         c.SDL_EVENT_MOUSE_WHEEL => {
-            app.gu.mouse_scroll.Accumulate(event.wheel.x, event.wheel.y);
+            app.gu.mouse_scroll.Accumulate(
+                event.wheel.x * app.scroll_step_size,
+                event.wheel.y * app.scroll_step_size,
+            );
         },
         c.SDL_EVENT_KEY_DOWN => {
             if (event.key.scancode == c.SDL_SCANCODE_RETURN)
@@ -1154,6 +1161,7 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
 
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
+        gu.SetElementGaps(4, 4);
 
         var time: i64 = 0;
         SDLEP(c.SDL_GetCurrentTime(&time));
@@ -1165,8 +1173,9 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoLineBreak();
         gu.DoCustomSurface(RenderData.ACT_DEMO_GRADIENT, 192, 48);
 
+        gu.DoSpacerV(32, 4);
+
         const fnt_ptr = &app.rd.fonts.BufSty[app.font_styles[FONT_DEPARTURE]];
-        gu.DoLineBreak();
         gu.SetNextButtonColor(0x800000FF, 0xC00000FF, 0x400000FF);
         if (gu.DoButton("Font DN")) fnt_ptr.Size = @max(1, fnt_ptr.Size - 1);
         if (gu.DoButton("Font UP")) fnt_ptr.Size += 1;
@@ -1174,23 +1183,33 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         const str_font_size = gu.MakeString("{d:0>3}", .{fnt_ptr.Size});
         gu.DoLabel(0xCCCCFFFF, str_font_size);
 
+        gu.DoLineBreak();
         const new_font_lod = app.rd.fonts.ResolveLOD(app.font_styles[FONT_DEPARTURE]);
         const str_font_lod = gu.MakeString("LOD: {d}", .{new_font_lod});
-        gu.DoLineBreak();
         gu.DoLabel(0xCCCCFFFF, str_font_lod);
 
-        const measure_size = app.rd.fonts.MeasureString(app.font_styles[FONT_DEPARTURE], "Measure");
         gu.DoLineBreak();
+        const measure_size = app.rd.fonts.MeasureString(app.font_styles[FONT_DEPARTURE], "Measure");
         gu.DoLabel(0xCCCCFFFF, "'Measure' Size:");
         gu.DoLineBreak();
         const str_measure_size = gu.MakeString("  {d:3.1} x {d:3.1}", .{ measure_size.x, measure_size.y });
         gu.DoLabel(0xCCCCFFFF, str_measure_size);
 
+        gu.DoSpacerV(32, 4);
+
+        gu.SetNextButtonColor(0x800000FF, 0xC00000FF, 0x400000FF);
+        if (gu.DoButton("Scroll DN")) app.scroll_step_size = @max(2, app.scroll_step_size - 2);
+        if (gu.DoButton("Scroll UP")) app.scroll_step_size = @min(48, app.scroll_step_size + 2);
+
+        gu.DoLineBreak();
+        const str_scroll_size = gu.MakeString("{d:3.1}", .{app.scroll_step_size});
+        gu.DoLabel(0xCCCCFFFF, str_scroll_size);
+
+        gu.DoLineBreak();
         const str_scroll = gu.MakeString(
             "Scroll:  x:{d:3.1} y:{d:3.1}",
             .{ gu.mouse_scroll.scroll.x, gu.mouse_scroll.scroll.y },
         );
-        gu.DoLineBreak();
         gu.DoLabel(0xCCCCFFFF, str_scroll);
     }
 
