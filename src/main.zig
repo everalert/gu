@@ -1048,6 +1048,8 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     // "external data" for custom render command demo
     var pcm8_data: [128]i8 = undefined;
     const pcm8_data_sl: []i8 = pcm8_data[0..128];
+    var main_scroll: Vec2 = .zero;
+    var main_scroll_area: Vec2 = .zero;
 
     // NOTE: frame advance helper for debugging
     //if (!app.step) return c.SDL_APP_CONTINUE;
@@ -1132,10 +1134,8 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         element.features.bTextSpacing = true;
         element.features.bScrollableY = true;
         element.name = "MAIN_CONTAINER";
-        const scroll = gu.GetElementScroll();
-
-        const str_scroll = gu.MakeString("ElementScroll:  x:{d:3.1} y:{d:3.1}", .{ scroll.x, scroll.y });
-        gu.DoLabel(0xCCCCFFFF, str_scroll);
+        main_scroll = gu.GetElementScroll();
+        main_scroll_area = gu.GetElementScrollArea();
 
         gu.DoLineBreak();
         gu.DoLabelsFromString("testing... with auto linebreak!!");
@@ -1215,6 +1215,22 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
             .{ gu.mouse.scroll.scroll.x, gu.mouse.scroll.scroll.y },
         );
         gu.DoLabel(0xCCCCFFFF, str_scroll);
+
+        gu.DoSpacerV(32, 4);
+
+        gu.DoLabel(0xCCCCFFFF, "MAIN CONTAINER");
+        gu.DoLineBreak();
+        const str_main_scroll = gu.MakeString(
+            "Scroll:  x:{d:3.1} y:{d:3.1}",
+            .{ main_scroll.x, main_scroll.y },
+        );
+        gu.DoLabel(0xCCCCFFFF, str_main_scroll);
+        gu.DoLineBreak();
+        const str_main_scroll_area = gu.MakeString(
+            "ScrollArea:  x:{d:3.1} y:{d:3.1}",
+            .{ main_scroll_area.x, main_scroll_area.y },
+        );
+        gu.DoLabel(0xCCCCFFFF, str_main_scroll_area);
     }
 
     gu.EndFrame();

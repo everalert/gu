@@ -376,11 +376,16 @@ pub const Element = struct {
         .scroll_area = .zero,
     };
 
-    inline fn HashKey(element: *const Element) []const u8 {
-        if (element.name.len > 0) return element.name;
+    pub fn NeedsHash(element: *const Element) bool {
+        return element.features.bClickable or
+            element.features.bScrollableX or
+            element.features.bScrollableY;
+    }
 
-        assert(element.data != 0);
-        return std.mem.asBytes(&element.data);
+    pub fn HashKey(element: *const Element) []const u8 {
+        if (element.name.len > 0) return element.name;
+        if (element.data != 0) return std.mem.asBytes(&element.data);
+        return &.{};
     }
 };
 
@@ -1205,26 +1210,23 @@ pub fn EndElement(self: *GU) void {
     }
 
     // update inter-frame state
-    const frame: *const FrameState = if (element.features.bClickable or
-        element.features.bScrollableX or
-        element.features.bScrollableY)
-    frame: {
-        const frame_key = self.GetElementKeyAt(element_i);
-        const frame_info = self.persistent_data.getOrPut(frame_key) catch break :frame &.empty;
+    const frame: *const FrameState = frame: {
+        const frame_key = element.HashKey();
+        assert(!element.NeedsHash() or frame_key.len > 0);
+        if (frame_key.len == 0) break :frame &.empty;
 
+        const frame_info = self.persistent_data.getOrPut(frame_key) catch break :frame &.empty;
         const frame = frame_info.value_ptr;
         if (!frame_info.found_existing) frame.* = .empty;
         frame.element = element.id;
         frame.btn_mode = self.btn_mode_vstk.GetOrNull() orelse .default;
         break :frame frame;
-    } else &.empty;
+    };
 
-    // FIXME: apply limits based on children
     if (element.features.bScrollableX) {
         element.scroll_offset.x = frame.scroll_offset.x;
     }
 
-    // FIXME: apply limits based on children
     if (element.features.bScrollableY) {
         element.scroll_offset.y = frame.scroll_offset.y;
     }
@@ -1304,30 +1306,42 @@ fn GetElementKeyAt(self: *GU, i: usize) []const u8 {
     return self.GetElementAt(i).HashKey();
 }
 
-fn GetElementClicked(self: *GU) bool {
+fn GetElementFrameState(self: *GU) *const FrameState {
     const frame_key = self.GetElementKey();
-    const frame: FrameState = self.persistent_data.get(frame_key) orelse .empty;
-    return frame.btn_activated;
+    const entry = self.persistent_data.getEntry(frame_key) orelse return &.empty;
+    return entry.value_ptr;
+}
+
+fn GetElementFrameStateAt(self: *GU, i: usize) *const FrameState {
+    const frame_key = self.GetElementKeyAt(i);
+    const entry = self.persistent_data.getEntry(frame_key) orelse return &.empty;
+    return entry.value_ptr;
+}
+
+pub fn GetElementClicked(self: *GU) bool {
+    return self.GetElementFrameState().btn_activated;
 }
 
 fn GetElementClickedAt(self: *GU, i: usize) bool {
-    const frame_key = self.GetElementKeyAt(i);
-    const frame: FrameState = self.persistent_data.get(frame_key) orelse .empty;
-    return frame.btn_activated;
+    return self.GetElementFrameStateAt(i).btn_activated;
+}
+
+pub fn GetElementScrollArea(self: *GU) Vec2 {
+    return self.GetElementFrameState().scroll_area;
+}
+
+fn GetElementScrollAreaAt(self: *GU, i: usize) Vec2 {
+    return self.GetElementFrameStateAt(i).scroll_area;
 }
 
 // FIXME: remove, for testing
 pub fn GetElementScroll(self: *GU) Vec2 {
-    const frame_key = self.GetElementKey();
-    const frame: FrameState = self.persistent_data.get(frame_key) orelse .empty;
-    return frame.scroll_offset;
+    return self.GetElementFrameState().scroll_offset;
 }
 
 // FIXME: remove, for testing
-pub fn GetElementScrollAt(self: *GU, i: usize) Vec2 {
-    const frame_key = self.GetElementKeyAt(i);
-    const frame: FrameState = self.persistent_data.get(frame_key) orelse .empty;
-    return frame.scroll_offset;
+fn GetElementScrollAt(self: *GU, i: usize) Vec2 {
+    return self.GetElementFrameStateAt(i).scroll_offset;
 }
 
 // FIXME: the following will need to be moved and possibly adjusted for the
