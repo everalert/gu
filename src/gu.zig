@@ -146,10 +146,9 @@ pub const RCClip = struct {
 
 //------------------------------------------------------------------------------
 
-// FIXME: rename to something more appropriate, that reflects usage of general
-//  frame state, not just buttons
+// TODO: extract button state machine?
 /// inter-frame state tracking, associated with element via hashtable
-pub const Button = struct {
+pub const FrameState = struct {
     element: usize,
     area: Rect,
     btn_mode: ButtonMode,
@@ -158,7 +157,7 @@ pub const Button = struct {
     scroll_offset: Vec2,
     scroll_area: Vec2,
 
-    pub const empty = Button{
+    pub const empty = FrameState{
         .element = maxInt(usize), // NOTE: maxInt is how the system identifies unused items to delete
         .area = .zero,
         .btn_mode = .default,
@@ -168,42 +167,44 @@ pub const Button = struct {
         .scroll_area = .zero,
     };
 
-    // FIXME: consolidate with scroll update, take generic mouse struct rather
-    //  than all the mouse state individually
     pub fn Update(
-        self: *Button,
-        pt: *const Vec2,
-        btn_just_down: bool,
-        btn_just_up: bool,
+        self: *FrameState,
+        element: *const Element,
+        mouse: *const MouseInput,
     ) void {
+        // update/reset data
+        self.area = element.clip;
+        self.scroll_area = element.scroll_area;
+        self.element = maxInt(usize);
+
+        // lmb
         self.btn_activated = false;
-        if (self.area.IsCollidingPoint(pt)) {
+        if (self.area.IsCollidingPoint(&mouse.pos)) blk: {
             if (self.btn_state == .Idle)
                 self.btn_state = .Hover;
 
-            if (self.btn_state == .Hover and btn_just_down) {
+            if (self.btn_state == .Hover and mouse.lb.just_down) {
                 self.btn_state = .Down;
                 if (self.btn_mode == .Press) {
                     self.btn_activated = true;
-                    return;
+                    break :blk;
                 }
             }
 
-            if (self.btn_state == .Down and btn_just_up) {
+            if (self.btn_state == .Down and mouse.lb.just_up) {
                 self.btn_state = .Hover;
                 if (self.btn_mode == .Release) {
                     self.btn_activated = true;
-                    return;
+                    break :blk;
                 }
             }
         } else {
             self.btn_state = .Idle;
         }
-    }
 
-    // TODO: scroll smoothness as param
-    pub fn UpdateScroll(self: *Button, pt: *const Vec2, scroll: *const Vec2) void {
-        if (self.area.IsCollidingPoint(pt)) self.scroll_offset = self.scroll_offset.ADD(scroll.*);
+        // scroll
+        if (self.area.IsCollidingPoint(&mouse.pos))
+            self.scroll_offset = self.scroll_offset.ADD(mouse.scroll.scroll);
         self.scroll_offset = self.scroll_offset.CLAMP(self.scroll_area.inv(), .zero);
     }
 };
@@ -273,6 +274,38 @@ pub const ScrollState = struct {
     pub fn Update(self: *ScrollState) void {
         self.scroll = self.accumulator;
         self.accumulator = .zero;
+    }
+};
+
+pub const MouseInput = struct {
+    pos: Vec2,
+    lb: KeyState,
+    rb: KeyState,
+    scroll: ScrollState,
+
+    pub const start = MouseInput{
+        .pos = .init(-1, -1),
+        .lb = .start,
+        .rb = .start,
+        .scroll = .start,
+    };
+
+    pub fn AccumulateLB(self: *MouseInput, down: bool) void {
+        self.lb.Accumulate(down);
+    }
+
+    pub fn AccumulateRB(self: *MouseInput, down: bool) void {
+        self.rb.Accumulate(down);
+    }
+
+    pub fn AccumulateScroll(self: *MouseInput, x: f32, y: f32) void {
+        self.scroll.Accumulate(x, y);
+    }
+
+    pub fn Update(self: *MouseInput) void {
+        self.lb.Update();
+        self.rb.Update();
+        self.scroll.Update();
     }
 };
 
@@ -562,8 +595,8 @@ base_layout: Layout,
 base_button_style: ButtonStyle,
 base_font: FontHandle,
 
-buttons: StringHashMap(Button),
-button_delete_queue: ArrayList([]const u8),
+persistent_data: StringHashMap(FrameState),
+persistent_data_delete_queue: ArrayList([]const u8), // hashes
 btn_mode_vstk: ValueStack(ButtonMode),
 
 btn_style_arena: ArrayList(ButtonStyle), // arraylist for the typing/alignment, usage is like arena
@@ -581,9 +614,7 @@ render_commands_rect: ArrayList(RCRect),
 render_commands_text: ArrayList(RCText),
 render_commands_clip: ArrayList(RCClip),
 
-mouse_pt: Vec2,
-mouse_left: KeyState, // LMB
-mouse_scroll: ScrollState,
+mouse: MouseInput,
 
 pub fn Init(
     alloc: Allocator,
@@ -600,8 +631,8 @@ pub fn Init(
         .element_stack = .empty,
         .element_line_stack = .empty,
         .clip_stack = .empty,
-        .buttons = .init(alloc),
-        .button_delete_queue = .empty,
+        .persistent_data = .init(alloc),
+        .persistent_data_delete_queue = .empty,
         .btn_mode_vstk = .Init(alloc),
         .btn_style_arena = .empty,
         .btn_style_vstk_padding_ver = .Init(alloc),
@@ -622,9 +653,7 @@ pub fn Init(
         .base_font = base_font,
         .element_queue_line_break = false,
         .element_sibling = null,
-        .mouse_pt = .{ .x = -1, .y = -1 },
-        .mouse_left = .start,
-        .mouse_scroll = .start,
+        .mouse = .start,
     };
 }
 
@@ -672,8 +701,7 @@ pub fn BeginFrame(self: *GU) !void {
     self.render_commands_clip.clearRetainingCapacity();
     self.element_tree.clearRetainingCapacity();
     self.element_sibling = null;
-    self.mouse_left.Update();
-    self.mouse_scroll.Update();
+    self.mouse.Update();
 
     self.element_line_stack.append(self.allocator, zeroInit(LineData, .{ .line = 1 })) catch unreachable;
     if (!self.DoElement(&self.base_layout)) unreachable;
@@ -697,7 +725,7 @@ pub fn EndFrame(self: *GU) void {
     self.DoElementPositioning();
     self.DoElementClipping();
     self.DoElementEmitRenderCommands();
-    self.DoButtonPostProcessing();
+    self.DoInterFrameProcessing();
     //self.DoElementDebugLog();
 
     for (self.render_commands.items) |cmd| {
@@ -988,30 +1016,26 @@ fn DoElementEmitRenderCommands(self: *GU) void {
     }
 }
 
-// FIXME: rename to DoInputPostProcessing or DoInterFrameProcessing
-fn DoButtonPostProcessing(self: *GU) void {
-    assert(self.button_delete_queue.items.len == 0);
+// TODO: make delete queue a ValueStack and get rid of the error?
+fn DoInterFrameProcessing(self: *GU) void {
+    assert(self.persistent_data_delete_queue.items.len == 0);
 
-    var it = self.buttons.iterator();
-    while (it.next()) |btn_info| {
-        const btn = btn_info.value_ptr;
+    var it = self.persistent_data.iterator();
+    while (it.next()) |frame_info| {
+        const frame = frame_info.value_ptr;
 
-        if (btn.element == maxInt(usize)) {
-            self.button_delete_queue.append(self.allocator, btn_info.key_ptr.*) catch |err|
-                std.debug.panic("DoButtonPostProcessing ({s})", .{@errorName(err)});
+        if (frame.element == maxInt(usize)) {
+            self.persistent_data_delete_queue.append(self.allocator, frame_info.key_ptr.*) catch |err|
+                std.debug.panic("(DoInterFrameProcessing) ERROR: {t}", .{err});
             continue;
         }
 
-        btn.area = self.element_tree.items[btn.element].clip;
-        btn.scroll_area = self.element_tree.items[btn.element].scroll_area;
-        btn.element = maxInt(usize);
-
-        btn.Update(&self.mouse_pt, self.mouse_left.just_down, self.mouse_left.just_up);
-        btn.UpdateScroll(&self.mouse_pt, &self.mouse_scroll.scroll);
+        const element = &self.element_tree.items[frame.element];
+        frame.Update(element, &self.mouse);
     }
 
-    while (self.button_delete_queue.pop()) |item|
-        _ = self.buttons.remove(item);
+    while (self.persistent_data_delete_queue.pop()) |item|
+        _ = self.persistent_data.remove(item);
 }
 
 fn DoElementDebugLog(self: *GU) void {
@@ -1138,28 +1162,28 @@ pub fn EndElement(self: *GU) void {
     }
 
     // update inter-frame state
-    const btn: *const Button = if (element.features.bClickable or
+    const frame: *const FrameState = if (element.features.bClickable or
         element.features.bScrollableX or
         element.features.bScrollableY)
-    btn: {
-        const btn_key = self.GetElementKeyAt(element_i);
-        const btn_info = self.buttons.getOrPut(btn_key) catch break :btn &.empty;
+    frame: {
+        const frame_key = self.GetElementKeyAt(element_i);
+        const frame_info = self.persistent_data.getOrPut(frame_key) catch break :frame &.empty;
 
-        const btn = btn_info.value_ptr;
-        if (!btn_info.found_existing) btn.* = .empty;
-        btn.element = element.id;
-        btn.btn_mode = self.btn_mode_vstk.GetOrNull() orelse .default;
-        break :btn btn;
+        const frame = frame_info.value_ptr;
+        if (!frame_info.found_existing) frame.* = .empty;
+        frame.element = element.id;
+        frame.btn_mode = self.btn_mode_vstk.GetOrNull() orelse .default;
+        break :frame frame;
     } else &.empty;
 
     // FIXME: apply limits based on children
     if (element.features.bScrollableX) {
-        element.scroll_offset.x = btn.scroll_offset.x;
+        element.scroll_offset.x = frame.scroll_offset.x;
     }
 
     // FIXME: apply limits based on children
     if (element.features.bScrollableY) {
-        element.scroll_offset.y = btn.scroll_offset.y;
+        element.scroll_offset.y = frame.scroll_offset.y;
     }
 
     // Button
@@ -1167,7 +1191,7 @@ pub fn EndElement(self: *GU) void {
         // visual updating
         if (!element.features.bClickNoStyle) {
             const btn_style = &self.btn_style_arena.items[self.ButtonStyleGet()];
-            element.layout.color = switch (btn.btn_state) {
+            element.layout.color = switch (frame.btn_state) {
                 .Idle => if (element.features.bClickDepressed) btn_style.ColorDown else btn_style.ColorIdle,
                 .Hover => if (element.features.bClickDepressed) btn_style.ColorIdle else btn_style.ColorHover,
                 .Down => btn_style.ColorDown,
@@ -1238,29 +1262,29 @@ fn GetElementKeyAt(self: *GU, i: usize) []const u8 {
 }
 
 fn GetElementClicked(self: *GU) bool {
-    const btn_key = self.GetElementKey();
-    const btn: Button = self.buttons.get(btn_key) orelse .empty;
-    return btn.btn_activated;
+    const frame_key = self.GetElementKey();
+    const frame: FrameState = self.persistent_data.get(frame_key) orelse .empty;
+    return frame.btn_activated;
 }
 
 fn GetElementClickedAt(self: *GU, i: usize) bool {
-    const btn_key = self.GetElementKeyAt(i);
-    const btn: Button = self.buttons.get(btn_key) orelse .empty;
-    return btn.btn_activated;
+    const frame_key = self.GetElementKeyAt(i);
+    const frame: FrameState = self.persistent_data.get(frame_key) orelse .empty;
+    return frame.btn_activated;
 }
 
 // FIXME: remove, for testing
 pub fn GetElementScroll(self: *GU) Vec2 {
-    const btn_key = self.GetElementKey();
-    const btn: Button = self.buttons.get(btn_key) orelse .empty;
-    return btn.scroll_offset;
+    const frame_key = self.GetElementKey();
+    const frame: FrameState = self.persistent_data.get(frame_key) orelse .empty;
+    return frame.scroll_offset;
 }
 
 // FIXME: remove, for testing
 pub fn GetElementScrollAt(self: *GU, i: usize) Vec2 {
-    const btn_key = self.GetElementKeyAt(i);
-    const btn: Button = self.buttons.get(btn_key) orelse .empty;
-    return btn.scroll_offset;
+    const frame_key = self.GetElementKeyAt(i);
+    const frame: FrameState = self.persistent_data.get(frame_key) orelse .empty;
+    return frame.scroll_offset;
 }
 
 // FIXME: the following will need to be moved and possibly adjusted for the

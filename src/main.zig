@@ -1015,16 +1015,16 @@ pub export fn SDL_AppEvent(app: *App, event: *c.SDL_Event) c.SDL_AppResult {
             return c.SDL_APP_SUCCESS;
         },
         c.SDL_EVENT_MOUSE_MOTION => {
-            app.gu.mouse_pt.x = event.motion.x;
-            app.gu.mouse_pt.y = event.motion.y;
+            app.gu.mouse.pos.x = event.motion.x;
+            app.gu.mouse.pos.y = event.motion.y;
         },
         c.SDL_EVENT_MOUSE_BUTTON_UP, c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
             if (event.button.button != c.SDL_BUTTON_LEFT) return c.SDL_APP_CONTINUE;
             const down = event.type == c.SDL_EVENT_MOUSE_BUTTON_DOWN;
-            app.gu.mouse_left.Accumulate(down);
+            app.gu.mouse.lb.Accumulate(down);
         },
         c.SDL_EVENT_MOUSE_WHEEL => {
-            app.gu.mouse_scroll.Accumulate(
+            app.gu.mouse.scroll.Accumulate(
                 event.wheel.x * app.scroll_step_size,
                 event.wheel.y * app.scroll_step_size,
             );
@@ -1208,7 +1208,7 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoLineBreak();
         const str_scroll = gu.MakeString(
             "Scroll:  x:{d:3.1} y:{d:3.1}",
-            .{ gu.mouse_scroll.scroll.x, gu.mouse_scroll.scroll.y },
+            .{ gu.mouse.scroll.scroll.x, gu.mouse.scroll.scroll.y },
         );
         gu.DoLabel(0xCCCCFFFF, str_scroll);
     }
