@@ -1052,6 +1052,7 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     const main_key = "MAIN_CONTAINER";
     var main_scroll: Vec2 = .zero;
     var main_scroll_area: Vec2 = .zero;
+    const subtitle_key = "TEXT_DEMO_SUBTITLE";
 
     // NOTE: frame advance helper for debugging
     //if (!app.step) return c.SDL_APP_CONTINUE;
@@ -1155,7 +1156,7 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         if (gu.DoElement(null)) {
             defer gu.EndElement();
             const subtitle_element = gu.GetElement();
-            subtitle_element.name = "TEXT_DEMO_SUBTITLE";
+            subtitle_element.name = subtitle_key;
             gu.SetNextFont(app.font_styles[FONT_NAMEHERE_BOLD]);
             gu.DoLabelsFromString("THIS IS A SUBTITLE MY DUDES");
         }
@@ -1250,14 +1251,14 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoLabel(0xCCCCFFFF, str_main_scroll_area);
 
         gu.DoLineBreak();
-        const subtitle_po = gu.GetElementParentOffsetFromKey("TEXT_DEMO_SUBTITLE");
+        const subtitle_po = gu.GetElementParentOffsetFromKey(subtitle_key);
         const str_subtitle_po = gu.MakeString(
             "SubtitlePO:  x:{d:3.1} y:{d:3.1}",
             .{ subtitle_po.x, subtitle_po.y },
         );
         gu.DoLabel(0xCCCCFFFF, str_subtitle_po);
         gu.DoLineBreak();
-        const subtitle_pou = gu.GetElementParentOffsetUnscrolledFromKey("TEXT_DEMO_SUBTITLE");
+        const subtitle_pou = gu.GetElementParentOffsetUnscrolledFromKey(subtitle_key);
         const str_subtitle_pou = gu.MakeString(
             "SubtitlePOU:  x:{d:3.1} y:{d:3.1}",
             .{ subtitle_pou.x, subtitle_pou.y },
@@ -1272,7 +1273,7 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
             gu.SetElementScrollDirect(main_key, .init(0, 200));
         gu.DoLineBreak();
         if (gu.DoButton("Scroll Direct to Subtitle"))
-            gu.SetElementScrollDirect(main_key, .init(0, subtitle_pou.y));
+            gu.SetElementScrollDirectToChild(main_key, subtitle_key);
         gu.DoLineBreak();
         if (gu.DoButton("Scroll Direct to Bottom"))
             gu.SetElementScrollDirectPercent(main_key, .init(0, 1.0));
@@ -1284,7 +1285,7 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
             gu.SetElementScrollTarget(main_key, .init(0, 200));
         gu.DoLineBreak();
         if (gu.DoButton("Scroll Target to Subtitle"))
-            gu.SetElementScrollTarget(main_key, .init(0, subtitle_pou.y));
+            gu.SetElementScrollTargetToChild(main_key, subtitle_key);
         gu.DoLineBreak();
         if (gu.DoButton("Scroll Target to Bottom"))
             gu.SetElementScrollTargetPercent(main_key, .init(0, 1.0));
@@ -1299,7 +1300,7 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
             gu.SetElementScrollPercent(main_key, .init(0, 0.5), .init(0, 0.05));
         gu.DoLineBreak();
         if (gu.DoButton("Fancy Scroll to Subtitle"))
-            gu.SetElementScroll(main_key, .init(0, subtitle_pou.y), .init(0, 150));
+            gu.SetElementScrollToChild(main_key, subtitle_key, .init(0, 150));
         gu.DoLineBreak();
         if (gu.DoButton("Fancy Scroll to Bottom"))
             gu.SetElementScrollPercent(main_key, .init(0, 1.0), .init(0, 0.05));

@@ -1340,6 +1340,7 @@ fn GetElementFrameStateFromKey(self: *GU, key: []const u8) ?*FrameState {
 }
 
 // FIXME: consider which of these needs to be kept, deleted, made public, etc.
+// TODO: scroll options that leave one axis alone
 
 pub fn GetElementClicked(self: *GU) bool {
     return self.GetElementFrameState().btn_activated;
@@ -1409,10 +1410,10 @@ pub fn SetElementScroll(self: *GU, key: []const u8, pos: Vec2, offset: Vec2) voi
         frame.scroll_offset.y = frame.scroll_target.y - offset.y * std.math.sign(offset_dif.y);
 }
 
-pub fn SetElementScrollPercent(self: *GU, key: []const u8, percent: Vec2, offset: Vec2) void {
+pub fn SetElementScrollPercent(self: *GU, key: []const u8, percent: Vec2, offset_percent: Vec2) void {
     const frame = self.GetElementFrameStateFromKey(key) orelse return;
     frame.scroll_target = frame.scroll_area.MUL(percent).inv();
-    const offset_amt = frame.scroll_area.MUL(offset).inv();
+    const offset_amt = frame.scroll_area.MUL(offset_percent).inv();
     const offset_dif = frame.scroll_target.SUB(frame.scroll_offset);
     if (@abs(offset_dif.x) > @abs(offset_amt.x))
         frame.scroll_offset.x = frame.scroll_target.x + offset_amt.x * std.math.sign(offset_dif.x);
@@ -1434,6 +1435,20 @@ pub inline fn SetElementScrollTarget(self: *GU, key: []const u8, pos: Vec2) void
 
 pub inline fn SetElementScrollTargetPercent(self: *GU, key: []const u8, percent: Vec2) void {
     self.SetElementScrollPercent(key, percent, .one);
+}
+
+/// @offset     target-offset dif for scroll param, same as SetElementScroll@offset
+pub fn SetElementScrollToChild(self: *GU, key: []const u8, child_key: []const u8, offset: Vec2) void {
+    const pos = self.GetElementParentOffsetUnscrolledFromKey(child_key);
+    self.SetElementScroll(key, pos, offset);
+}
+
+pub inline fn SetElementScrollDirectToChild(self: *GU, key: []const u8, child_key: []const u8) void {
+    self.SetElementScrollToChild(key, child_key, .zero);
+}
+
+pub inline fn SetElementScrollTargetToChild(self: *GU, key: []const u8, child_key: []const u8) void {
+    self.SetElementScrollToChild(key, child_key, .inf);
 }
 
 // FIXME: the following will need to be moved and possibly adjusted for the
