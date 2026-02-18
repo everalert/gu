@@ -1341,6 +1341,7 @@ fn GetElementFrameStateFromKey(self: *GU, key: []const u8) ?*FrameState {
 
 // FIXME: consider which of these needs to be kept, deleted, made public, etc.
 // TODO: scroll options that leave one axis alone
+// TODO: scroll-to-child options that position the child somewhere in the viewable area
 
 pub fn GetElementClicked(self: *GU) bool {
     return self.GetElementFrameState().btn_activated;
@@ -1402,7 +1403,7 @@ fn GetElementScrollAt(self: *GU, i: usize) Vec2 {
 
 pub fn SetElementScroll(self: *GU, key: []const u8, pos: Vec2, offset: Vec2) void {
     const frame = self.GetElementFrameStateFromKey(key) orelse return;
-    frame.scroll_target = pos.inv();
+    frame.scroll_target = pos.CLAMP(.zero, frame.scroll_area).inv();
     const offset_dif = frame.scroll_target.SUB(frame.scroll_offset);
     if (@abs(offset_dif.x) > @abs(offset.x))
         frame.scroll_offset.x = frame.scroll_target.x - offset.x * std.math.sign(offset_dif.x);
@@ -1412,7 +1413,7 @@ pub fn SetElementScroll(self: *GU, key: []const u8, pos: Vec2, offset: Vec2) voi
 
 pub fn SetElementScrollPercent(self: *GU, key: []const u8, percent: Vec2, offset_percent: Vec2) void {
     const frame = self.GetElementFrameStateFromKey(key) orelse return;
-    frame.scroll_target = frame.scroll_area.MUL(percent).inv();
+    frame.scroll_target = frame.scroll_area.MUL(percent.CLAMP(.zero, .one)).inv();
     const offset_amt = frame.scroll_area.MUL(offset_percent).inv();
     const offset_dif = frame.scroll_target.SUB(frame.scroll_offset);
     if (@abs(offset_dif.x) > @abs(offset_amt.x))
