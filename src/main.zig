@@ -1048,6 +1048,8 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     // "external data" for custom render command demo
     var pcm8_data: [128]i8 = undefined;
     const pcm8_data_sl: []i8 = pcm8_data[0..128];
+
+    const main_key = "MAIN_CONTAINER";
     var main_scroll: Vec2 = .zero;
     var main_scroll_area: Vec2 = .zero;
 
@@ -1133,7 +1135,7 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.SetElementGaps(4, 4);
         element.features.bTextSpacing = true;
         element.features.bScrollableY = true;
-        element.name = "MAIN_CONTAINER";
+        element.name = main_key;
         main_scroll = gu.GetElementScroll();
         main_scroll_area = gu.GetElementScrollArea();
 
@@ -1218,19 +1220,49 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
 
         gu.DoSpacerV(32, 4);
 
-        gu.DoLabel(0xCCCCFFFF, "MAIN CONTAINER");
+        gu.DoLabel(0xCCCCFFFF, main_key);
+
         gu.DoLineBreak();
         const str_main_scroll = gu.MakeString(
             "Scroll:  x:{d:3.1} y:{d:3.1}",
             .{ main_scroll.x, main_scroll.y },
         );
         gu.DoLabel(0xCCCCFFFF, str_main_scroll);
+
         gu.DoLineBreak();
         const str_main_scroll_area = gu.MakeString(
             "ScrollArea:  x:{d:3.1} y:{d:3.1}",
             .{ main_scroll_area.x, main_scroll_area.y },
         );
         gu.DoLabel(0xCCCCFFFF, str_main_scroll_area);
+
+        gu.DoLineBreak();
+        if (gu.DoButton("Scroll Direct to Top"))
+            gu.SetElementScrollDirectPercent(main_key, .init(0, 0.0));
+        gu.DoLineBreak();
+        if (gu.DoButton("Scroll Direct to 200px"))
+            gu.SetElementScrollDirect(main_key, .init(0, 200));
+        gu.DoLineBreak();
+        if (gu.DoButton("Scroll Direct to Bottom"))
+            gu.SetElementScrollDirectPercent(main_key, .init(0, 1.0));
+        gu.DoLineBreak();
+        if (gu.DoButton("Scroll Target to Top"))
+            gu.SetElementScrollTargetPercent(main_key, .init(0, 0.0));
+        gu.DoLineBreak();
+        if (gu.DoButton("Scroll Target to 200px"))
+            gu.SetElementScrollTarget(main_key, .init(0, 200));
+        gu.DoLineBreak();
+        if (gu.DoButton("Scroll Target to Bottom"))
+            gu.SetElementScrollTargetPercent(main_key, .init(0, 1.0));
+        gu.DoLineBreak();
+        if (gu.DoButton("Fancy Scroll to Top"))
+            gu.SetElementScrollPercent(main_key, .init(0, 0.0), .init(0, 0.05));
+        gu.DoLineBreak();
+        if (gu.DoButton("Fancy Scroll to Middle"))
+            gu.SetElementScrollPercent(main_key, .init(0, 0.5), .init(0, 0.05));
+        gu.DoLineBreak();
+        if (gu.DoButton("Fancy Scroll to Bottom"))
+            gu.SetElementScrollPercent(main_key, .init(0, 1.0), .init(0, 0.05));
     }
 
     gu.EndFrame();

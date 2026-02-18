@@ -7,6 +7,8 @@ x: f32,
 y: f32,
 
 pub const zero: Vec2 = .{ .x = 0, .y = 0 };
+pub const one: Vec2 = .{ .x = 1, .y = 1 };
+pub const inf: Vec2 = .{ .x = std.math.inf(f32), .y = std.math.inf(f32) };
 
 pub fn init(x: f32, y: f32) Vec2 {
     return Vec2{ .x = x, .y = y };
@@ -86,6 +88,10 @@ pub fn MIN(v: Vec2, min: Vec2) Vec2 {
 
 pub fn MAX(v: Vec2, max: Vec2) Vec2 {
     return Vec2{ .x = @max(v.x, max.x), .y = @max(v.y, max.y) };
+}
+
+pub fn ROUND(v: Vec2) Vec2 {
+    return Vec2{ .x = @round(v.x), .y = @round(v.y) };
 }
 
 //------------------------------------------------------------------------------
