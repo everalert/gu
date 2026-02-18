@@ -151,6 +151,9 @@ pub const RCClip = struct {
 pub const FrameState = struct {
     element: usize,
     area: Rect,
+    area_clipped: Rect,
+    local_position: Vec2,
+    local_position_unscrolled: Vec2,
     btn_mode: ButtonMode,
     btn_state: ButtonState,
     btn_activated: bool,
@@ -161,6 +164,9 @@ pub const FrameState = struct {
     pub const empty = FrameState{
         .element = maxInt(usize), // NOTE: maxInt is how the system identifies unused items to delete
         .area = .zero,
+        .area_clipped = .zero,
+        .local_position = .zero,
+        .local_position_unscrolled = .zero,
         .btn_mode = .default,
         .btn_state = .Idle,
         .btn_activated = false,
@@ -172,17 +178,26 @@ pub const FrameState = struct {
     pub fn Update(
         self: *FrameState,
         element: *const Element,
+        element_parent: ?*const Element,
         mouse: *const MouseInput,
         scroll_lerp_factor: f32,
     ) void {
         // update/reset data
-        self.area = element.clip;
+        self.area = element.area;
+        self.area_clipped = element.clip;
+        if (element_parent) |p| {
+            self.local_position = p.area.getPos().SUB(element.area.getPos()).inv();
+            self.local_position_unscrolled = self.local_position.SUB(p.scroll_offset);
+        } else {
+            self.local_position = element.area.getPos();
+            self.local_position_unscrolled = self.local_position;
+        }
         self.scroll_area = element.scroll_area;
         self.element = maxInt(usize);
 
         // lmb
         self.btn_activated = false;
-        if (self.area.IsCollidingPoint(&mouse.pos)) blk: {
+        if (self.area_clipped.IsCollidingPoint(&mouse.pos)) blk: {
             if (self.btn_state == .Idle)
                 self.btn_state = .Hover;
 
@@ -206,7 +221,7 @@ pub const FrameState = struct {
         }
 
         // scroll
-        if (self.area.IsCollidingPoint(&mouse.pos))
+        if (self.area_clipped.IsCollidingPoint(&mouse.pos))
             self.scroll_target = self.scroll_target.ADD(mouse.scroll.scroll);
         self.scroll_target = self.scroll_target.CLAMP(self.scroll_area.inv(), .zero);
         self.scroll_offset = self.scroll_offset.CLAMP(self.scroll_area.inv(), .zero);
@@ -1079,7 +1094,8 @@ fn DoInterFrameProcessing(self: *GU) void {
         const damp_lerp_factor = 1 - std.math.pow(f32, self.config_scroll_smoothing, @floatCast(self.dt_f));
 
         const element = &self.element_tree.items[frame.element];
-        frame.Update(element, &self.mouse, damp_lerp_factor);
+        const element_parent = if (element.parent) |p| &self.element_tree.items[p] else null;
+        frame.Update(element, element_parent, &self.mouse, damp_lerp_factor);
     }
 
     while (self.persistent_data_delete_queue.pop()) |item|
@@ -1333,6 +1349,32 @@ fn GetElementClickedAt(self: *GU, i: usize) bool {
     return self.GetElementFrameStateAt(i).btn_activated;
 }
 
+pub fn GetElementParentOffset(self: *GU) Vec2 {
+    return self.GetElementFrameState().local_position;
+}
+
+fn GetElementParentOffsetAt(self: *GU, i: usize) Vec2 {
+    return self.GetElementFrameStateAt(i).local_position;
+}
+
+pub fn GetElementParentOffsetFromKey(self: *GU, key: []const u8) Vec2 {
+    const frame = self.GetElementFrameStateFromKey(key) orelse return .zero;
+    return frame.local_position;
+}
+
+pub fn GetElementParentOffsetUnscrolled(self: *GU) Vec2 {
+    return self.GetElementFrameState().local_position_unscrolled;
+}
+
+fn GetElementParentOffsetUnscrolledAt(self: *GU, i: usize) Vec2 {
+    return self.GetElementFrameStateAt(i).local_position_unscrolled;
+}
+
+pub fn GetElementParentOffsetUnscrolledFromKey(self: *GU, key: []const u8) Vec2 {
+    const frame = self.GetElementFrameStateFromKey(key) orelse return .zero;
+    return frame.local_position_unscrolled;
+}
+
 pub fn GetElementScrollArea(self: *GU) Vec2 {
     return self.GetElementFrameState().scroll_area;
 }
@@ -1362,9 +1404,9 @@ pub fn SetElementScroll(self: *GU, key: []const u8, pos: Vec2, offset: Vec2) voi
     frame.scroll_target = pos.inv();
     const offset_dif = frame.scroll_target.SUB(frame.scroll_offset);
     if (@abs(offset_dif.x) > @abs(offset.x))
-        frame.scroll_offset.x = frame.scroll_target.x + offset.x * std.math.sign(offset_dif.x);
+        frame.scroll_offset.x = frame.scroll_target.x - offset.x * std.math.sign(offset_dif.x);
     if (@abs(offset_dif.y) > @abs(offset.y))
-        frame.scroll_offset.y = frame.scroll_target.y + offset.y * std.math.sign(offset_dif.y);
+        frame.scroll_offset.y = frame.scroll_target.y - offset.y * std.math.sign(offset_dif.y);
 }
 
 pub fn SetElementScrollPercent(self: *GU, key: []const u8, percent: Vec2, offset: Vec2) void {

@@ -1152,6 +1152,19 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoLabelsFromString("\tThe quick, brown fox jumps over a lazy dog. DJs flock by when MTV ax quiz prog. Junk MTV quiz graced by fox whelps. Bawds jog, flick quartz, vex nymphs. Waltz, bad nymph, for quick jigs vex! Fox nymphs grab quick-jived waltz. Brick quiz whangs jumpy veldt fox. Bright vixens jump; dozy fowl quack. Quick wafting zephyrs vex bold Jim. Quick zephyrs blow, vexing daft Jim. Sex-charged fop blew my junk TV quiz. How quickly daft jumping zebras vex.\n  Two driven jocks help fax my big quiz. Quick, Baz, get my woven flax jodhpurs! \"Now fax quiz Jack!\" my brave ghost pled. Five quacking zephyrs jolt my wax bed. Flummoxed by job, kvetching W. zaps Iraq. Cozy sphinx waves quart jug of bad milk. A very bad quack might jinx zippy fowls. Few quips galvanized the mock jury box. Quick brown dogs jump over the lazy fox. The jay, pig, fox, zebra, and my wolves quack! Blowzy red vixens fight for a quick jump. Joaquin Phoenix was gazed by MTV for luck. A wizard's job is to vex chumps quickly in fog. Watch \"Jeopardy!\", Alex Trebek's fun TV quiz game. Woven silk pyjamas exchanged for blue quartz.");
 
         gu.DoLineBreak();
+        if (gu.DoElement(null)) {
+            defer gu.EndElement();
+            const subtitle_element = gu.GetElement();
+            subtitle_element.name = "TEXT_DEMO_SUBTITLE";
+            gu.SetNextFont(app.font_styles[FONT_NAMEHERE_BOLD]);
+            gu.DoLabelsFromString("THIS IS A SUBTITLE MY DUDES");
+        }
+
+        gu.DoLineBreak();
+        if (app.btn_toggle) gu.DoLabelsFromString("only visible if b2 is on.");
+        gu.DoLabelsFromString("\tThe quick, brown fox jumps over a lazy dog. DJs flock by when MTV ax quiz prog. Junk MTV quiz graced by fox whelps. Bawds jog, flick quartz, vex nymphs. Waltz, bad nymph, for quick jigs vex! Fox nymphs grab quick-jived waltz. Brick quiz whangs jumpy veldt fox. Bright vixens jump; dozy fowl quack. Quick wafting zephyrs vex bold Jim. Quick zephyrs blow, vexing daft Jim. Sex-charged fop blew my junk TV quiz. How quickly daft jumping zebras vex.\n  Two driven jocks help fax my big quiz. Quick, Baz, get my woven flax jodhpurs! \"Now fax quiz Jack!\" my brave ghost pled. Five quacking zephyrs jolt my wax bed. Flummoxed by job, kvetching W. zaps Iraq. Cozy sphinx waves quart jug of bad milk. A very bad quack might jinx zippy fowls. Few quips galvanized the mock jury box. Quick brown dogs jump over the lazy fox. The jay, pig, fox, zebra, and my wolves quack! Blowzy red vixens fight for a quick jump. Joaquin Phoenix was gazed by MTV for luck. A wizard's job is to vex chumps quickly in fog. Watch \"Jeopardy!\", Alex Trebek's fun TV quiz game. Woven silk pyjamas exchanged for blue quartz.");
+
+        gu.DoLineBreak();
         gu.SetNextFont(app.font_styles[FONT_NAMEHERE]);
         gu.DoLabelsFromString("The quick, brown fox jumps over a lazy dog.");
 
@@ -1237,11 +1250,29 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         gu.DoLabel(0xCCCCFFFF, str_main_scroll_area);
 
         gu.DoLineBreak();
+        const subtitle_po = gu.GetElementParentOffsetFromKey("TEXT_DEMO_SUBTITLE");
+        const str_subtitle_po = gu.MakeString(
+            "SubtitlePO:  x:{d:3.1} y:{d:3.1}",
+            .{ subtitle_po.x, subtitle_po.y },
+        );
+        gu.DoLabel(0xCCCCFFFF, str_subtitle_po);
+        gu.DoLineBreak();
+        const subtitle_pou = gu.GetElementParentOffsetUnscrolledFromKey("TEXT_DEMO_SUBTITLE");
+        const str_subtitle_pou = gu.MakeString(
+            "SubtitlePOU:  x:{d:3.1} y:{d:3.1}",
+            .{ subtitle_pou.x, subtitle_pou.y },
+        );
+        gu.DoLabel(0xCCCCFFFF, str_subtitle_pou);
+
+        gu.DoLineBreak();
         if (gu.DoButton("Scroll Direct to Top"))
             gu.SetElementScrollDirectPercent(main_key, .init(0, 0.0));
         gu.DoLineBreak();
         if (gu.DoButton("Scroll Direct to 200px"))
             gu.SetElementScrollDirect(main_key, .init(0, 200));
+        gu.DoLineBreak();
+        if (gu.DoButton("Scroll Direct to Subtitle"))
+            gu.SetElementScrollDirect(main_key, .init(0, subtitle_pou.y));
         gu.DoLineBreak();
         if (gu.DoButton("Scroll Direct to Bottom"))
             gu.SetElementScrollDirectPercent(main_key, .init(0, 1.0));
@@ -1252,14 +1283,23 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         if (gu.DoButton("Scroll Target to 200px"))
             gu.SetElementScrollTarget(main_key, .init(0, 200));
         gu.DoLineBreak();
+        if (gu.DoButton("Scroll Target to Subtitle"))
+            gu.SetElementScrollTarget(main_key, .init(0, subtitle_pou.y));
+        gu.DoLineBreak();
         if (gu.DoButton("Scroll Target to Bottom"))
             gu.SetElementScrollTargetPercent(main_key, .init(0, 1.0));
         gu.DoLineBreak();
         if (gu.DoButton("Fancy Scroll to Top"))
             gu.SetElementScrollPercent(main_key, .init(0, 0.0), .init(0, 0.05));
         gu.DoLineBreak();
+        if (gu.DoButton("Fancy Scroll to 200px"))
+            gu.SetElementScroll(main_key, .init(0, 200), .init(0, 150));
+        gu.DoLineBreak();
         if (gu.DoButton("Fancy Scroll to Middle"))
             gu.SetElementScrollPercent(main_key, .init(0, 0.5), .init(0, 0.05));
+        gu.DoLineBreak();
+        if (gu.DoButton("Fancy Scroll to Subtitle"))
+            gu.SetElementScroll(main_key, .init(0, subtitle_pou.y), .init(0, 150));
         gu.DoLineBreak();
         if (gu.DoButton("Fancy Scroll to Bottom"))
             gu.SetElementScrollPercent(main_key, .init(0, 1.0), .init(0, 0.05));
