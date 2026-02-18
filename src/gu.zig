@@ -580,6 +580,10 @@ const DimensionMode = enum {
     }
 };
 
+// TODO: ?? in future, layout may define a "direction" and this would make what
+//  is considered the main axis and cross axis context-dependent; in this case,
+//  AxisSpacingX and AxisSpacingY would need to be consolidated and take the
+//  layout direction as a parameter to derive the axis directions from
 // TODO: reorganize? this is layouting pass stuff, not layout definition stuff
 const LineData = struct {
     element: usize, // starting element
@@ -589,24 +593,22 @@ const LineData = struct {
     current_y: f32,
     current_h: f32,
     current_items: u32,
+    current_gaps: u32,
     current_w: f32,
     queue_consume_gap_x: bool,
     queue_consume_gap_y: bool, // FIXME: not used yet
     queue_line_break: bool,
     max_w: f32, // incl padding/gaps
 
-    // TODO: impl axis def in Layout and derive
-    pub inline fn AxisSpacing(self: *LineData, comptime axis: enum { Main, Cross }, items: usize) f32 {
-        const padding: f32, const gaps: f32 = switch (axis) {
-            .Main => .{ // x-axis
-                self.parent_padding.x * 2,
-                self.parent_gaps.x * @as(f32, @floatFromInt(items -| 1)),
-            },
-            .Cross => .{ // y-axis
-                self.parent_padding.y * 2,
-                self.parent_gaps.y * @as(f32, @floatFromInt(items -| 1)),
-            },
-        };
+    pub inline fn AxisSpacingX(self: *LineData, gap_count: usize) f32 {
+        const padding: f32 = self.parent_padding.x * 2;
+        const gaps: f32 = self.parent_gaps.x * @as(f32, @floatFromInt(gap_count));
+        return padding + gaps;
+    }
+
+    pub inline fn AxisSpacingY(self: *LineData, gap_count: usize) f32 {
+        const padding: f32 = self.parent_padding.y * 2;
+        const gaps: f32 = self.parent_gaps.y * @as(f32, @floatFromInt(gap_count));
         return padding + gaps;
     }
 };
@@ -819,7 +821,7 @@ fn DoElementLineBreakParsing(self: *GU) void {
     defer assert(self.element_line_stack.items.len == 0);
 
     const stack = &self.element_line_stack;
-    var ld_base = zeroInit(LineData, .{ .line = 1 });
+    var ld_base = zeroInit(LineData, .{ .line = 1 }); // FIXME: no zeroInit
     var ld: *LineData = &ld_base;
 
     var it = ElementIterator.Init(self.element_tree.items);
@@ -831,6 +833,7 @@ fn DoElementLineBreakParsing(self: *GU) void {
         const this_gap: Vec2 = .init(if (consume_gap_x) 0 else ld.parent_gaps.x, ld.parent_gaps.y);
         ld.queue_consume_gap_x = e.features.bConsumeNextGapX;
 
+        // FIXME: no zeroInit
         // parent->child
         if (it_data.relation == .Child) {
             stack.appendAssumeCapacity(zeroInit(LineData, .{
@@ -843,8 +846,8 @@ fn DoElementLineBreakParsing(self: *GU) void {
         // child->parent
         if (it_data.relation == .Parent) {
             const child_size: Vec2 = .init(
-                @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items)),
-                ld.current_h + ld.current_y + ld.AxisSpacing(.Cross, ld.line),
+                @max(ld.max_w, ld.current_w + ld.AxisSpacingX(ld.current_gaps)),
+                ld.current_h + ld.current_y + ld.AxisSpacingY(ld.line -| 1),
             );
             if (!e.layout.mode_w.IsPreComputable()) e.area.w = child_size.x;
             if (!e.layout.mode_h.IsPreComputable()) e.area.h = child_size.y;
@@ -859,9 +862,9 @@ fn DoElementLineBreakParsing(self: *GU) void {
         if (it_data.relation != .Parent) {
             e.gap = this_gap;
             if (e.layout.mode_w == .Stretch)
-                e.area.w = @max(p.?.area.w + e.area.w - ld.AxisSpacing(.Main, p.?.layout.widths.len), 0);
+                e.area.w = @max(p.?.area.w + e.area.w - ld.AxisSpacingX(p.?.layout.widths.len -| 1), 0);
             if (e.layout.mode_h == .Stretch)
-                e.area.h = @max(p.?.area.h + e.area.h - ld.AxisSpacing(.Cross, p.?.layout.heights.len), 0);
+                e.area.h = @max(p.?.area.h + e.area.h - ld.AxisSpacingY(p.?.layout.heights.len -| 1), 0);
         }
 
         if (p != null and
@@ -883,11 +886,12 @@ fn DoElementLineBreakParsing(self: *GU) void {
         ld.queue_line_break = false;
 
         if (it_data.relation == .Child or e.features.bLineBreak) {
-            ld.max_w = @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items));
+            ld.max_w = @max(ld.max_w, ld.current_w + ld.AxisSpacingX(ld.current_gaps));
             ld.line += 1;
             ld.current_y += ld.current_h;
             ld.current_w = e.area.w;
             ld.current_h = e.area.h;
+            ld.current_gaps = 0;
             ld.current_items = 1;
             ld.element = e.id;
             //ld.queue_consume_gap_y = false; // not used yet
@@ -896,8 +900,12 @@ fn DoElementLineBreakParsing(self: *GU) void {
             continue;
         }
 
+        ld.current_gaps += @intFromBool(!consume_gap_x);
         ld.current_items += 1;
-        ld.current_w += e.area.w + e.gap.x;
+        // fixes the ToggleButton2 early newline thing, but not sure if it's
+        // good for the whole system/in other contexts due to gap-x consumption
+        ld.current_w += e.area.w;
+        //ld.current_w += e.area.w + e.gap.x;
         ld.current_h = @max(ld.current_h, e.area.h);
     }
 }
@@ -909,7 +917,7 @@ fn DoElementPositioning(self: *GU) void {
     defer assert(self.element_line_stack.items.len == 0);
 
     const stack = &self.element_line_stack;
-    var ld_base = zeroInit(LineData, .{});
+    var ld_base = zeroInit(LineData, .{}); // FIXME: no zeroInit
     var ld: *LineData = &ld_base;
     var p: ?*Element = null;
 
@@ -925,6 +933,7 @@ fn DoElementPositioning(self: *GU) void {
             continue;
         }
 
+        // FIXME: no zeroInit
         // parent->child
         if (it_data.relation == .Child) {
             p = &self.element_tree.items[e.parent.?];
@@ -1181,6 +1190,7 @@ pub fn DoElement(self: *GU, layout: ?*const Layout) bool {
         self.element_sibling = null;
     }
 
+    // FIXME: no zeroInit
     self.element_line_stack.append(self.allocator, zeroInit(LineData, .{ .line = 1 })) catch |err|
         std.debug.panic("DoElement: ({s})", .{@errorName(err)});
     return true;
