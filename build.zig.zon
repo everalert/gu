@@ -2,7 +2,7 @@
     .name = .libgu,
     .version = "0.1.0",
     .minimum_zig_version = "0.15.1",
-    .fingerprint = 0xe5e06e467d718dbd,
+    .fingerprint = 0x9d4eb245d6600642,
 
     .dependencies = .{
         .sdl = .{
