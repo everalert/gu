@@ -1020,12 +1020,15 @@ pub export fn SDL_AppEvent(app: *App, event: *c.SDL_Event) c.SDL_AppResult {
             app.gu.mouse.pos.y = event.motion.y;
         },
         c.SDL_EVENT_MOUSE_BUTTON_UP, c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
-            if (event.button.button != c.SDL_BUTTON_LEFT) return c.SDL_APP_CONTINUE;
             const down = event.type == c.SDL_EVENT_MOUSE_BUTTON_DOWN;
-            app.gu.mouse.lb.Accumulate(down);
+            switch (event.button.button) {
+                c.SDL_BUTTON_LEFT => app.gu.mouse.AccumulateLB(down),
+                c.SDL_BUTTON_RIGHT => app.gu.mouse.AccumulateRB(down),
+                else => return c.SDL_APP_CONTINUE,
+            }
         },
         c.SDL_EVENT_MOUSE_WHEEL => {
-            app.gu.mouse.scroll.Accumulate(
+            app.gu.mouse.AccumulateScroll(
                 event.wheel.x * app.scroll_step_size,
                 event.wheel.y * app.scroll_step_size,
             );

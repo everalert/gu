@@ -634,8 +634,8 @@ base_layout: Layout,
 base_button_style: ButtonStyle,
 base_font: FontHandle,
 
-persistent_data: StringHashMap(FrameState),
-persistent_data_delete_queue: ArrayList([]const u8), // hashes
+frame_state: StringHashMap(FrameState),
+frame_state_delete_queue: ArrayList([]const u8), // hashes
 btn_mode_vstk: ValueStack(ButtonMode),
 
 btn_style_arena: ArrayList(ButtonStyle), // arraylist for the typing/alignment, usage is like arena
@@ -680,8 +680,8 @@ pub fn Init(
         .element_stack = .empty,
         .element_line_stack = .empty,
         .clip_stack = .empty,
-        .persistent_data = .init(alloc),
-        .persistent_data_delete_queue = .empty,
+        .frame_state = .init(alloc),
+        .frame_state_delete_queue = .empty,
         .btn_mode_vstk = .Init(alloc),
         .btn_style_arena = .empty,
         .btn_style_vstk_padding_ver = .Init(alloc),
@@ -902,10 +902,7 @@ fn DoElementLineBreakParsing(self: *GU) void {
 
         ld.current_gaps += @intFromBool(!consume_gap_x);
         ld.current_items += 1;
-        // fixes the ToggleButton2 early newline thing, but not sure if it's
-        // good for the whole system/in other contexts due to gap-x consumption
         ld.current_w += e.area.w;
-        //ld.current_w += e.area.w + e.gap.x;
         ld.current_h = @max(ld.current_h, e.area.h);
     }
 }
@@ -1085,16 +1082,16 @@ fn DoElementEmitRenderCommands(self: *GU) void {
 
 // TODO: make delete queue a ValueStack and get rid of the error?
 fn DoInterFrameProcessing(self: *GU) void {
-    assert(self.persistent_data_delete_queue.items.len == 0);
+    assert(self.frame_state_delete_queue.items.len == 0);
     assert(self.config_scroll_smoothing >= 0.0);
     assert(self.config_scroll_smoothing < 1.0);
 
-    var it = self.persistent_data.iterator();
+    var it = self.frame_state.iterator();
     while (it.next()) |frame_info| {
         const frame = frame_info.value_ptr;
 
         if (frame.element == maxInt(usize)) {
-            self.persistent_data_delete_queue.append(self.allocator, frame_info.key_ptr.*) catch |err|
+            self.frame_state_delete_queue.append(self.allocator, frame_info.key_ptr.*) catch |err|
                 std.debug.panic("(DoInterFrameProcessing) ERROR: {t}", .{err});
             continue;
         }
@@ -1107,8 +1104,8 @@ fn DoInterFrameProcessing(self: *GU) void {
         frame.Update(element, element_parent, &self.mouse, damp_lerp_factor);
     }
 
-    while (self.persistent_data_delete_queue.pop()) |item|
-        _ = self.persistent_data.remove(item);
+    while (self.frame_state_delete_queue.pop()) |item|
+        _ = self.frame_state.remove(item);
 }
 
 fn DoElementDebugLog(self: *GU) void {
@@ -1241,7 +1238,7 @@ pub fn EndElement(self: *GU) void {
         assert(!element.NeedsHash() or frame_key.len > 0);
         if (frame_key.len == 0) break :frame &.empty;
 
-        const frame_info = self.persistent_data.getOrPut(frame_key) catch break :frame &.empty;
+        const frame_info = self.frame_state.getOrPut(frame_key) catch break :frame &.empty;
         const frame = frame_info.value_ptr;
         if (!frame_info.found_existing) frame.* = .empty;
         frame.element = element.id;
@@ -1334,18 +1331,18 @@ fn GetElementKeyAt(self: *GU, i: usize) []const u8 {
 
 fn GetElementFrameState(self: *GU) *const FrameState {
     const frame_key = self.GetElementKey();
-    const entry = self.persistent_data.getEntry(frame_key) orelse return &.empty;
+    const entry = self.frame_state.getEntry(frame_key) orelse return &.empty;
     return entry.value_ptr;
 }
 
 fn GetElementFrameStateAt(self: *GU, i: usize) *const FrameState {
     const frame_key = self.GetElementKeyAt(i);
-    const entry = self.persistent_data.getEntry(frame_key) orelse return &.empty;
+    const entry = self.frame_state.getEntry(frame_key) orelse return &.empty;
     return entry.value_ptr;
 }
 
 fn GetElementFrameStateFromKey(self: *GU, key: []const u8) ?*FrameState {
-    const entry = self.persistent_data.getEntry(key) orelse return null;
+    const entry = self.frame_state.getEntry(key) orelse return null;
     return entry.value_ptr;
 }
 
@@ -2011,11 +2008,13 @@ pub fn DoSpacerH(self: *GU, w: f32, h: f32) void {
     element.area.h = h;
 }
 
-/// horizontal spacing element that overrides gap between surrounding elements.
-/// spacer is ignored if it falls on the end of a line.
+// FIXME: actually implement bConsumeGapY/bConsumeNextGapY so the docs comment
+//  isn't lying lol
+/// vertical spacing element that overrides gap between surrounding lines. spacer
+/// forces a newline both before and after.
 pub fn DoSpacerV(self: *GU, w: f32, h: f32) void {
-    defer self.element_queue_line_break = true;
     if (!self.DoElement(null)) return;
+    defer self.DoLineBreak();
     defer self.EndElement();
     const element = self.GetElement();
     element.features.bLineBreak = true;
