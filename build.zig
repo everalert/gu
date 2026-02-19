@@ -7,6 +7,7 @@ const OptimizeMode = std.builtin.OptimizeMode;
 const Step = Build.Step;
 const StepMakeOptions = Step.MakeOptions;
 const StepCompile = Step.Compile;
+const Module = Build.Module;
 
 // TODO: module export
 // TODO: tests
@@ -15,16 +16,22 @@ const StepCompile = Step.Compile;
 pub fn build(b: *std.Build) void {
     const opts: GlobalOptions = .Init(b);
 
-    const example = bin_example(b, &opts);
+    const libgu = export_module(b, "libgu", "src/gu.zig");
+
+    const example = bin_example(b, &opts, libgu);
     step_example(b, example, &opts);
     step_example_run(b, example);
 
     step_clean(b);
 }
 
+fn export_module(b: *Build, name: []const u8, path: []const u8) *Module {
+    return b.addModule(name, .{ .root_source_file = b.path(path) });
+}
+
 // EXAMPLE APP
 
-fn bin_example(b: *Build, opts: *const GlobalOptions) *StepCompile {
+fn bin_example(b: *Build, opts: *const GlobalOptions, libgu: *Module) *StepCompile {
     const bin = b.addExecutable(.{
         .name = "gu",
         .root_module = b.createModule(.{
@@ -35,6 +42,8 @@ fn bin_example(b: *Build, opts: *const GlobalOptions) *StepCompile {
             .strip = opts.Strip,
         }),
     });
+
+    bin.root_module.addImport("libgu", libgu);
 
     const module_opts = .{ .target = opts.Target, .optimize = opts.Optimize, .strip = opts.Strip };
     if (b.lazyDependency("sdl", module_opts)) |dep| {

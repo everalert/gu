@@ -13,7 +13,7 @@ const SDLE = @import("c.zig").SDLE;
 const SDLEP = @import("c.zig").SDLEP;
 const SDLTryErrorPrint = @import("c.zig").SDLTryErrorPrint;
 
-const GU = @import("gu.zig");
+const GU = @import("libgu");
 const GUBackend = GU.Backend;
 const GUCornerShape = GU.CornerShape;
 const GUTextureHandle = GU.TextureHandle;
@@ -26,10 +26,11 @@ const GURCRect = GU.RCRect;
 const GURCText = GU.RCText;
 const GURCClip = GU.RCClip;
 
-const Vec2 = @import("m_vec2.zig");
-const Rect = @import("m_rect.zig");
-const Color = @import("m_color.zig").Color;
-const sdf = @import("m_sdf.zig");
+// FIXME: don't really like that this stuff is tied to GU, esp. sdf
+const Vec2 = GU.Vec2;
+const Rect = GU.Rect;
+const Color = GU.Color;
+const sdf = GU.sdf;
 
 const WINDOW_W = 1280;
 const WINDOW_H = 960;

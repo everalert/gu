@@ -10,9 +10,12 @@ const FormatOptions = std.fmt.FormatOptions;
 const maxInt = std.math.maxInt;
 const zeroInit = std.mem.zeroInit;
 
-const Vec2 = @import("m_vec2.zig");
-const Rect = @import("m_rect.zig");
-const Color = @import("m_color.zig").Color;
+const log = std.log.scoped(.libgu);
+
+pub const Vec2 = @import("m_vec2.zig");
+pub const Rect = @import("m_rect.zig");
+pub const Color = @import("m_color.zig").Color;
+pub const sdf = @import("m_sdf.zig");
 
 // TODO: ?? add CanDrawString to check against supported character range in font impl
 pub const Backend = struct {
@@ -991,7 +994,7 @@ fn DoElementClipping(self: *GU) void {
         // unprocessed parent->child branch
         if (e.first_child != null) {
             c_stack.append(self.allocator, next_clip) catch |err|
-                std.log.err("(DoElementClipping) ClipStack Append Error: {t}", .{err});
+                log.err("(DoElementClipping) ClipStack Append Error: {t}", .{err});
             c = c_stack.getLast();
         }
     }
@@ -1009,9 +1012,9 @@ fn EmitRenderCommand(
         .text => &self.render_commands_text,
     };
     self.render_commands.append(self.allocator, .init(Kind, cmdbuf.items.len)) catch |err|
-        std.log.err("EmitRenderCommand({t}): {t}", .{ Kind, err });
+        log.err("EmitRenderCommand({t}): {t}", .{ Kind, err });
     cmdbuf.append(self.allocator, payload) catch |err|
-        std.log.err("EmitRenderCommand({t}): {t}", .{ Kind, err });
+        log.err("EmitRenderCommand({t}): {t}", .{ Kind, err });
 }
 
 fn DoElementEmitRenderCommands(self: *GU) void {
@@ -1112,7 +1115,7 @@ fn DoElementDebugLog(self: *GU) void {
     var it = ElementIterator.Init(self.element_tree.items);
     while (it.Next()) |it_data| {
         const e = it_data.element;
-        std.log.debug(
+        log.debug(
             "it-element: ({*})  {t: <12}{d: >3}x{d: <3}",
             .{ e, it_data.relation, e.area.w, e.area.h },
         );
@@ -1639,7 +1642,7 @@ fn ButtonStyleGenerate(self: *GU) void {
         .ColorIdle = self.btn_style_vstk_color_idle.Get(),
         .ColorHover = self.btn_style_vstk_color_hover.Get(),
         .ColorDown = self.btn_style_vstk_color_down.Get(),
-    }) catch |e| std.log.err("(ButtonStyleGenerate) append failed: {t}", .{e});
+    }) catch |e| log.err("(ButtonStyleGenerate) append failed: {t}", .{e});
 }
 
 fn ButtonStyleAnyChanged(self: *GU) bool {
