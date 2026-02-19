@@ -9,7 +9,6 @@ const StepMakeOptions = Step.MakeOptions;
 const StepCompile = Step.Compile;
 const Module = Build.Module;
 
-// TODO: module export
 // TODO: tests
 // TODO: linux builds (see: castholm/SDL_linux_deps)
 

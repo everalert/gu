@@ -1,5 +1,5 @@
 .{
-    .name = .GU,
+    .name = .libgu,
     .version = "0.1.0",
     .minimum_zig_version = "0.15.1",
     .fingerprint = 0xe5e06e467d718dbd,
