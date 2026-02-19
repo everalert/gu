@@ -146,53 +146,97 @@ pub const RCClip = struct {
 
 //------------------------------------------------------------------------------
 
-// TODO: rename to something more appropriate?
-/// inter-frame button state tracking, associated with element via hashtable
-pub const Button = struct {
-    mode: ButtonMode,
-    state: ButtonState,
-    area: Rect,
+// TODO: extract button state machine?
+/// inter-frame state tracking, associated with element via hashtable
+pub const FrameState = struct {
     element: usize,
-    activated: bool,
+    area: Rect,
+    area_clipped: Rect,
+    local_position: Vec2,
+    local_position_unscrolled: Vec2,
+    btn_mode: ButtonMode,
+    btn_state: ButtonState,
+    btn_activated: bool,
+    scroll_target: Vec2,
+    scroll_offset: Vec2,
+    scroll_area: Vec2,
 
-    pub const empty = Button{
-        .mode = .default,
-        .state = .Idle,
+    pub const empty = FrameState{
+        .element = maxInt(usize), // NOTE: maxInt is how the system identifies unused items to delete
         .area = .zero,
-        .element = maxInt(usize), // FIXME: probably bad that this refers to oob, no?
-        .activated = false,
+        .area_clipped = .zero,
+        .local_position = .zero,
+        .local_position_unscrolled = .zero,
+        .btn_mode = .default,
+        .btn_state = .Idle,
+        .btn_activated = false,
+        .scroll_target = .zero,
+        .scroll_offset = .zero,
+        .scroll_area = .zero,
     };
 
     pub fn Update(
-        self: *Button,
-        pt: *const Vec2,
-        btn_just_down: bool,
-        btn_just_up: bool,
+        self: *FrameState,
+        element: *const Element,
+        element_parent: ?*const Element,
+        mouse: *const MouseInput,
+        scroll_lerp_factor: f32,
     ) void {
-        self.activated = false;
-        if (self.area.IsCollidingPoint(pt)) {
-            if (self.state == .Idle)
-                self.state = .Hover;
+        // update/reset data
+        self.area = element.area;
+        self.area_clipped = element.clip;
+        if (element_parent) |p| {
+            self.local_position = p.area.getPos().SUB(element.area.getPos()).inv();
+            self.local_position_unscrolled = self.local_position.SUB(p.scroll_offset);
+        } else {
+            self.local_position = element.area.getPos();
+            self.local_position_unscrolled = self.local_position;
+        }
+        self.scroll_area = element.scroll_area;
+        self.element = maxInt(usize);
 
-            if (self.state == .Hover and btn_just_down) {
-                self.state = .Down;
-                if (self.mode == .Press) {
-                    //std.log.debug("button activated! (press)", .{});
-                    self.activated = true;
-                    return;
+        // lmb
+        self.btn_activated = false;
+        if (self.area_clipped.IsCollidingPoint(&mouse.pos)) blk: {
+            if (self.btn_state == .Idle)
+                self.btn_state = .Hover;
+
+            if (self.btn_state == .Hover and mouse.lb.just_down) {
+                self.btn_state = .Down;
+                if (self.btn_mode == .Press) {
+                    self.btn_activated = true;
+                    break :blk;
                 }
             }
 
-            if (self.state == .Down and btn_just_up) {
-                self.state = .Hover;
-                if (self.mode == .Release) {
-                    //std.log.debug("button activated! (release)", .{});
-                    self.activated = true;
-                    return;
+            if (self.btn_state == .Down and mouse.lb.just_up) {
+                self.btn_state = .Hover;
+                if (self.btn_mode == .Release) {
+                    self.btn_activated = true;
+                    break :blk;
                 }
             }
         } else {
-            self.state = .Idle;
+            self.btn_state = .Idle;
+        }
+
+        // scroll
+        if (self.area_clipped.IsCollidingPoint(&mouse.pos))
+            self.scroll_target = self.scroll_target.ADD(mouse.scroll.scroll);
+        self.scroll_target = self.scroll_target.CLAMP(self.scroll_area.inv(), .zero);
+        self.scroll_offset = self.scroll_offset.CLAMP(self.scroll_area.inv(), .zero);
+
+        const scroll_dif = self.scroll_target.SUB(self.scroll_offset);
+        const scroll_eps = std.math.floatEpsAt(f32, 100);
+        if (@abs(scroll_dif.x) <= scroll_eps) {
+            self.scroll_offset.x = self.scroll_target.x;
+        } else {
+            self.scroll_offset.x = std.math.lerp(self.scroll_offset.x, self.scroll_target.x, scroll_lerp_factor);
+        }
+        if (@abs(scroll_dif.y) <= scroll_eps) {
+            self.scroll_offset.y = self.scroll_target.y;
+        } else {
+            self.scroll_offset.y = std.math.lerp(self.scroll_offset.y, self.scroll_target.y, scroll_lerp_factor);
         }
     }
 };
@@ -248,6 +292,55 @@ pub const KeyState = struct {
     }
 };
 
+pub const ScrollState = struct {
+    scroll: Vec2,
+    accumulator: Vec2,
+
+    pub const start: ScrollState = .{ .scroll = .zero, .accumulator = .zero };
+
+    pub fn Accumulate(self: *ScrollState, x: f32, y: f32) void {
+        self.accumulator.x += x;
+        self.accumulator.y += y;
+    }
+
+    pub fn Update(self: *ScrollState) void {
+        self.scroll = self.accumulator;
+        self.accumulator = .zero;
+    }
+};
+
+pub const MouseInput = struct {
+    pos: Vec2,
+    lb: KeyState,
+    rb: KeyState,
+    scroll: ScrollState,
+
+    pub const start = MouseInput{
+        .pos = .init(-1, -1),
+        .lb = .start,
+        .rb = .start,
+        .scroll = .start,
+    };
+
+    pub fn AccumulateLB(self: *MouseInput, down: bool) void {
+        self.lb.Accumulate(down);
+    }
+
+    pub fn AccumulateRB(self: *MouseInput, down: bool) void {
+        self.rb.Accumulate(down);
+    }
+
+    pub fn AccumulateScroll(self: *MouseInput, x: f32, y: f32) void {
+        self.scroll.Accumulate(x, y);
+    }
+
+    pub fn Update(self: *MouseInput) void {
+        self.lb.Update();
+        self.rb.Update();
+        self.scroll.Update();
+    }
+};
+
 //------------------------------------------------------------------------------
 
 pub const Element = struct {
@@ -271,6 +364,8 @@ pub const Element = struct {
     label_font: FontHandle,
     action_id: CustomActionHandle, // impl-defined custom command action
     action_data: CustomActionData, // impl-defined custom command data
+    scroll_offset: Vec2,
+    scroll_area: Vec2,
 
     const empty: Element = .{
         .layout = .blank,
@@ -292,13 +387,20 @@ pub const Element = struct {
         .data = 0,
         .action_id = 0,
         .action_data = 0,
+        .scroll_offset = .zero,
+        .scroll_area = .zero,
     };
 
-    inline fn HashKey(element: *const Element) []const u8 {
-        if (element.name.len > 0) return element.name;
+    pub fn NeedsHash(element: *const Element) bool {
+        return element.features.bClickable or
+            element.features.bScrollableX or
+            element.features.bScrollableY;
+    }
 
-        assert(element.data != 0);
-        return std.mem.asBytes(&element.data);
+    pub fn HashKey(element: *const Element) []const u8 {
+        if (element.name.len > 0) return element.name;
+        if (element.data != 0) return std.mem.asBytes(&element.data);
+        return &.{};
     }
 };
 
@@ -307,7 +409,6 @@ pub const Element = struct {
 // TODO: body outline
 // TODO: body absolute positioning (like CSS)
 // TODO: body relative positioning (like CSS)
-// TODO: body contents scrollable, on X and Y individually
 // TODO: texture tiling
 // TODO: texture scaling
 // TODO: texture stretch to rect size
@@ -336,6 +437,8 @@ pub const ElementFeatures = packed struct(u32) {
     bConsumeNextGapY: bool, // FIXME: impl
     /// if element would trigger a line break, collapse and make next element break instead
     bOverflowCollapseX: bool,
+    bScrollableX: bool,
+    bScrollableY: bool,
 
     // Button functionality
     bClickable: bool,
@@ -349,7 +452,7 @@ pub const ElementFeatures = packed struct(u32) {
     // Misc. functionality
     bCustomCommand: bool,
 
-    _: u16,
+    _: u14,
 
     const none: ElementFeatures = @bitCast(@as(u32, 0));
     const all: ElementFeatures = @bitCast(maxInt(u32));
@@ -436,7 +539,6 @@ pub const Layout = struct {
     padding: Vec2,
     gaps: Vec2,
     auto_line_break: bool,
-    //scroll: ?
 
     const blank = zeroInit(Layout, .{});
 };
@@ -478,6 +580,10 @@ const DimensionMode = enum {
     }
 };
 
+// TODO: ?? in future, layout may define a "direction" and this would make what
+//  is considered the main axis and cross axis context-dependent; in this case,
+//  AxisSpacingX and AxisSpacingY would need to be consolidated and take the
+//  layout direction as a parameter to derive the axis directions from
 // TODO: reorganize? this is layouting pass stuff, not layout definition stuff
 const LineData = struct {
     element: usize, // starting element
@@ -487,24 +593,22 @@ const LineData = struct {
     current_y: f32,
     current_h: f32,
     current_items: u32,
+    current_gaps: u32,
     current_w: f32,
     queue_consume_gap_x: bool,
     queue_consume_gap_y: bool, // FIXME: not used yet
     queue_line_break: bool,
     max_w: f32, // incl padding/gaps
 
-    // TODO: impl axis def in Layout and derive
-    pub inline fn AxisSpacing(self: *LineData, comptime axis: enum { Main, Cross }, items: usize) f32 {
-        const padding: f32, const gaps: f32 = switch (axis) {
-            .Main => .{ // x-axis
-                self.parent_padding.x * 2,
-                self.parent_gaps.x * @as(f32, @floatFromInt(items -| 1)),
-            },
-            .Cross => .{ // y-axis
-                self.parent_padding.y * 2,
-                self.parent_gaps.y * @as(f32, @floatFromInt(items -| 1)),
-            },
-        };
+    pub inline fn AxisSpacingX(self: *LineData, gap_count: usize) f32 {
+        const padding: f32 = self.parent_padding.x * 2;
+        const gaps: f32 = self.parent_gaps.x * @as(f32, @floatFromInt(gap_count));
+        return padding + gaps;
+    }
+
+    pub inline fn AxisSpacingY(self: *LineData, gap_count: usize) f32 {
+        const padding: f32 = self.parent_padding.y * 2;
+        const gaps: f32 = self.parent_gaps.y * @as(f32, @floatFromInt(gap_count));
         return padding + gaps;
     }
 };
@@ -530,8 +634,8 @@ base_layout: Layout,
 base_button_style: ButtonStyle,
 base_font: FontHandle,
 
-buttons: StringHashMap(Button),
-button_delete_queue: ArrayList([]const u8),
+frame_state: StringHashMap(FrameState),
+frame_state_delete_queue: ArrayList([]const u8), // hashes
 btn_mode_vstk: ValueStack(ButtonMode),
 
 btn_style_arena: ArrayList(ButtonStyle), // arraylist for the typing/alignment, usage is like arena
@@ -549,8 +653,17 @@ render_commands_rect: ArrayList(RCRect),
 render_commands_text: ArrayList(RCText),
 render_commands_clip: ArrayList(RCClip),
 
-mouse_pt: Vec2,
-mouse_left: KeyState, // LMB
+mouse: MouseInput,
+
+timestamp: i64, // NS
+timestamp_prev: i64,
+dt_f: f64,
+
+// TODO: include config stuff as part of initialization; when doing so, don't
+//  forget to remove manual setting of value in demo init
+/// best with very small values (e.g. 0.00001), set to 0 for no smoothing
+/// must be 0.0 <= value < 1.0 for correct behaviour
+config_scroll_smoothing: f32,
 
 pub fn Init(
     alloc: Allocator,
@@ -567,8 +680,8 @@ pub fn Init(
         .element_stack = .empty,
         .element_line_stack = .empty,
         .clip_stack = .empty,
-        .buttons = .init(alloc),
-        .button_delete_queue = .empty,
+        .frame_state = .init(alloc),
+        .frame_state_delete_queue = .empty,
         .btn_mode_vstk = .Init(alloc),
         .btn_style_arena = .empty,
         .btn_style_vstk_padding_ver = .Init(alloc),
@@ -587,10 +700,13 @@ pub fn Init(
         .base_layout = base_layout,
         .base_button_style = base_button_style,
         .base_font = base_font,
-        .mouse_pt = .{ .x = -1, .y = -1 },
         .element_queue_line_break = false,
         .element_sibling = null,
-        .mouse_left = .start,
+        .mouse = .start,
+        .timestamp = 0,
+        .timestamp_prev = 0,
+        .dt_f = 0,
+        .config_scroll_smoothing = 0,
     };
 }
 
@@ -620,13 +736,20 @@ pub fn Deinit(self: *GU) void {
 //------------------------------------------------------------------------------
 // FRAME
 
-pub fn BeginFrame(self: *GU) !void {
+/// @timestamp      nanoseconds
+pub fn BeginFrame(self: *GU, timestamp: i64) !void {
     assert(self.element_stack.items.len == 0);
     assert(self.element_line_stack.items.len == 0);
     assert(self.btn_mode_vstk.count == 0);
     assert(self.font_vstk.count == 0);
+    assert(timestamp > self.timestamp);
 
     const surface_size = self.backend.SurfaceSize();
+
+    self.timestamp_prev = self.timestamp;
+    self.timestamp = timestamp;
+    const dt_f = @as(f64, @floatFromInt(self.timestamp - self.timestamp_prev)) / @as(f64, 1_000_000_000);
+    self.dt_f = std.math.clamp(dt_f, 0.002, 0.10);
 
     _ = self.label_arena.reset(.retain_capacity);
     self.btn_style_arena.clearRetainingCapacity();
@@ -638,7 +761,7 @@ pub fn BeginFrame(self: *GU) !void {
     self.render_commands_clip.clearRetainingCapacity();
     self.element_tree.clearRetainingCapacity();
     self.element_sibling = null;
-    self.mouse_left.Update();
+    self.mouse.Update();
 
     self.element_line_stack.append(self.allocator, zeroInit(LineData, .{ .line = 1 })) catch unreachable;
     if (!self.DoElement(&self.base_layout)) unreachable;
@@ -662,7 +785,7 @@ pub fn EndFrame(self: *GU) void {
     self.DoElementPositioning();
     self.DoElementClipping();
     self.DoElementEmitRenderCommands();
-    self.DoButtonPostProcessing();
+    self.DoInterFrameProcessing();
     //self.DoElementDebugLog();
 
     for (self.render_commands.items) |cmd| {
@@ -698,7 +821,7 @@ fn DoElementLineBreakParsing(self: *GU) void {
     defer assert(self.element_line_stack.items.len == 0);
 
     const stack = &self.element_line_stack;
-    var ld_base = zeroInit(LineData, .{ .line = 1 });
+    var ld_base = zeroInit(LineData, .{ .line = 1 }); // FIXME: no zeroInit
     var ld: *LineData = &ld_base;
 
     var it = ElementIterator.Init(self.element_tree.items);
@@ -710,6 +833,7 @@ fn DoElementLineBreakParsing(self: *GU) void {
         const this_gap: Vec2 = .init(if (consume_gap_x) 0 else ld.parent_gaps.x, ld.parent_gaps.y);
         ld.queue_consume_gap_x = e.features.bConsumeNextGapX;
 
+        // FIXME: no zeroInit
         // parent->child
         if (it_data.relation == .Child) {
             stack.appendAssumeCapacity(zeroInit(LineData, .{
@@ -721,10 +845,14 @@ fn DoElementLineBreakParsing(self: *GU) void {
 
         // child->parent
         if (it_data.relation == .Parent) {
-            if (!e.layout.mode_w.IsPreComputable())
-                e.area.w = @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items));
-            if (!e.layout.mode_h.IsPreComputable())
-                e.area.h = ld.current_h + ld.current_y + ld.AxisSpacing(.Cross, ld.line);
+            const child_size: Vec2 = .init(
+                @max(ld.max_w, ld.current_w + ld.AxisSpacingX(ld.current_gaps)),
+                ld.current_h + ld.current_y + ld.AxisSpacingY(ld.line -| 1),
+            );
+            if (!e.layout.mode_w.IsPreComputable()) e.area.w = child_size.x;
+            if (!e.layout.mode_h.IsPreComputable()) e.area.h = child_size.y;
+            e.scroll_area = child_size.SUB(e.area.getSize()).MAX(.zero);
+            e.scroll_offset = e.scroll_offset.MAX(e.scroll_area.inv());
 
             _ = self.element_line_stack.pop();
             ld = if (stack.items.len > 0) &stack.items[stack.items.len - 1] else &ld_base;
@@ -734,9 +862,9 @@ fn DoElementLineBreakParsing(self: *GU) void {
         if (it_data.relation != .Parent) {
             e.gap = this_gap;
             if (e.layout.mode_w == .Stretch)
-                e.area.w = @max(p.?.area.w + e.area.w - ld.AxisSpacing(.Main, p.?.layout.widths.len), 0);
+                e.area.w = @max(p.?.area.w + e.area.w - ld.AxisSpacingX(p.?.layout.widths.len -| 1), 0);
             if (e.layout.mode_h == .Stretch)
-                e.area.h = @max(p.?.area.h + e.area.h - ld.AxisSpacing(.Cross, p.?.layout.heights.len), 0);
+                e.area.h = @max(p.?.area.h + e.area.h - ld.AxisSpacingY(p.?.layout.heights.len -| 1), 0);
         }
 
         if (p != null and
@@ -758,11 +886,12 @@ fn DoElementLineBreakParsing(self: *GU) void {
         ld.queue_line_break = false;
 
         if (it_data.relation == .Child or e.features.bLineBreak) {
-            ld.max_w = @max(ld.max_w, ld.current_w + ld.AxisSpacing(.Main, ld.current_items));
+            ld.max_w = @max(ld.max_w, ld.current_w + ld.AxisSpacingX(ld.current_gaps));
             ld.line += 1;
             ld.current_y += ld.current_h;
             ld.current_w = e.area.w;
             ld.current_h = e.area.h;
+            ld.current_gaps = 0;
             ld.current_items = 1;
             ld.element = e.id;
             //ld.queue_consume_gap_y = false; // not used yet
@@ -771,8 +900,9 @@ fn DoElementLineBreakParsing(self: *GU) void {
             continue;
         }
 
+        ld.current_gaps += @intFromBool(!consume_gap_x);
         ld.current_items += 1;
-        ld.current_w += e.area.w + e.gap.x;
+        ld.current_w += e.area.w;
         ld.current_h = @max(ld.current_h, e.area.h);
     }
 }
@@ -784,7 +914,7 @@ fn DoElementPositioning(self: *GU) void {
     defer assert(self.element_line_stack.items.len == 0);
 
     const stack = &self.element_line_stack;
-    var ld_base = zeroInit(LineData, .{});
+    var ld_base = zeroInit(LineData, .{}); // FIXME: no zeroInit
     var ld: *LineData = &ld_base;
     var p: ?*Element = null;
 
@@ -800,20 +930,21 @@ fn DoElementPositioning(self: *GU) void {
             continue;
         }
 
+        // FIXME: no zeroInit
         // parent->child
         if (it_data.relation == .Child) {
             p = &self.element_tree.items[e.parent.?];
             stack.appendAssumeCapacity(zeroInit(LineData, .{})); // capacity set during initial tree gen
             ld = &stack.items[stack.items.len - 1];
-            e.area.x = p.?.area.x + p.?.layout.padding.x;
-            e.area.y = p.?.area.y + p.?.layout.padding.y;
+            e.area.x = p.?.area.x + p.?.layout.padding.x + p.?.scroll_offset.x;
+            e.area.y = p.?.area.y + p.?.layout.padding.y + p.?.scroll_offset.y;
             ld.current_y = e.area.y;
             ld.current_h = @max(ld.current_h, e.area.h);
             continue;
         }
 
         if (e.features.bLineBreak) {
-            const pos = if (p != null) p.?.area.toPos() else Vec2.zero;
+            const pos = if (p != null) p.?.area.getPos() else Vec2.zero;
             const padding = if (p != null) p.?.layout.padding else Vec2.zero;
             e.area.x = pos.x + padding.x;
             e.area.y = ld.current_y + ld.current_h + e.gap.y;
@@ -940,7 +1071,7 @@ fn DoElementEmitRenderCommands(self: *GU) void {
             //  maybe add a "batch layer" value to draw cmd, and give labels
             //  a half-value extra so that they are intereted as upper layer.
             self.EmitRenderCommand(.text, RCText{
-                .pos = e.area.toPos(),
+                .pos = e.area.getPos(),
                 .font = e.label_font,
                 .color = e.layout.color,
                 .str = e.label_str,
@@ -949,31 +1080,32 @@ fn DoElementEmitRenderCommands(self: *GU) void {
     }
 }
 
-fn DoButtonPostProcessing(self: *GU) void {
-    assert(self.button_delete_queue.items.len == 0);
+// TODO: make delete queue a ValueStack and get rid of the error?
+fn DoInterFrameProcessing(self: *GU) void {
+    assert(self.frame_state_delete_queue.items.len == 0);
+    assert(self.config_scroll_smoothing >= 0.0);
+    assert(self.config_scroll_smoothing < 1.0);
 
-    var it = self.buttons.iterator();
-    while (it.next()) |btn_info| {
-        const btn = btn_info.value_ptr;
+    var it = self.frame_state.iterator();
+    while (it.next()) |frame_info| {
+        const frame = frame_info.value_ptr;
 
-        btn.Update(
-            &self.mouse_pt,
-            self.mouse_left.just_down,
-            self.mouse_left.just_up,
-        );
-
-        if (btn.element == maxInt(usize)) {
-            self.button_delete_queue.append(self.allocator, btn_info.key_ptr.*) catch |err|
-                std.debug.panic("DoButtonPostProcessing ({s})", .{@errorName(err)});
+        if (frame.element == maxInt(usize)) {
+            self.frame_state_delete_queue.append(self.allocator, frame_info.key_ptr.*) catch |err|
+                std.debug.panic("(DoInterFrameProcessing) ERROR: {t}", .{err});
             continue;
         }
 
-        btn.area = self.element_tree.items[btn.element].clip;
-        btn.element = maxInt(usize);
+        // https://www.rorydriscoll.com/2016/03/07/frame-rate-independent-damping-using-lerp/
+        const damp_lerp_factor = 1 - std.math.pow(f32, self.config_scroll_smoothing, @floatCast(self.dt_f));
+
+        const element = &self.element_tree.items[frame.element];
+        const element_parent = if (element.parent) |p| &self.element_tree.items[p] else null;
+        frame.Update(element, element_parent, &self.mouse, damp_lerp_factor);
     }
 
-    while (self.button_delete_queue.pop()) |item|
-        _ = self.buttons.remove(item);
+    while (self.frame_state_delete_queue.pop()) |item|
+        _ = self.frame_state.remove(item);
 }
 
 fn DoElementDebugLog(self: *GU) void {
@@ -1055,6 +1187,7 @@ pub fn DoElement(self: *GU, layout: ?*const Layout) bool {
         self.element_sibling = null;
     }
 
+    // FIXME: no zeroInit
     self.element_line_stack.append(self.allocator, zeroInit(LineData, .{ .line = 1 })) catch |err|
         std.debug.panic("DoElement: ({s})", .{@errorName(err)});
     return true;
@@ -1099,24 +1232,34 @@ pub fn EndElement(self: *GU) void {
         assert(element.area.h < 0);
     }
 
+    // update inter-frame state
+    const frame: *const FrameState = frame: {
+        const frame_key = element.HashKey();
+        assert(!element.NeedsHash() or frame_key.len > 0);
+        if (frame_key.len == 0) break :frame &.empty;
+
+        const frame_info = self.frame_state.getOrPut(frame_key) catch break :frame &.empty;
+        const frame = frame_info.value_ptr;
+        if (!frame_info.found_existing) frame.* = .empty;
+        frame.element = element.id;
+        frame.btn_mode = self.btn_mode_vstk.GetOrNull() orelse .default;
+        break :frame frame;
+    };
+
+    if (element.features.bScrollableX) {
+        element.scroll_offset.x = frame.scroll_offset.x;
+    }
+
+    if (element.features.bScrollableY) {
+        element.scroll_offset.y = frame.scroll_offset.y;
+    }
+
     // Button
     if (element.features.bClickable) {
-        // button state setup
-        const btn: *const Button = btn: {
-            const btn_key = self.GetElementKeyAt(element_i);
-            const btn_info = self.buttons.getOrPut(btn_key) catch break :btn &.empty;
-
-            const btn = btn_info.value_ptr;
-            if (!btn_info.found_existing) btn.* = .empty;
-            btn.element = element.id;
-            btn.mode = self.btn_mode_vstk.GetOrNull() orelse .default;
-            break :btn btn;
-        };
-
         // visual updating
         if (!element.features.bClickNoStyle) {
             const btn_style = &self.btn_style_arena.items[self.ButtonStyleGet()];
-            element.layout.color = switch (btn.state) {
+            element.layout.color = switch (frame.btn_state) {
                 .Idle => if (element.features.bClickDepressed) btn_style.ColorDown else btn_style.ColorIdle,
                 .Hover => if (element.features.bClickDepressed) btn_style.ColorIdle else btn_style.ColorHover,
                 .Down => btn_style.ColorDown,
@@ -1186,16 +1329,134 @@ fn GetElementKeyAt(self: *GU, i: usize) []const u8 {
     return self.GetElementAt(i).HashKey();
 }
 
-fn GetElementClicked(self: *GU) bool {
-    const btn_key = self.GetElementKey();
-    const btn: Button = self.buttons.get(btn_key) orelse .empty;
-    return btn.activated;
+fn GetElementFrameState(self: *GU) *const FrameState {
+    const frame_key = self.GetElementKey();
+    const entry = self.frame_state.getEntry(frame_key) orelse return &.empty;
+    return entry.value_ptr;
+}
+
+fn GetElementFrameStateAt(self: *GU, i: usize) *const FrameState {
+    const frame_key = self.GetElementKeyAt(i);
+    const entry = self.frame_state.getEntry(frame_key) orelse return &.empty;
+    return entry.value_ptr;
+}
+
+fn GetElementFrameStateFromKey(self: *GU, key: []const u8) ?*FrameState {
+    const entry = self.frame_state.getEntry(key) orelse return null;
+    return entry.value_ptr;
+}
+
+// FIXME: consider which of these needs to be kept, deleted, made public, etc.
+// TODO: scroll options that leave one axis alone
+// TODO: scroll-to-child options that position the child somewhere in the viewable area
+
+pub fn GetElementClicked(self: *GU) bool {
+    return self.GetElementFrameState().btn_activated;
 }
 
 fn GetElementClickedAt(self: *GU, i: usize) bool {
-    const btn_key = self.GetElementKeyAt(i);
-    const btn: Button = self.buttons.get(btn_key) orelse .empty;
-    return btn.activated;
+    return self.GetElementFrameStateAt(i).btn_activated;
+}
+
+pub fn GetElementParentOffset(self: *GU) Vec2 {
+    return self.GetElementFrameState().local_position;
+}
+
+fn GetElementParentOffsetAt(self: *GU, i: usize) Vec2 {
+    return self.GetElementFrameStateAt(i).local_position;
+}
+
+pub fn GetElementParentOffsetFromKey(self: *GU, key: []const u8) Vec2 {
+    const frame = self.GetElementFrameStateFromKey(key) orelse return .zero;
+    return frame.local_position;
+}
+
+pub fn GetElementParentOffsetUnscrolled(self: *GU) Vec2 {
+    return self.GetElementFrameState().local_position_unscrolled;
+}
+
+fn GetElementParentOffsetUnscrolledAt(self: *GU, i: usize) Vec2 {
+    return self.GetElementFrameStateAt(i).local_position_unscrolled;
+}
+
+pub fn GetElementParentOffsetUnscrolledFromKey(self: *GU, key: []const u8) Vec2 {
+    const frame = self.GetElementFrameStateFromKey(key) orelse return .zero;
+    return frame.local_position_unscrolled;
+}
+
+pub fn GetElementScrollArea(self: *GU) Vec2 {
+    return self.GetElementFrameState().scroll_area;
+}
+
+fn GetElementScrollAreaAt(self: *GU, i: usize) Vec2 {
+    return self.GetElementFrameStateAt(i).scroll_area;
+}
+
+pub fn GetElementScrollTarget(self: *GU) Vec2 {
+    return self.GetElementFrameState().scroll_target;
+}
+
+fn GetElementScrollTargetAt(self: *GU, i: usize) Vec2 {
+    return self.GetElementFrameStateAt(i).scroll_target;
+}
+
+pub fn GetElementScroll(self: *GU) Vec2 {
+    return self.GetElementFrameState().scroll_offset;
+}
+
+fn GetElementScrollAt(self: *GU, i: usize) Vec2 {
+    return self.GetElementFrameStateAt(i).scroll_offset;
+}
+
+pub fn SetElementScroll(self: *GU, key: []const u8, pos: Vec2, offset: Vec2) void {
+    const frame = self.GetElementFrameStateFromKey(key) orelse return;
+    frame.scroll_target = pos.CLAMP(.zero, frame.scroll_area).inv();
+    const offset_dif = frame.scroll_target.SUB(frame.scroll_offset);
+    if (@abs(offset_dif.x) > @abs(offset.x))
+        frame.scroll_offset.x = frame.scroll_target.x - offset.x * std.math.sign(offset_dif.x);
+    if (@abs(offset_dif.y) > @abs(offset.y))
+        frame.scroll_offset.y = frame.scroll_target.y - offset.y * std.math.sign(offset_dif.y);
+}
+
+pub fn SetElementScrollPercent(self: *GU, key: []const u8, percent: Vec2, offset_percent: Vec2) void {
+    const frame = self.GetElementFrameStateFromKey(key) orelse return;
+    frame.scroll_target = frame.scroll_area.MUL(percent.CLAMP(.zero, .one)).inv();
+    const offset_amt = frame.scroll_area.MUL(offset_percent).inv();
+    const offset_dif = frame.scroll_target.SUB(frame.scroll_offset);
+    if (@abs(offset_dif.x) > @abs(offset_amt.x))
+        frame.scroll_offset.x = frame.scroll_target.x + offset_amt.x * std.math.sign(offset_dif.x);
+    if (@abs(offset_dif.y) > @abs(offset_amt.y))
+        frame.scroll_offset.y = frame.scroll_target.y + offset_amt.y * std.math.sign(offset_dif.y);
+}
+
+pub inline fn SetElementScrollDirect(self: *GU, key: []const u8, pos: Vec2) void {
+    self.SetElementScroll(key, pos, .zero);
+}
+
+pub inline fn SetElementScrollDirectPercent(self: *GU, key: []const u8, percent: Vec2) void {
+    self.SetElementScrollPercent(key, percent, .zero);
+}
+
+pub inline fn SetElementScrollTarget(self: *GU, key: []const u8, pos: Vec2) void {
+    self.SetElementScroll(key, pos, .inf);
+}
+
+pub inline fn SetElementScrollTargetPercent(self: *GU, key: []const u8, percent: Vec2) void {
+    self.SetElementScrollPercent(key, percent, .one);
+}
+
+/// @offset     target-offset dif for scroll param, same as SetElementScroll@offset
+pub fn SetElementScrollToChild(self: *GU, key: []const u8, child_key: []const u8, offset: Vec2) void {
+    const pos = self.GetElementParentOffsetUnscrolledFromKey(child_key);
+    self.SetElementScroll(key, pos, offset);
+}
+
+pub inline fn SetElementScrollDirectToChild(self: *GU, key: []const u8, child_key: []const u8) void {
+    self.SetElementScrollToChild(key, child_key, .zero);
+}
+
+pub inline fn SetElementScrollTargetToChild(self: *GU, key: []const u8, child_key: []const u8) void {
+    self.SetElementScrollToChild(key, child_key, .inf);
 }
 
 // FIXME: the following will need to be moved and possibly adjusted for the
@@ -1741,6 +2002,24 @@ pub fn DoSpacerH(self: *GU, w: f32, h: f32) void {
     element.features.bConsumeGapX = true;
     element.features.bConsumeNextGapX = true;
     element.features.bOverflowCollapseX = true;
+    element.layout.mode_w = .Fixed;
+    element.layout.mode_h = .Fixed;
+    element.area.w = w;
+    element.area.h = h;
+}
+
+// FIXME: actually implement bConsumeGapY/bConsumeNextGapY so the docs comment
+//  isn't lying lol
+/// vertical spacing element that overrides gap between surrounding lines. spacer
+/// forces a newline both before and after.
+pub fn DoSpacerV(self: *GU, w: f32, h: f32) void {
+    if (!self.DoElement(null)) return;
+    defer self.DoLineBreak();
+    defer self.EndElement();
+    const element = self.GetElement();
+    element.features.bLineBreak = true;
+    element.features.bConsumeGapY = true;
+    element.features.bConsumeNextGapY = true;
     element.layout.mode_w = .Fixed;
     element.layout.mode_h = .Fixed;
     element.area.w = w;

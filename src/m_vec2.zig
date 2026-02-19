@@ -7,6 +7,8 @@ x: f32,
 y: f32,
 
 pub const zero: Vec2 = .{ .x = 0, .y = 0 };
+pub const one: Vec2 = .{ .x = 1, .y = 1 };
+pub const inf: Vec2 = .{ .x = std.math.inf(f32), .y = std.math.inf(f32) };
 
 pub fn init(x: f32, y: f32) Vec2 {
     return Vec2{ .x = x, .y = y };
@@ -74,6 +76,22 @@ pub fn DIVS(v: Vec2, s: f32) Vec2 {
 
 pub fn EQL(v1: Vec2, v2: Vec2) bool {
     return v1.x == v2.x and v1.y == v2.y;
+}
+
+pub fn CLAMP(v: Vec2, min: Vec2, max: Vec2) Vec2 {
+    return Vec2{ .x = clamp(v.x, min.x, max.x), .y = clamp(v.y, min.y, max.y) };
+}
+
+pub fn MIN(v: Vec2, min: Vec2) Vec2 {
+    return Vec2{ .x = @min(v.x, min.x), .y = @min(v.y, min.y) };
+}
+
+pub fn MAX(v: Vec2, max: Vec2) Vec2 {
+    return Vec2{ .x = @max(v.x, max.x), .y = @max(v.y, max.y) };
+}
+
+pub fn ROUND(v: Vec2) Vec2 {
+    return Vec2{ .x = @round(v.x), .y = @round(v.y) };
 }
 
 //------------------------------------------------------------------------------

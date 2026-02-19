@@ -324,7 +324,7 @@ fn FontRenderer(
             var rolling_pos = pos.*;
             for (str) |char| {
                 const n = char - @as(u8, @truncate(font.CodepointMin));
-                const size = glyphs[n].PixelRegion.toSize().MULS(scaling);
+                const size = glyphs[n].PixelRegion.getSize().MULS(scaling);
                 const advance = glyphs[n].AdvanceX * scaling;
                 const offset = (advance - size.x) / 2;
                 SDLEP(c.SDL_RenderTexture(
@@ -932,6 +932,8 @@ const App = struct {
     fonts: [5]usize,
     font_styles: [5]usize,
 
+    scroll_step_size: f32,
+
     btn_toggle: bool,
     btn_pcm8: usize,
     btn_color_loop: usize,
@@ -969,8 +971,11 @@ const App = struct {
             BASE_BUTTON_STYLE,
             self.font_styles[BASE_FONT_STYLE],
         );
+        self.gu.config_scroll_smoothing = 0.00001;
 
         // DEMO RELATED
+
+        self.scroll_step_size = 48;
 
         self.btn_toggle = false;
         self.btn_pcm8 = 16;
@@ -1011,13 +1016,22 @@ pub export fn SDL_AppEvent(app: *App, event: *c.SDL_Event) c.SDL_AppResult {
             return c.SDL_APP_SUCCESS;
         },
         c.SDL_EVENT_MOUSE_MOTION => {
-            app.gu.mouse_pt.x = event.motion.x;
-            app.gu.mouse_pt.y = event.motion.y;
+            app.gu.mouse.pos.x = event.motion.x;
+            app.gu.mouse.pos.y = event.motion.y;
         },
         c.SDL_EVENT_MOUSE_BUTTON_UP, c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
-            if (event.button.button != c.SDL_BUTTON_LEFT) return c.SDL_APP_CONTINUE;
             const down = event.type == c.SDL_EVENT_MOUSE_BUTTON_DOWN;
-            app.gu.mouse_left.Accumulate(down);
+            switch (event.button.button) {
+                c.SDL_BUTTON_LEFT => app.gu.mouse.AccumulateLB(down),
+                c.SDL_BUTTON_RIGHT => app.gu.mouse.AccumulateRB(down),
+                else => return c.SDL_APP_CONTINUE,
+            }
+        },
+        c.SDL_EVENT_MOUSE_WHEEL => {
+            app.gu.mouse.AccumulateScroll(
+                event.wheel.x * app.scroll_step_size,
+                event.wheel.y * app.scroll_step_size,
+            );
         },
         c.SDL_EVENT_KEY_DOWN => {
             if (event.key.scancode == c.SDL_SCANCODE_RETURN)
@@ -1038,6 +1052,11 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     var pcm8_data: [128]i8 = undefined;
     const pcm8_data_sl: []i8 = pcm8_data[0..128];
 
+    const main_key = "MAIN_CONTAINER";
+    var main_scroll: Vec2 = .zero;
+    var main_scroll_area: Vec2 = .zero;
+    const subtitle_key = "TEXT_DEMO_SUBTITLE";
+
     // NOTE: frame advance helper for debugging
     //if (!app.step) return c.SDL_APP_CONTINUE;
     //app.step = false;
@@ -1045,7 +1064,9 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
     SDLEP(c.SDL_SetRenderDrawColor(rd.renderer, 0x00, 0x00, 0x22, 0xFF));
     SDLEP(c.SDL_RenderClear(rd.renderer));
 
-    try gu.BeginFrame();
+    var time: i64 = undefined;
+    SDLEP(c.SDL_GetCurrentTime(&time));
+    try gu.BeginFrame(time);
 
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
@@ -1065,6 +1086,9 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
 
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
+        const element = gu.GetElement();
+        element.features.bScrollableX = true;
+        element.name = "TOP_MIDDLE_CONTAINER";
 
         gu.DoLabel(0xC000C0FF, "testblock2");
         const str_toggle_button = gu.MakeString("ToggleButton: {any}", .{app.btn_toggle});
@@ -1114,13 +1138,31 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         const element = gu.GetElement();
         gu.SetElementGaps(4, 4);
         element.features.bTextSpacing = true;
+        element.features.bScrollableY = true;
+        element.name = main_key;
+        main_scroll = gu.GetElementScroll();
+        main_scroll_area = gu.GetElementScrollArea();
 
+        gu.DoLineBreak();
         gu.DoLabelsFromString("testing... with auto linebreak!!");
         _ = gu.DoToggleButton(&app.btn_toggle, "ToggleButton2");
 
         gu.DoLineBreak();
         gu.DoImage(app.textures[TEXTURE_YURIKO1], null, 0.35);
         gu.DoImage(app.textures[TEXTURE_YURIKO2], null, 0.35);
+
+        gu.DoLineBreak();
+        if (app.btn_toggle) gu.DoLabelsFromString("only visible if b2 is on.");
+        gu.DoLabelsFromString("\tThe quick, brown fox jumps over a lazy dog. DJs flock by when MTV ax quiz prog. Junk MTV quiz graced by fox whelps. Bawds jog, flick quartz, vex nymphs. Waltz, bad nymph, for quick jigs vex! Fox nymphs grab quick-jived waltz. Brick quiz whangs jumpy veldt fox. Bright vixens jump; dozy fowl quack. Quick wafting zephyrs vex bold Jim. Quick zephyrs blow, vexing daft Jim. Sex-charged fop blew my junk TV quiz. How quickly daft jumping zebras vex.\n  Two driven jocks help fax my big quiz. Quick, Baz, get my woven flax jodhpurs! \"Now fax quiz Jack!\" my brave ghost pled. Five quacking zephyrs jolt my wax bed. Flummoxed by job, kvetching W. zaps Iraq. Cozy sphinx waves quart jug of bad milk. A very bad quack might jinx zippy fowls. Few quips galvanized the mock jury box. Quick brown dogs jump over the lazy fox. The jay, pig, fox, zebra, and my wolves quack! Blowzy red vixens fight for a quick jump. Joaquin Phoenix was gazed by MTV for luck. A wizard's job is to vex chumps quickly in fog. Watch \"Jeopardy!\", Alex Trebek's fun TV quiz game. Woven silk pyjamas exchanged for blue quartz.");
+
+        gu.DoLineBreak();
+        if (gu.DoElement(null)) {
+            defer gu.EndElement();
+            const subtitle_element = gu.GetElement();
+            subtitle_element.name = subtitle_key;
+            gu.SetNextFont(app.font_styles[FONT_NAMEHERE_BOLD]);
+            gu.DoLabelsFromString("THIS IS A SUBTITLE MY DUDES");
+        }
 
         gu.DoLineBreak();
         if (app.btn_toggle) gu.DoLabelsFromString("only visible if b2 is on.");
@@ -1141,19 +1183,22 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
 
     if (gu.DoElement(&LAYOUT_WHITE)) {
         defer gu.EndElement();
+        gu.SetElementGaps(4, 4);
 
-        var time: i64 = 0;
-        SDLEP(c.SDL_GetCurrentTime(&time));
         const time_f = @as(f32, @floatFromInt(@mod(@divTrunc(time, c.SDL_NS_PER_MS), 2500)));
         const str_time = gu.MakeString("{d:0>5.3} {d:0>5.3}", .{ time_f / 1000, time_f / 2500 });
         gu.DoLabel(0xCCCCFFFF, str_time);
+        gu.DoLineBreak();
+        const str_dt = gu.MakeString("dt: {d:0>8.6}", .{gu.dt_f});
+        gu.DoLabel(0xCCCCFFFF, str_dt);
         gu.DoLineBreak();
         gu.DoCustomSurface(RenderData.ACT_DEMO_SINE, 192, 48);
         gu.DoLineBreak();
         gu.DoCustomSurface(RenderData.ACT_DEMO_GRADIENT, 192, 48);
 
+        gu.DoSpacerV(32, 4);
+
         const fnt_ptr = &app.rd.fonts.BufSty[app.font_styles[FONT_DEPARTURE]];
-        gu.DoLineBreak();
         gu.SetNextButtonColor(0x800000FF, 0xC00000FF, 0x400000FF);
         if (gu.DoButton("Font DN")) fnt_ptr.Size = @max(1, fnt_ptr.Size - 1);
         if (gu.DoButton("Font UP")) fnt_ptr.Size += 1;
@@ -1161,17 +1206,107 @@ pub export fn SDL_AppIterate(app: *App) c.SDL_AppResult {
         const str_font_size = gu.MakeString("{d:0>3}", .{fnt_ptr.Size});
         gu.DoLabel(0xCCCCFFFF, str_font_size);
 
-        const new_font_lod = app.rd.fonts.ResolveLOD(app.font_styles[FONT_DEPARTURE]);
         gu.DoLineBreak();
+        const new_font_lod = app.rd.fonts.ResolveLOD(app.font_styles[FONT_DEPARTURE]);
         const str_font_lod = gu.MakeString("LOD: {d}", .{new_font_lod});
         gu.DoLabel(0xCCCCFFFF, str_font_lod);
 
-        const measure_size = app.rd.fonts.MeasureString(app.font_styles[FONT_DEPARTURE], "Measure");
         gu.DoLineBreak();
+        const measure_size = app.rd.fonts.MeasureString(app.font_styles[FONT_DEPARTURE], "Measure");
         gu.DoLabel(0xCCCCFFFF, "'Measure' Size:");
         gu.DoLineBreak();
         const str_measure_size = gu.MakeString("  {d:3.1} x {d:3.1}", .{ measure_size.x, measure_size.y });
         gu.DoLabel(0xCCCCFFFF, str_measure_size);
+
+        gu.DoSpacerV(32, 4);
+
+        gu.SetNextButtonColor(0x800000FF, 0xC00000FF, 0x400000FF);
+        if (gu.DoButton("Scroll DN")) app.scroll_step_size = @max(4, app.scroll_step_size - 4);
+        if (gu.DoButton("Scroll UP")) app.scroll_step_size = @min(96, app.scroll_step_size + 4);
+
+        gu.DoLineBreak();
+        const str_scroll_size = gu.MakeString("{d:3.1}", .{app.scroll_step_size});
+        gu.DoLabel(0xCCCCFFFF, str_scroll_size);
+
+        gu.DoLineBreak();
+        const str_scroll = gu.MakeString(
+            "Scroll:  x:{d:3.1} y:{d:3.1}",
+            .{ gu.mouse.scroll.scroll.x, gu.mouse.scroll.scroll.y },
+        );
+        gu.DoLabel(0xCCCCFFFF, str_scroll);
+
+        gu.DoSpacerV(32, 4);
+
+        gu.DoLabel(0xCCCCFFFF, main_key);
+
+        gu.DoLineBreak();
+        const str_main_scroll = gu.MakeString(
+            "Scroll:  x:{d:3.1} y:{d:3.1}",
+            .{ main_scroll.x, main_scroll.y },
+        );
+        gu.DoLabel(0xCCCCFFFF, str_main_scroll);
+
+        gu.DoLineBreak();
+        const str_main_scroll_area = gu.MakeString(
+            "ScrollArea:  x:{d:3.1} y:{d:3.1}",
+            .{ main_scroll_area.x, main_scroll_area.y },
+        );
+        gu.DoLabel(0xCCCCFFFF, str_main_scroll_area);
+
+        gu.DoLineBreak();
+        const subtitle_po = gu.GetElementParentOffsetFromKey(subtitle_key);
+        const str_subtitle_po = gu.MakeString(
+            "SubtitlePO:  x:{d:3.1} y:{d:3.1}",
+            .{ subtitle_po.x, subtitle_po.y },
+        );
+        gu.DoLabel(0xCCCCFFFF, str_subtitle_po);
+        gu.DoLineBreak();
+        const subtitle_pou = gu.GetElementParentOffsetUnscrolledFromKey(subtitle_key);
+        const str_subtitle_pou = gu.MakeString(
+            "SubtitlePOU:  x:{d:3.1} y:{d:3.1}",
+            .{ subtitle_pou.x, subtitle_pou.y },
+        );
+        gu.DoLabel(0xCCCCFFFF, str_subtitle_pou);
+
+        gu.DoLineBreak();
+        if (gu.DoButton("Scroll Direct to Top"))
+            gu.SetElementScrollDirectPercent(main_key, .init(0, 0.0));
+        gu.DoLineBreak();
+        if (gu.DoButton("Scroll Direct to 200px"))
+            gu.SetElementScrollDirect(main_key, .init(0, 200));
+        gu.DoLineBreak();
+        if (gu.DoButton("Scroll Direct to Subtitle"))
+            gu.SetElementScrollDirectToChild(main_key, subtitle_key);
+        gu.DoLineBreak();
+        if (gu.DoButton("Scroll Direct to Bottom"))
+            gu.SetElementScrollDirectPercent(main_key, .init(0, 1.0));
+        gu.DoLineBreak();
+        if (gu.DoButton("Scroll Target to Top"))
+            gu.SetElementScrollTargetPercent(main_key, .init(0, 0.0));
+        gu.DoLineBreak();
+        if (gu.DoButton("Scroll Target to 200px"))
+            gu.SetElementScrollTarget(main_key, .init(0, 200));
+        gu.DoLineBreak();
+        if (gu.DoButton("Scroll Target to Subtitle"))
+            gu.SetElementScrollTargetToChild(main_key, subtitle_key);
+        gu.DoLineBreak();
+        if (gu.DoButton("Scroll Target to Bottom"))
+            gu.SetElementScrollTargetPercent(main_key, .init(0, 1.0));
+        gu.DoLineBreak();
+        if (gu.DoButton("Fancy Scroll to Top"))
+            gu.SetElementScrollPercent(main_key, .init(0, 0.0), .init(0, 0.05));
+        gu.DoLineBreak();
+        if (gu.DoButton("Fancy Scroll to 200px"))
+            gu.SetElementScroll(main_key, .init(0, 200), .init(0, 150));
+        gu.DoLineBreak();
+        if (gu.DoButton("Fancy Scroll to Middle"))
+            gu.SetElementScrollPercent(main_key, .init(0, 0.5), .init(0, 0.05));
+        gu.DoLineBreak();
+        if (gu.DoButton("Fancy Scroll to Subtitle"))
+            gu.SetElementScrollToChild(main_key, subtitle_key, .init(0, 150));
+        gu.DoLineBreak();
+        if (gu.DoButton("Fancy Scroll to Bottom"))
+            gu.SetElementScrollPercent(main_key, .init(0, 1.0), .init(0, 0.05));
     }
 
     gu.EndFrame();

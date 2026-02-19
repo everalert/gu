@@ -16,11 +16,11 @@ pub fn init(x: f32, y: f32, w: f32, h: f32) Rect {
     return Rect{ .x = x, .y = y, .w = w, .h = h };
 }
 
-pub fn toPos(r: *const Rect) Vec2 {
+pub fn getPos(r: *const Rect) Vec2 {
     return .{ .x = r.x, .y = r.y };
 }
 
-pub fn toSize(r: *const Rect) Vec2 {
+pub fn getSize(r: *const Rect) Vec2 {
     return .{ .x = r.w, .y = r.h };
 }
 
